@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace
+      - run: cargo build --release -p rospm-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rospm-${{ matrix.os }}
+          path: target/release/rospm
+
+  # Smoke: the binary runs on a bare Ubuntu 22.04 (Humble host) and 24.04 (Jazzy host)
+  # without any ROS installed — check/doctor must not require ROS to be present.
+  smoke:
+    needs: test
+    strategy:
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rospm-ubuntu-24.04
+          path: bin
+      - run: chmod +x bin/rospm
+      - run: bin/rospm --version
+      - run: bin/rospm --manifest examples/minimal/rospm.toml check
+      - run: bin/rospm --manifest examples/minimal/rospm.toml apply --dry-run
+      - run: bin/rospm --manifest examples/minimal/rospm.toml build --dry-run
+      - run: bin/rospm --manifest examples/minimal/rospm.toml env
+      - run: bin/rospm doctor --json || true   # tools are absent here; report only

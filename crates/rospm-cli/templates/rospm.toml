@@ -1,0 +1,33 @@
+# rospm project manifest — see docs/spec.md for every field.
+schema_version = 1
+
+[project]
+name = "@NAME@"
+ros_distro = "jazzy"                     # humble | jazzy | rolling
+platforms = ["linux-x86_64"]             # add "linux-aarch64" for ARM targets
+
+[environment]
+provider = "native"                      # native | pixi | docker
+
+[environment.native]
+# ubuntu = "24.04"                       # defaults to the distro's release
+# ros_base = "ros-jazzy-ros-base"        # or ros-jazzy-desktop
+
+[workspaces.main]
+path = "ws"
+sources = "main.repos"                   # vcstool .repos file (TODO: create it)
+underlays = []
+
+[workspaces.main.colcon]
+build_args = ["--symlink-install"]
+
+[dependencies]
+apt = []                                 # extra apt packages not in any package.xml
+pip = []                                 # recorded only, installed via rosdep
+
+[dependencies.rosdep]
+enabled = true
+skip_keys = []
+
+[env]
+ROS_DOMAIN_ID = "0"

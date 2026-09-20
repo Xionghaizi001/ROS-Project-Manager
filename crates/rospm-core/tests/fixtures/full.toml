@@ -1,0 +1,82 @@
+schema_version = 1
+
+[project]
+name = "my_robot"
+description = "示例项目"
+ros_distro = "jazzy"                       # humble | jazzy | rolling
+platforms = ["linux-x86_64", "linux-aarch64"]
+
+# ---------- 环境提供者（三选一，只能保留与 provider 对应的子表） ----------
+[environment]
+provider = "native"                        # native | pixi | docker
+
+[environment.native]
+ubuntu = "24.04"
+ros_base = "ros-jazzy-ros-base"            # 底包，也可为 ros-jazzy-desktop
+
+# provider = "pixi" 时改为：
+# [environment.pixi]
+# manifest = "pixi.toml"                   # 仅引用；pixi.lock 与之同目录
+
+# provider = "docker" 时改为：
+# [environment.docker]
+# base_image = "ros:jazzy-ros-base"
+# dockerfile = "docker/Dockerfile"         # 省略则由工具生成到 .rospm/docker/
+# platforms = ["linux/amd64", "linux/arm64"] # buildx
+
+# ---------- workspace 与叠加顺序 ----------
+[workspaces.deps]
+path = "deps_ws"
+sources = "deps.repos"                     # vcstool 格式
+underlays = []                             # 空 = 只叠在 ROS 底包之上
+
+[workspaces.deps.colcon]
+defaults = "colcon/deps.defaults.yaml"
+mixins = ["release"]
+build_args = ["--symlink-install"]
+
+[workspaces.main]
+path = "ws"
+sources = "main.repos"
+underlays = ["deps"]                       # 编译顺序由此推导
+
+[workspaces.main.colcon]
+mixins = ["release", "ccache"]
+build_args = ["--symlink-install", "--event-handlers", "console_direct+"]
+
+# ---------- 依赖 ----------
+[dependencies]
+apt = ["libfoo-dev"]                       # package.xml 未覆盖的额外 apt 包
+pip = ["numpy>=1.26"]                      # 只作记录（决策 #6）
+
+[dependencies.rosdep]
+enabled = true
+skip_keys = ["libopencv-dev"]
+extra_sources = []                         # 额外 rosdep yaml 源
+
+# ---------- 平台覆盖（决策：替换规则人工声明） ----------
+[target.linux-aarch64.dependencies]
+apt = ["libbar-arm-dev"]                   # 追加
+
+[target.linux-aarch64.replace]
+"nvidia-cuda-toolkit" = "cuda-toolkit-12-6"
+
+[target.linux-aarch64.exclude]
+apt = ["intel-mkl"]
+
+# ---------- 环境变量 ----------
+[env]
+ROS_DOMAIN_ID = "42"
+RMW_IMPLEMENTATION = "rmw_cyclonedds_cpp"
+ROS_LOCALHOST_ONLY = "0"
+
+# ---------- 编辑器 ----------
+[editor]
+vscode = true
+clion = false
+devcontainer = true                        # 复用 docker provider 的产物
+
+# ---------- 导出 ----------
+[export]
+compression = "zstd"                       # none | gzip | zstd
+sign = false

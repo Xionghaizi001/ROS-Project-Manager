@@ -1,0 +1,203 @@
+mod commands;
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{ArgAction, Parser, Subcommand};
+use rospm_core::platform::Platform;
+use rospm_core::provider::Shell;
+
+use commands::Global;
+
+#[derive(Parser)]
+#[command(
+    name = "rospm",
+    version,
+    about = "Describe, lock and replay ROS 2 project environments",
+    long_about = "rospm wraps rosdep, vcstool, colcon, apt, pixi and docker behind one \
+                  manifest (rospm.toml) and one lock file (rospm.lock).\n\n\
+                  Commands that modify the system (apply, build, export, import, deps install) \
+                  always print their plan first and accept --dry-run."
+)]
+struct Cli {
+    /// Path to rospm.toml (default: search upwards from the current directory)
+    #[arg(long, global = true, value_name = "PATH")]
+    manifest: Option<PathBuf>,
+
+    /// Machine-readable JSON output where supported
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Increase log verbosity (-v, -vv)
+    #[arg(short, long, global = true, action = ArgAction::Count)]
+    verbose: u8,
+
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Create a rospm.toml template in the current directory
+    Init {
+        /// Best-effort detection from the existing environment (roadmap P1)
+        #[arg(long)]
+        from_env: bool,
+        /// Overwrite an existing rospm.toml
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Validate the manifest and report what apply/build would need (read-only)
+    Check {
+        /// Evaluate platform overrides for this target instead of the host
+        #[arg(long, value_name = "PLATFORM")]
+        target: Option<Platform>,
+    },
+
+    /// Resolve and write rospm.lock (roadmap P2)
+    Lock {
+        #[arg(long, value_name = "PLATFORM")]
+        platform: Option<Platform>,
+    },
+
+    /// Compare rospm.lock with the current environment (roadmap P2)
+    Verify,
+
+    /// Install the ROS base, import sources and resolve dependencies [modifies system]
+    Apply {
+        /// Honour rospm.lock (snapshot repositories, pinned revisions)
+        #[arg(long)]
+        locked: bool,
+        /// Use only bundled payloads, never the network
+        #[arg(long)]
+        offline: bool,
+        /// Print the plan and exit
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Build workspaces with colcon in overlay order [produces artifacts]
+    Build {
+        /// Build only this workspace (its underlays must already be built)
+        workspace: Option<String>,
+        /// Print the plan and exit
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Print a script that enters the project environment (`source <(rospm env)`)
+    Env {
+        #[arg(long, default_value = "bash")]
+        shell: Shell,
+    },
+
+    /// Start a subshell with the project environment loaded
+    Shell,
+
+    /// Inspect or complete dependencies from package.xml files
+    Deps {
+        #[command(subcommand)]
+        command: DepsCmd,
+    },
+
+    /// Produce an offline bundle (roadmap P6) [produces artifacts]
+    Export {
+        #[arg(long, value_name = "PLATFORM")]
+        target: Option<Platform>,
+        #[arg(short, long, value_name = "PATH")]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Verify and install an offline bundle (roadmap P6) [modifies system]
+    Import {
+        bundle: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Generate editor configuration (roadmap P7)
+    Editor {
+        /// vscode | clion | devcontainer (default: all enabled in the manifest)
+        kind: Option<String>,
+    },
+
+    /// Check that the wrapped tools are available on this machine
+    Doctor,
+}
+
+#[derive(Subcommand)]
+enum DepsCmd {
+    /// Report missing dependencies without installing (roadmap P2)
+    Check,
+    /// Install missing dependencies through rosdep (roadmap P2) [modifies system]
+    Install {
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    init_logging(cli.verbose);
+    let global = Global {
+        manifest: cli.manifest,
+        json: cli.json,
+    };
+
+    let result = match cli.command {
+        Cmd::Init { from_env, force } => commands::init(&global, from_env, force),
+        Cmd::Check { target } => commands::check(&global, target),
+        Cmd::Lock { .. } => commands::not_implemented("lock", "P2"),
+        Cmd::Verify => commands::not_implemented("verify", "P2"),
+        Cmd::Apply {
+            locked,
+            offline,
+            dry_run,
+        } => commands::apply(&global, locked, offline, dry_run),
+        Cmd::Build { workspace, dry_run } => {
+            commands::build(&global, workspace.as_deref(), dry_run)
+        }
+        Cmd::Env { shell } => commands::env(&global, shell),
+        Cmd::Shell => commands::shell(&global),
+        Cmd::Deps { command } => match command {
+            DepsCmd::Check => commands::not_implemented("deps check", "P2"),
+            DepsCmd::Install { .. } => commands::not_implemented("deps install", "P2"),
+        },
+        Cmd::Export { .. } => commands::not_implemented("export", "P6"),
+        Cmd::Import { .. } => commands::not_implemented("import", "P6"),
+        Cmd::Editor { .. } => commands::not_implemented("editor", "P7"),
+        Cmd::Doctor => commands::doctor(&global),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            if global.json {
+                let payload = serde_json::json!({ "ok": false, "error": format!("{err:#}") });
+                println!("{payload}");
+            } else {
+                eprintln!("error: {err:#}");
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn init_logging(verbosity: u8) {
+    let level = match verbosity {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .init();
+}

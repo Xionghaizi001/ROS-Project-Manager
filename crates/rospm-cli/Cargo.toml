@@ -1,0 +1,20 @@
+[package]
+name = "rospm-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description.workspace = true
+
+[[bin]]
+name = "rospm"
+path = "src/main.rs"
+
+[dependencies]
+rospm-core = { path = "../rospm-core" }
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+which.workspace = true
