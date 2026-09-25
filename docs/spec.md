@@ -266,7 +266,7 @@ version = "1.26.4"
 
 实测过程、命令、证据及未完成项见 [P0 核验报告](p0-external-validation.md)。
 
-- ROS：日期目录和 Jazzy noble 的 amd64/arm64 索引已读取，索引大小及 SHA256 与 Release 一致；快照间隔不固定，必须发现实际日期；当前 Rolling 路径 404。快照签名认证待完成。
+- ROS：日期目录和 Jazzy noble 的 amd64/arm64 索引已读取，索引大小及 SHA256 与 Release 一致；快照间隔不固定，必须发现实际日期；当前 Rolling 路径 404。快照由独立密钥 `4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA`（"ROS Snapshot builder"，官方 wiki 指定从 `keyserver.ubuntu.com` 获取，有效期至 2027-06-01）签名，`gpgv` 验证 Release.gpg / InRelease 通过；`apply --locked` 必须以 `signed-by=` 引用该 keyring。
 - Ubuntu：22.04 的 APT **2.4.11 起已回移植快照支持**；本机 2.4.14 的原生 `--snapshot` 与直接 URL 两种方案均更新成功，直接 URL 下载指定版本样例包成功。
-- pixi-pack：0.7.11 工具运行成功，上游声明支持跨平台且提供 aarch64 发布；真实 RoboStack ARM 锁定/打包尚待完成。
-- rosdep：RoboStack 默认列表加载 `ros-noetic/master/conda.yaml`；使用独立源/缓存及 `--os=conda:linux`。系统键映射已实测；ROS 包映射依赖 conda-forge 补丁，未经补丁的上游对 Humble `rclcpp` 解析失败。`skip_keys` 共用原始键，但 Pixi keys/resolve 流程须在解析前自行过滤，安装由 Pixi 执行。
+- pixi-pack：pixi 0.81.0 + pixi-pack 0.7.11 在 x86_64 上为 `linux-aarch64` 完成 RoboStack 最小项目的 `pixi lock` 与打包，归档内 34 个包 SHA256 与 `pixi.lock` 全部一致；ARM 主机解包运行待 P3/P5。
+- rosdep：RoboStack 默认列表加载 `ros-noetic/master/conda.yaml`；使用独立源/缓存及 `--os=conda:linux`。系统键映射已实测；ROS 包映射依赖 conda-forge 补丁：未经补丁的上游对 Humble `rclcpp` 解析失败，conda-forge 0.26.0 build 1 解析为 `ros-humble-rclcpp`。该构建的 `check`/`install` 仅兼容 micromamba 1.x，rospm 只用其 `resolve`/`keys`。`skip_keys` 共用原始键，但 Pixi keys/resolve 流程须在解析前自行过滤，安装由 Pixi 执行。

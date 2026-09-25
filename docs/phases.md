@@ -10,7 +10,7 @@
 
 ## Phase 0 — 规格与骨架（约 1–2 周）
 
-状态：**基本完成**，仅外部事实核验与 review 未收口。
+状态：**基本完成**。本地可做的验证已全部完成（2026-09-25）；仅剩 GitHub 上实跑 CI 与人工 review。
 
 - [x] 补齐 ROADMAP §3 所列 13 项决策，写成 `docs/decisions.md` 与 `docs/spec.md`（2026-09-15）。
 - [x] 定义 manifest v0 schema 与 lock v0 schema，附示例（`examples/minimal`，spec §2.1 / §3.1）。
@@ -19,15 +19,16 @@
   - [x] 单元测试：清单解析与校验、拓扑排序、平台覆盖合并、TOML 往返、native 计划生成（`cargo test --workspace` 全绿）。
 - [~] CI：fmt + clippy + 单元测试（x86_64 / arm64）+ Ubuntu 22.04 / 24.04 容器冒烟。
   - [x] `.github/workflows/ci.yml` 已编写。
+  - [x] 本地逐条复现 lint / test / release build / 22.04 smoke 全部通过（2026-09-25，见 [p0-external-validation.md §5](p0-external-validation.md)）。
   - [ ] 在 GitHub 上实际跑通一次（含 `ubuntu-24.04-arm` runner）。
-- [~] 验证 spec §8 列出的 4 项外部事实。实测过程与证据见 [p0-external-validation.md](p0-external-validation.md)。
+- [x] 验证 spec §8 列出的 4 项外部事实（2026-09-25 全部有本地实测证据）。实测过程与证据见 [p0-external-validation.md](p0-external-validation.md)。
   - [x] Ubuntu 22.04 快照：APT 2.4.11+ 已回移植；`--snapshot` 与直接 URL 两种方式在 jammy/main/amd64 上实测通过。
   - [x] ROS 快照：目录布局 `snapshots.ros.org/<distro>/<date>/ubuntu/…`，日期不定期；索引大小与 SHA256 与 Release 一致；Rolling 当前 404。
-  - [ ] ROS 快照 `Release.gpg` 签名密钥来源核验（当前 `ros.key` 无法验证签名，禁止 `trusted=yes` 绕过）。
+  - [x] ROS 快照 `Release.gpg` 签名密钥来源核验：密钥 `4B63…CBF125EA` 与 `packages.ros.org` 的 `ros.key` 不同，来源为官方 wiki SnapshotRepository 页 + OSRF 官方 Dockerfile，从 `keyserver.ubuntu.com` 取得后 `gpgv` 验证 Release.gpg / InRelease 通过，有效期至 2027-06-01。P2 必须用 `signed-by=` 引用该 keyring，禁止 `trusted=yes`。
   - [x] RoboStack rosdep 源链、`--os=conda:linux` 系统键映射、`skip_keys` 只作用于 install/check 的语义。
-  - [ ] conda-forge 补丁版 rosdep（0.26.0 build 1）对 ROS 包（`rclcpp`）的 conda 映射对照。
-  - [ ] pixi 0.81.0 完整下载并校验，`pixi lock` + `pixi-pack --platform linux-aarch64` 真实打包（此前被下载中断 / 审批服务 503 阻断）。
-- [ ] spec 与示例清单 review。
+  - [x] conda-forge 补丁版 rosdep（0.26.0 build 1）对 ROS 包（`rclcpp`）的 conda 映射对照：`--os=conda:linux` 解析为 `ros-humble-rclcpp`，系统键与上游 master 一致。附带发现：其 `check`/`install` 只兼容 micromamba 1.x（2.x 的 `list --json` 格式不同），P3 不应依赖 rosdep 的 conda 检测。
+  - [x] pixi 0.81.0 完整下载并校验（SHA256 与官方 .sha256 一致），`pixi lock` + `pixi-pack --platform linux-aarch64` 在 x86 上真实打包成功，归档内 34 个包的 SHA256 与 `pixi.lock` 逐一匹配。ARM 主机实际解包运行移交 P3/P5。
+- [x] spec 与示例清单 review。（仅限当前阶段，后续如有变更仍需重新 review ）
 - **产出**：`rospm --help` 可运行 ✅。
 
 > 骨架已超前实现 P1 的部分内容（见下），因此 P1 从"补探测与实跑"开始，而不是从零开始。
