@@ -23,6 +23,16 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
+    #[error("failed to parse vcstool repos file {path}: {source}")]
+    ReposParse {
+        path: PathBuf,
+        #[source]
+        source: Box<serde_yaml::Error>,
+    },
+
+    #[error("failed to parse {path}: {message}")]
+    PackageXml { path: PathBuf, message: String },
+
     #[error("failed to serialize {what}: {source}")]
     Serialize {
         what: &'static str,
@@ -44,6 +54,9 @@ pub enum Error {
         feature: &'static str,
         phase: &'static str,
     },
+
+    #[error("this host does not satisfy the manifest: {0}")]
+    Host(String),
 
     #[error("command failed: {command} (exit status {status})")]
     CommandFailed { command: String, status: String },

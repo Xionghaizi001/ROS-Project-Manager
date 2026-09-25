@@ -37,7 +37,7 @@ provider = "native"                        # native | pixi | docker
 
 [environment.native]
 ubuntu = "24.04"
-ros_base = "ros-jazzy-ros-base"            # 底包，也可为 ros-jazzy-desktop
+ros_base = "ros-jazzy-ros-base"            # 底包：ros-base（精简）或 desktop（含 RViz / demos）；`rospm init --base` 可选
 
 # provider = "pixi" 时改为：
 # [environment.pixi]
@@ -199,11 +199,12 @@ version = "1.26.4"
 
 | 命令 | 级别 | 作用 | `--dry-run` |
 |---|---|---|---|
-| `init [--from-env]` | 写项目文件 / 幂等 | 生成清单模板；`--from-env` 尽力探测（决策 #3）；已存在不覆盖，需 `--force` | — |
-| `check [--target <platform>]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异；`--target` 查目标架构包可用性 | — |
+| `init [--from-env] [--base ros-base\|desktop]` | 写项目文件 / 幂等 | 生成清单模板；`--from-env` 尽力探测（决策 #3）；`--base` 选底包元包（默认 `ros-base`，`desktop` 含 RViz / demos），写入 `environment.native.ros_base`；已存在不覆盖，需 `--force` | — |
+| `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；默认只报告（退出码 0），`--strict` 在主机未就绪时退出 1；`--target` 与主机不同则跳过探测，P5 起查目标架构包可用性 | — |
 | `lock [--platform <p>]` | 写项目文件 / 幂等 | 生成 `rospm.lock`；同一输入产生同一输出 | — |
 | `verify` | 只读 | 对比锁文件与当前环境，报告漂移；清单哈希不一致则提示重新 `lock` | — |
-| `apply [--locked] [--offline]` | 修改系统 | 按顺序：底包 → 源码导入 → rosdep → 额外 apt；`--locked` 切换快照源 | 必须 |
+| `apply [--locked] [--offline]` | 修改系统 | 按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 切换快照源 | 必须 |
+| `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |
 | `shell` | 启动子进程 | 在已 source 的子 shell 中工作 | — |
@@ -214,6 +215,23 @@ version = "1.26.4"
 | `doctor` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用 | — |
 
 全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）。
+
+### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
+
+native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 由基础镜像提供），因此"安装 ROS"属于 native `apply` 的范围。做法只封装官方安装文档的命令，不做任何新东西：
+
+| 步骤 | 命令 | 跳过条件（由 `check` 同一探测决定） |
+|---|---|---|
+| 0 | 校验主机 | `/etc/os-release` 的 Ubuntu 版本 ≠ `environment.native.ubuntu` → 报错退出；不可读 → 告警后按清单假定 |
+| 1 | `apt-get update`；安装前置包 `locales` / `software-properties-common` / `curl ca-certificates` | 只安装下面步骤实际需要的 |
+| 2 | `locale-gen en_US en_US.UTF-8` + `update-locale` | `LC_ALL` / `LC_CTYPE` / `LANG` 已是 UTF-8 |
+| 3 | `add-apt-repository -y universe` | 任一 apt 源文件（一行式或 deb822）已启用 `universe` |
+| 4 | 下载 `ros.key` 到 `/usr/share/keyrings/ros-archive-keyring.gpg`；写 `/etc/apt/sources.list.d/ros2.list`（`deb [arch=<dpkg arch> signed-by=…] http://packages.ros.org/ros2/ubuntu <codename> main`）；`apt-get update` | 任一 apt 源文件已引用 `packages.ros.org/ros2`（含 `ros2-apt-source` 包写的 `ros2.sources`） |
+| 5 | `apt-get install -y <ros_base> python3-rosdep python3-vcstool python3-colcon-common-extensions` | 无（apt 自身幂等） |
+
+- rospm 自己写 keyring + `sources.list.d`，而不是安装 `ros2-apt-source` 包：P2 `apply --locked` 要把同一文件指向 `snapshots.ros.org` 并以 `signed-by=` 引用快照密钥，两者共用一套源文件管理代码（决策 #14）。
+- `--dry-run` 会完整打印将写入的源文件内容。
+- 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动（§7）。
 
 ## 5. 离线导出包格式
 
@@ -255,6 +273,7 @@ version = "1.26.4"
 ## 7. 非目标（记录，决策 #9）
 
 - ROS 1、非 Ubuntu 平台、Windows / macOS
+- 安装、升级或更换 Ubuntu 本身（native `apply` 只在版本匹配的主机上安装 ROS，否则报错）
 - 硬件驱动、内核模块、udev 规则、固件
 - CUDA / GPU 驱动版本管理（只能通过 `target.replace` 声明替代包）
 - pip 包的安装与锁定（只记录）

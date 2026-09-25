@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process;
+use std::process::Stdio;
 
 use crate::error::{Error, Result};
 
@@ -143,6 +144,8 @@ pub enum Step {
     WriteFile {
         path: PathBuf,
         contents: String,
+        /// Write through `sudo tee` (system files such as apt sources).
+        sudo: bool,
     },
     /// Informational line, printed but not executed. Used for degradations
     /// ("snapshot unreachable, falling back to …") so they are never silent.
@@ -176,6 +179,22 @@ impl Plan {
         self.steps.push(Step::WriteFile {
             path: path.into(),
             contents: contents.into(),
+            sudo: false,
+        });
+        self
+    }
+
+    /// Like [`Plan::write_file`], but the file is owned by root and written
+    /// through `sudo tee`. Contents are shown in full by `--dry-run`.
+    pub fn write_file_sudo(
+        &mut self,
+        path: impl Into<PathBuf>,
+        contents: impl Into<String>,
+    ) -> &mut Self {
+        self.steps.push(Step::WriteFile {
+            path: path.into(),
+            contents: contents.into(),
+            sudo: true,
         });
         self
     }
@@ -205,13 +224,24 @@ impl Plan {
                 Step::Run(c) => {
                     let _ = writeln!(out, "[{n}] $ {}", c.render());
                 }
-                Step::WriteFile { path, contents } => {
+                Step::WriteFile {
+                    path,
+                    contents,
+                    sudo,
+                } => {
                     let _ = writeln!(
                         out,
-                        "[{n}] write {} ({} bytes)",
+                        "[{n}] write {}{} ({} bytes)",
                         path.display(),
+                        if *sudo { " (sudo)" } else { "" },
                         contents.len()
                     );
+                    // Small system files (apt sources) are worth reviewing verbatim.
+                    if contents.lines().count() <= 16 {
+                        for line in contents.lines() {
+                            let _ = writeln!(out, "      | {line}");
+                        }
+                    }
                 }
                 Step::Note(text) => {
                     let _ = writeln!(out, "[{n}] # {text}");
@@ -229,6 +259,13 @@ impl Plan {
             writeln!(out, "# dry-run: nothing executed").map_err(|e| Error::io(stdout(), e))?;
             return Ok(());
         }
+        self.perform(out)
+    }
+
+    /// Execute the steps without rendering first. Callers that need a
+    /// confirmation between the rendered plan and execution use this.
+    pub fn perform(&self, out: &mut dyn Write) -> Result<()> {
+        let stdout = || PathBuf::from("<stdout>");
         for (i, step) in self.steps.iter().enumerate() {
             match step {
                 Step::Run(c) => {
@@ -245,11 +282,21 @@ impl Plan {
                         });
                     }
                 }
-                Step::WriteFile { path, contents } => {
-                    if let Some(parent) = path.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+                Step::WriteFile {
+                    path,
+                    contents,
+                    sudo,
+                } => {
+                    writeln!(out, "==> [{}] write {}", i + 1, path.display())
+                        .map_err(|e| Error::io(stdout(), e))?;
+                    if *sudo {
+                        write_file_sudo(path, contents)?;
+                    } else {
+                        if let Some(parent) = path.parent() {
+                            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+                        }
+                        std::fs::write(path, contents).map_err(|e| Error::io(path, e))?;
                     }
-                    std::fs::write(path, contents).map_err(|e| Error::io(path, e))?;
                 }
                 Step::Note(text) => {
                     writeln!(out, "==> # {text}").map_err(|e| Error::io(stdout(), e))?;
@@ -258,6 +305,42 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+/// `sudo mkdir -p <parent> && printf … | sudo tee <path>`; the contents go
+/// through stdin so they never appear on a command line.
+fn write_file_sudo(path: &PathBuf, contents: &str) -> Result<()> {
+    let failed = |program: &str, status: process::ExitStatus| Error::CommandFailed {
+        command: format!("sudo {program} {}", path.display()),
+        status: status.to_string(),
+    };
+    if let Some(parent) = path.parent() {
+        let status = process::Command::new("sudo")
+            .args(["mkdir", "-p"])
+            .arg(parent)
+            .status()
+            .map_err(|e| Error::io("sudo", e))?;
+        if !status.success() {
+            return Err(failed("mkdir -p", status));
+        }
+    }
+    let mut child = process::Command::new("sudo")
+        .arg("tee")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|e| Error::io("sudo", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(contents.as_bytes())
+            .map_err(|e| Error::io(path, e))?;
+    }
+    let status = child.wait().map_err(|e| Error::io("sudo", e))?;
+    if !status.success() {
+        return Err(failed("tee", status));
+    }
+    Ok(())
 }
 
 /// Minimal POSIX single-quote escaping.

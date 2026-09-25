@@ -1,0 +1,28 @@
+schema_version = 1
+
+[project]
+name = "minimal"
+description = "最小可用示例：单 workspace，native 提供者，仅 x86_64（Humble / 22.04 版，供 CI 冒烟）"
+ros_distro = "humble"
+platforms = ["linux-x86_64"]
+
+[environment]
+provider = "native"
+
+[environment.native]
+ubuntu = "22.04"
+ros_base = "ros-humble-ros-base"
+
+[workspaces.main]
+path = "ws"
+sources = "main.repos"
+underlays = []
+
+[workspaces.main.colcon]
+build_args = ["--symlink-install"]
+
+[dependencies.rosdep]
+enabled = true
+
+[env]
+ROS_DOMAIN_ID = "0"

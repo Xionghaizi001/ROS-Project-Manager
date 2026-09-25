@@ -1,0 +1,10 @@
+# vcstool format. Imported into ws/src by `rospm apply` (via `vcs import`).
+repositories:
+  demos:
+    type: git
+    url: https://github.com/ros2/demos.git
+    version: jazzy
+  examples:
+    type: git
+    url: https://github.com/ros2/examples.git
+    version: jazzy

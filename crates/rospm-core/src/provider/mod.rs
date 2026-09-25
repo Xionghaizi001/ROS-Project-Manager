@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::manifest::{Manifest, ProviderKind};
 use crate::plan::Plan;
 use crate::platform::Platform;
+use crate::probe::{EnvReport, Host, Status};
 
 pub mod native;
 
@@ -21,6 +22,9 @@ pub struct Context<'a> {
     pub locked: bool,
     /// `apply --offline`: use only bundled payloads.
     pub offline: bool,
+    /// Facts about this machine, probed once per command. Plans consult it
+    /// so they only contain the steps that are actually missing.
+    pub host: &'a Host,
 }
 
 /// Login shells we can emit `source` lines for. ROS ships `setup.bash`,
@@ -65,14 +69,23 @@ impl FromStr for Shell {
 pub trait Provider {
     fn kind(&self) -> ProviderKind;
 
-    /// Base install → source import → rosdep → extra packages (spec §4 `apply`).
+    /// ROS apt source → base install → source import → rosdep → extra
+    /// packages (spec §4 `apply`). Steps the host already satisfies are omitted.
     fn plan_apply(&self, ctx: &Context) -> Result<Plan>;
+
+    /// Remove the ROS installation the manifest describes (spec §4 `uninstall`).
+    /// Project files, sources and workspaces are never touched.
+    fn plan_uninstall(&self, ctx: &Context, keep_source: bool) -> Result<Plan>;
 
     /// Build `only` (one workspace) or every workspace in overlay order.
     fn plan_build(&self, ctx: &Context, only: Option<&str>) -> Result<Plan>;
 
     /// A script the user can `source` to enter the environment (spec §4 `env`).
     fn env_script(&self, ctx: &Context, shell: Shell) -> Result<String>;
+
+    /// Compare what the manifest needs with what `ctx.host` has (spec §4 `check`).
+    /// Read-only: never installs, never writes.
+    fn probe_env(&self, ctx: &Context) -> Result<EnvReport>;
 }
 
 /// Select the provider declared in the manifest.
@@ -116,10 +129,26 @@ impl Provider for Unimplemented {
     fn plan_apply(&self, _ctx: &Context) -> Result<Plan> {
         Err(self.err())
     }
+    fn plan_uninstall(&self, _ctx: &Context, _keep_source: bool) -> Result<Plan> {
+        Err(self.err())
+    }
     fn plan_build(&self, _ctx: &Context, _only: Option<&str>) -> Result<Plan> {
         Err(self.err())
     }
     fn env_script(&self, _ctx: &Context, _shell: Shell) -> Result<String> {
         Err(self.err())
+    }
+    fn probe_env(&self, _ctx: &Context) -> Result<EnvReport> {
+        // `check` must still validate manifests for these providers, so this
+        // is a report with one informational line rather than an error.
+        let mut report = EnvReport::default();
+        report.push(
+            "provider",
+            self.kind.to_string(),
+            "environment probing",
+            format!("not implemented yet (roadmap {})", self.phase),
+            Status::Info,
+        );
+        Ok(report)
     }
 }

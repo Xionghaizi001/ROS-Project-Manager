@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 从 `ROADMAP.md` §5 拆出，记录每个阶段的具体任务与完成状态。状态更新日期：2026-09-25。
+> 从 `ROADMAP.md` §5 拆出，记录每个阶段的具体任务与完成状态。状态更新日期：2026-09-26。
 > 总览、可行性与风险分析仍在 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成（子项说明） · `[ ]` 未开始。
@@ -38,22 +38,36 @@
 ## Phase 1 — MVP：native 提供者的描述与重放（约 3–4 周）
 
 范围：x86_64、Ubuntu 22.04/24.04、Humble/Jazzy、native(apt) 提供者、git 源码、colcon。
-状态：**进行中**。命令骨架与计划生成已就绪；缺环境探测、反推、真实机器验证。
+状态：**进行中**。`init` / `check` 已完成（2026-09-25）；`apply` 的 ROS 安装 bootstrap 与 `uninstall` 计划已落地（2026-09-26）；`apply` / `build` / `uninstall` 仍缺真实机器验证。
 
 ### `rospm init`
 - [x] 生成清单模板（`templates/rospm.toml`），已存在需 `--force`，模板自校验。
-- [ ] `--from-env`：best-effort 探测（决策 #3），探测不到的字段留空并标 `# TODO`。
-- [ ] 从当前目录的 `.repos` / `package.xml` 反推 workspaces 与依赖。
+- [x] `--from-env`：best-effort 探测（决策 #3），探测不到的字段留默认值并标 `# TODO`，终端同步列出 `detected` / `TODO`；生成结果必须通过 `Manifest::parse`（2026-09-25，`rospm-core::introspect`）。
+  - 探测来源：`$ROS_DISTRO` → `$AMENT_PREFIX_PATH` 中的 `/opt/ros/<d>` → `/opt/ros` 下唯一安装；`/etc/os-release`；dpkg 中 `ros-<d>-{desktop-full,desktop,ros-base}`；`ROS_*` / `RMW_*` 等白名单环境变量；`.vscode` / `.idea` / `.devcontainer`；`pixi.toml` 存在则切到 pixi 提供者并从其 channel / 依赖读发行版。
+- [x] `--base ros-base|desktop`：选择底包元包（2026-09-26）。模板路径按模板发行版拼包名；`--from-env` 下以探测到的发行版拼包名并覆盖探测结果，探测不到发行版则标 `TODO`。清单字段 `ros_base` 仍为自由包名，`desktop-full` 可手改。
+- [x] 从当前目录的 `.repos` / `package.xml` 反推 workspaces 与依赖（2026-09-25）。
+  - 含 `src/` 的目录（根目录及两层子目录）为 workspace；`*.repos` 按 `src/` 下已存在的 checkout 匹配到 workspace，未匹配且只剩一个空 workspace 时配对，否则生成路径待定的 workspace；只含注释的 `.repos` 忽略。
+  - 叠加顺序从 `$AMENT_PREFIX_PATH` 推导（兼容 colcon 默认的 isolated install），推不出时标 `TODO`。
+  - `package.xml` 解析出的外部 rosdep 键只作为注释写入 `[dependencies]`（解析仍交给 rosdep）；`dependencies.apt` 无法反推，固定标 `TODO`。colcon mixins 不承诺还原（决策 #8）。
+  - 已用 ros2/demos + ros2/examples（43 个 `package.xml`）与 nav2 的 `underlay.repos` 实测。
 
 ### `rospm check`
 - [x] 清单校验、拓扑排序、平台覆盖合并、`--target <platform>`、`--json` 输出。
-- [ ] 环境探测：ROS 底包是否安装、rosdep 是否已 `init`/`update`、所需 apt 包已安装集合、源码是否已 import。
-- [ ] 输出差异报告（期望 vs 实际），不修改系统。
+- [x] 环境探测（2026-09-25，`Provider::probe_env` + `rospm-core::probe`）：平台与 Ubuntu 版本、git / vcs / colcon / rosdep / apt-get 是否在 PATH、`/opt/ros/<distro>` 与底包 dpkg 状态、rosdep `init`（`20-default.list`）/ `update`（`$ROS_HOME/rosdep/sources.cache/index`）、平台覆盖后的额外 apt 包 dpkg 状态、每个 `.repos` 条目是否已 import 到 `src/`（git checkout 且 `origin` URL 一致，宽松比较 `.git` / ssh 写法）、`src/` 下 `package.xml` 数量、colcon defaults 文件、是否已 build。
+- [x] ROS 安装前置条件探测（2026-09-26）：locale 是否 UTF-8、apt `universe` 是否启用（一行式与 deb822 两种源格式）、是否已有引用 `packages.ros.org/ros2` 的 apt 源文件。`doctor` 同步输出这三项。
+- [x] 输出差异报告（期望 vs 实际），不修改系统。状态分 `ok` / `MISSING` / `MISMATCH` / `unknown`（探测工具缺失）/ `info`；默认只报告、退出码 0，`--strict` 在未就绪时退出 1（供 CI）；`--target` 与主机不同时跳过探测并注明；pixi / docker 提供者输出一行"P3 / P4 未实现"。
 
 ### `rospm apply`
-- [x] native 计划生成：底包 → `vcs import` → `rosdep install` → 额外 apt；`--dry-run` 打印计划。
+- [x] native 计划生成：ROS apt 源 → 底包 → `vcs import` → `rosdep install` → 额外 apt；`--dry-run` 打印计划。
+- [x] 安装 ROS 的 bootstrap（2026-09-26，spec §4.1，决策 #14）：主机 Ubuntu 版本与清单不符直接报错；按探测结果只补缺的步骤：`locales` + `locale-gen`/`update-locale`、`add-apt-repository universe`、下载 `ros.key` 到 keyring、写 `sources.list.d/ros2.list`（`--dry-run` 打印文件内容）、`apt-get update`。系统文件经 `sudo tee` 写入。CI 冒烟对 22.04 / 24.04 各用一份匹配的示例清单，并断言计划里含源文件写入。
 - [x] `--locked` 在 P2 前明确降级告警；`--offline` 返回 NotImplemented(P6)。
 - [ ] 非 dry-run 在真实机器上执行并处理失败（sudo 交互、apt 锁、rosdep 未初始化等）。
+- [ ] `ros.key` 下载失败 / 密钥指纹核验（当前只 `curl -o`，未校验指纹）。
+
+### `rospm uninstall`
+- [x] 计划生成（2026-09-26，决策 #15）：用 dpkg 列出全部已装 `ros-<distro>-*` 并显式写进 `apt-get remove`，`autoremove`；删除 rospm 写的 `ros2.list` 与 keyring，`--keep-source`、`/opt/ros` 下还有其它发行版、或源文件非 rospm 所写（如 `ros2-apt-source`）时保留并说明；不卸 rosdep / vcstool / colcon；提示 `/opt/ros/<distro>` 可能残留。
+- [x] 非 `--dry-run` 需交互确认或 `--yes`；stdin 非终端且无 `--yes` 拒绝执行；dpkg-query 不可用时报错而不猜。
+- [ ] 真实机器上验证卸载后 `check` 报告与干净机器一致。
 
 ### `rospm build`
 - [x] 封装 colcon，按叠加顺序 source underlay，注入清单中的 colcon 配置；`--dry-run`。
@@ -66,10 +80,12 @@
 
 ### `rospm doctor`
 - [x] 检测 git / vcs / colcon / rosdep / apt-get / dpkg-query / pixi / docker 与 `/opt/ros/*`，`--json`。
+- [x] 输出 ROS apt 源、`universe`、locale 状态（2026-09-26）。
 
 ### 验收
-- [ ] 在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
+- [ ] 在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功（`apply` 须从无 ROS apt 源起步）。
 - [ ] 同样流程在 24.04 + Jazzy 上通过。
+- [ ] `rospm uninstall --yes` 后 `rospm check` 对 ROS 各项回到 `MISSING`。
 
 ---
 
@@ -87,7 +103,7 @@
 - [ ] 锁文件读写往返测试。
 
 ### `rospm apply --locked`
-- [ ] 把 sources.list 切到 `snapshots.ros.org` 与 `snapshot.ubuntu.com`（22.04 用 `--snapshot` 或直接 URL，保留 keyring 签名验证）。
+- [ ] 把 sources.list 切到 `snapshots.ros.org` 与 `snapshot.ubuntu.com`（22.04 用 `--snapshot` 或直接 URL，保留 keyring 签名验证）。复用 P1 bootstrap 的源文件管理（同一 `ros2.list` 路径、`signed-by=` 换成快照 keyring），不另起一套。
 - [ ] 覆盖 updates / security 组件与 arm64（P0 只冒烟了 jammy/main/amd64）。
 - [ ] 快照不可用时按 spec §3.2 / ROADMAP §2.1 降级并明确告警。
 

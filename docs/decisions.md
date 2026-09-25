@@ -17,6 +17,8 @@
 | 11 | 测试策略 | 容器内集成测试，x86_64 + aarch64 矩阵 | 见 `spec.md` §6 |
 | 12 | 工具名 / 命令名 | **`rospm`**（2026-09-15 确认） | 清单 `rospm.toml`，锁文件 `rospm.lock`，缓存目录 `.rospm/` |
 | 13 | 实现语言 | Rust | apt 侧先 shell out，不绑定 libapt-pkg |
+| 14 | 安装 ROS（2026-09-26 补充） | **属于 native 提供者 `apply` 的范围**：配置 ROS apt 源（locale、universe、keyring、`sources.list.d/ros2.list`）→ 装底包。rospm 自己写 keyring + 源文件，不安装 `ros2-apt-source` 包 | 理由：pixi / docker 提供者天然包含安装 ROS，native 不补上则"同一份清单切换提供者"残缺，且 P1 验收（干净虚拟机）无法通过；源文件由 rospm 管理是为了 P2 快照源切换复用同一路径。不安装 / 升级 Ubuntu 本身，版本不符直接报错。见 `spec.md` §4.1 |
+| 15 | 卸载 ROS（2026-09-26 补充） | `rospm uninstall`：显式列出已装 `ros-<distro>-*` 后 `apt-get remove` + `autoremove`；rospm 写的 apt 源随之删除，但有其它发行版或源非 rospm 所写时保留；不卸 rosdep / vcstool / colcon；不动项目文件 | 第三类命令，`--dry-run` 必须；额外要求交互确认或 `--yes`。底包口味由 `init --base ros-base\|desktop` 选择，清单字段 `ros_base` 仍为自由包名 |
 
 ## 派生原则（由上述决策推出，后续实现须遵守）
 

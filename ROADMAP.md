@@ -45,7 +45,7 @@
 ### 2.3 native 提供者会修改系统
 
 apt 安装需要 sudo，会污染共享实验室机器和 CI runner。需要在设计中明确：
-- native 提供者的"隔离边界"是什么（只装 ROS 底包 + rosdep 系统依赖，其它全部进 workspace）；
+- native 提供者的"隔离边界"是什么（配置 ROS apt 源 + 装 ROS 底包 + rosdep 系统依赖，其它全部进 workspace）；安装 ROS 本身属于 native `apply` 的范围（决策 #14，spec §4.1），但不安装 / 升级 Ubuntu；`uninstall` 只卸 `ros-<distro>-*` 与 rospm 写的源（决策 #15）；
 - 对多人共享机器推荐 pixi 或 docker 提供者；
 - `apply` 必须有 `--dry-run` 并输出将执行的命令。
 
@@ -81,12 +81,12 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 
 ## 5. Roadmap 总览
 
-各阶段的逐项任务、完成状态与验收门槛已拆到 [docs/phases.md](docs/phases.md)；本节只保留阶段目标与当前状态。状态更新日期：2026-09-25。
+各阶段的逐项任务、完成状态与验收门槛已拆到 [docs/phases.md](docs/phases.md)；本节只保留阶段目标与当前状态。状态更新日期：2026-09-26。
 
 | 阶段 | 目标 | 预估 | 状态 |
 |---|---|---|---|
 | P0 | 规格、决策、schema、Rust 骨架、CI | 1–2 周 | **基本完成**：决策/spec/schema/骨架/单测 ✅；外部事实 4 项全部有本地实测证据 ✅（ROS 快照签名密钥已核验、补丁版 rosdep 映射 `rclcpp` 通过、x86 上真实 ARM pixi-pack 通过）；CI 各步骤本地复现通过，仅剩 GitHub 实跑与 spec review |
-| P1 | native 提供者的描述与重放（x86_64、22.04/24.04、Humble/Jazzy） | 3–4 周 | **进行中**：`init` / `check` / `apply` / `build` / `env` / `shell` / `doctor` 骨架与 `--dry-run` 计划已就绪；缺环境探测、`init --from-env`、fish、干净虚拟机实跑 |
+| P1 | native 提供者的描述与重放（x86_64、22.04/24.04、Humble/Jazzy） | 3–4 周 | **进行中**：`init`（含 `--from-env` 反推、`--base` 选底包）与 `check`（环境探测 + 差异报告）已完成；`apply` 从裸 Ubuntu 起步（ROS apt 源 bootstrap）与 `uninstall` 的计划已就绪；`build` / `env` / `shell` / `doctor` 骨架与 `--dry-run` 计划已就绪；缺 fish、干净虚拟机实跑 |
 | P2 | 锁文件与依赖补全：`lock` / `apply --locked` / `verify` / `deps` | 3 周 | 未开始（lock schema 与解析已随骨架落地） |
 | P3 | Pixi 提供者：生成 `pixi.toml`，锁定委托 `pixi.lock`，RoboStack rosdep 源 | 3 周 | 未开始（占位返回 NotImplemented） |
 | P4 | Docker 提供者：Dockerfile / compose / devcontainer，digest 锁定，buildx | 2–3 周 | 未开始（占位返回 NotImplemented） |
@@ -98,7 +98,7 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 阶段目标一句话：
 
 - **P0 产出**：`rospm --help` 可运行 ✅；spec 与示例清单待 review。
-- **P1 产出**：干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
+- **P1 产出**：干净 22.04 虚拟机（无 ROS、无 ROS apt 源）上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
 - **P2 产出**：两台机器、间隔数周执行 `apply --locked`，`verify` 报告一致。
 - **P3 产出**：同一份清单切换 `provider = "pixi"` 后在无 sudo 机器上完成 apply/build。
 - **P4 产出**：`rospm apply` 产出可运行镜像，`rospm shell` 进入容器且 ROS 环境就位。

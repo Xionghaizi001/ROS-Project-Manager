@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{ArgAction, Parser, Subcommand};
+use rospm_core::manifest::RosFlavor;
 use rospm_core::platform::Platform;
 use rospm_core::provider::Shell;
 
@@ -16,8 +17,8 @@ use commands::Global;
     about = "Describe, lock and replay ROS 2 project environments",
     long_about = "rospm wraps rosdep, vcstool, colcon, apt, pixi and docker behind one \
                   manifest (rospm.toml) and one lock file (rospm.lock).\n\n\
-                  Commands that modify the system (apply, build, export, import, deps install) \
-                  always print their plan first and accept --dry-run."
+                  Commands that modify the system (apply, uninstall, build, export, import, \
+                  deps install) always print their plan first and accept --dry-run."
 )]
 struct Cli {
     /// Path to rospm.toml (default: search upwards from the current directory)
@@ -40,19 +41,27 @@ struct Cli {
 enum Cmd {
     /// Create a rospm.toml template in the current directory
     Init {
-        /// Best-effort detection from the existing environment (roadmap P1)
+        /// Draft the manifest from this host and directory (best effort;
+        /// undetected fields are marked TODO)
         #[arg(long)]
         from_env: bool,
+        /// Which ROS metapackage to install: `ros-base` (bare bones, default)
+        /// or `desktop` (adds RViz, demos, tutorials)
+        #[arg(long, value_name = "FLAVOR", value_parser = ["ros-base", "desktop"])]
+        base: Option<String>,
         /// Overwrite an existing rospm.toml
         #[arg(long)]
         force: bool,
     },
 
-    /// Validate the manifest and report what apply/build would need (read-only)
+    /// Validate the manifest and compare it with this host (read-only)
     Check {
         /// Evaluate platform overrides for this target instead of the host
         #[arg(long, value_name = "PLATFORM")]
         target: Option<Platform>,
+        /// Exit non-zero when the host does not match the manifest
+        #[arg(long)]
+        strict: bool,
     },
 
     /// Resolve and write rospm.lock (roadmap P2)
@@ -64,7 +73,8 @@ enum Cmd {
     /// Compare rospm.lock with the current environment (roadmap P2)
     Verify,
 
-    /// Install the ROS base, import sources and resolve dependencies [modifies system]
+    /// Set up the ROS apt source, install the ROS base, import sources and
+    /// resolve dependencies [modifies system]
     Apply {
         /// Honour rospm.lock (snapshot repositories, pinned revisions)
         #[arg(long)]
@@ -72,6 +82,20 @@ enum Cmd {
         /// Use only bundled payloads, never the network
         #[arg(long)]
         offline: bool,
+        /// Print the plan and exit
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Remove the ROS installation described by the manifest; project files
+    /// and workspaces are kept [modifies system]
+    Uninstall {
+        /// Leave the ROS apt source and keyring in place
+        #[arg(long)]
+        keep_source: bool,
+        /// Do not ask for confirmation
+        #[arg(short, long)]
+        yes: bool,
         /// Print the plan and exit
         #[arg(long)]
         dry_run: bool,
@@ -148,8 +172,17 @@ fn main() -> ExitCode {
     };
 
     let result = match cli.command {
-        Cmd::Init { from_env, force } => commands::init(&global, from_env, force),
-        Cmd::Check { target } => commands::check(&global, target),
+        Cmd::Init {
+            from_env,
+            base,
+            force,
+        } => {
+            let base = base
+                .as_deref()
+                .map(|b| b.parse::<RosFlavor>().expect("validated by clap"));
+            commands::init(&global, from_env, base, force)
+        }
+        Cmd::Check { target, strict } => commands::check(&global, target, strict),
         Cmd::Lock { .. } => commands::not_implemented("lock", "P2"),
         Cmd::Verify => commands::not_implemented("verify", "P2"),
         Cmd::Apply {
@@ -157,6 +190,11 @@ fn main() -> ExitCode {
             offline,
             dry_run,
         } => commands::apply(&global, locked, offline, dry_run),
+        Cmd::Uninstall {
+            keep_source,
+            yes,
+            dry_run,
+        } => commands::uninstall(&global, keep_source, yes, dry_run),
         Cmd::Build { workspace, dry_run } => {
             commands::build(&global, workspace.as_deref(), dry_run)
         }

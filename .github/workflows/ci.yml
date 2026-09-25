@@ -36,11 +36,17 @@ jobs:
 
   # Smoke: the binary runs on a bare Ubuntu 22.04 (Humble host) and 24.04 (Jazzy host)
   # without any ROS installed — check/doctor must not require ROS to be present.
+  # Each image gets the manifest for its own release: `apply` refuses a
+  # manifest whose Ubuntu release does not match the host.
   smoke:
     needs: test
     strategy:
       matrix:
-        image: ["ubuntu:22.04", "ubuntu:24.04"]
+        include:
+          - image: "ubuntu:22.04"
+            manifest: examples/minimal-humble/rospm.toml
+          - image: "ubuntu:24.04"
+            manifest: examples/minimal/rospm.toml
     runs-on: ubuntu-24.04
     container: ${{ matrix.image }}
     steps:
@@ -51,8 +57,11 @@ jobs:
           path: bin
       - run: chmod +x bin/rospm
       - run: bin/rospm --version
-      - run: bin/rospm --manifest examples/minimal/rospm.toml check
-      - run: bin/rospm --manifest examples/minimal/rospm.toml apply --dry-run
-      - run: bin/rospm --manifest examples/minimal/rospm.toml build --dry-run
-      - run: bin/rospm --manifest examples/minimal/rospm.toml env
+      - run: bin/rospm --manifest ${{ matrix.manifest }} check
+      - run: mkdir -p /tmp/scratch/ws/src && cd /tmp/scratch && $GITHUB_WORKSPACE/bin/rospm init --from-env --base desktop && $GITHUB_WORKSPACE/bin/rospm check --json
+      # A bare container has no ROS apt source: the plan must bootstrap it before the base install.
+      - run: bin/rospm --manifest ${{ matrix.manifest }} apply --dry-run | tee /tmp/apply.txt && grep -q 'write /etc/apt/sources.list.d/ros2.list (sudo)' /tmp/apply.txt
+      - run: bin/rospm --manifest ${{ matrix.manifest }} uninstall --dry-run
+      - run: bin/rospm --manifest ${{ matrix.manifest }} build --dry-run
+      - run: bin/rospm --manifest ${{ matrix.manifest }} env
       - run: bin/rospm doctor --json || true   # tools are absent here; report only

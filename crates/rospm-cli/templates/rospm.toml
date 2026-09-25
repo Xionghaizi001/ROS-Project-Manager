@@ -11,7 +11,7 @@ provider = "native"                      # native | pixi | docker
 
 [environment.native]
 # ubuntu = "24.04"                       # defaults to the distro's release
-# ros_base = "ros-jazzy-ros-base"        # or ros-jazzy-desktop
+# ros_base = "ros-jazzy-ros-base"        # or ros-jazzy-desktop; `rospm init --base desktop` sets it
 
 [workspaces.main]
 path = "ws"

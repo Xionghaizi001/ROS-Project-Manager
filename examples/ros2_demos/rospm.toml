@@ -1,0 +1,34 @@
+# Example project: the official ros2/demos and ros2/examples repositories on
+# Jazzy. Hand-written; compare with what `rospm init --from-env --force` drafts.
+schema_version = 1
+
+[project]
+name = "ros2_demos"
+description = "ros2/demos + ros2/examples (jazzy) in one workspace"
+ros_distro = "jazzy"
+platforms = ["linux-x86_64", "linux-aarch64"]
+
+[environment]
+provider = "native"
+
+[environment.native]
+ubuntu = "24.04"
+ros_base = "ros-jazzy-ros-base"
+
+[workspaces.main]
+path = "ws"
+sources = "main.repos"
+underlays = []
+
+[workspaces.main.colcon]
+build_args = ["--symlink-install"]
+
+[dependencies]
+apt = ["libopencv-dev"]
+
+[dependencies.rosdep]
+enabled = true
+skip_keys = []
+
+[env]
+ROS_DOMAIN_ID = "0"

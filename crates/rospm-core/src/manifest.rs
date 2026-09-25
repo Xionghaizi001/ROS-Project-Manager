@@ -89,6 +89,56 @@ pub struct Environment {
     pub docker: Option<DockerEnv>,
 }
 
+/// The two official ROS 2 base metapackages (install guide: "Desktop Install
+/// (Recommended)" vs "ROS-Base Install (Bare Bones)"). `environment.native.ros_base`
+/// stays a free-form package name so `desktop-full` remains reachable by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RosFlavor {
+    /// `ros-<distro>-ros-base`: libraries, build tools, CLI; no GUI.
+    #[default]
+    RosBase,
+    /// `ros-<distro>-desktop`: ros-base plus RViz, demos and tutorials.
+    Desktop,
+}
+
+impl RosFlavor {
+    pub const ALL: [RosFlavor; 2] = [RosFlavor::RosBase, RosFlavor::Desktop];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RosFlavor::RosBase => "ros-base",
+            RosFlavor::Desktop => "desktop",
+        }
+    }
+
+    /// The apt metapackage for `distro`.
+    pub fn package(&self, distro: RosDistro) -> String {
+        format!("ros-{distro}-{}", self.as_str())
+    }
+}
+
+impl fmt::Display for RosFlavor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("unknown ROS flavor `{0}` (expected ros-base or desktop)")]
+pub struct ParseFlavorError(pub String);
+
+impl std::str::FromStr for RosFlavor {
+    type Err = ParseFlavorError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        RosFlavor::ALL
+            .iter()
+            .copied()
+            .find(|f| f.as_str() == s)
+            .ok_or_else(|| ParseFlavorError(s.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeEnv {
@@ -478,6 +528,6 @@ impl Manifest {
             .native
             .as_ref()
             .and_then(|n| n.ros_base.clone())
-            .unwrap_or_else(|| format!("ros-{}-ros-base", self.project.ros_distro))
+            .unwrap_or_else(|| RosFlavor::RosBase.package(self.project.ros_distro))
     }
 }

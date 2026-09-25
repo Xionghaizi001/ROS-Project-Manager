@@ -3,3 +3,6 @@
 **/.rospm/
 *.rospm.tar
 *.rospm.tar.zst
+
+# example projects: sources are fetched, not committed
+/examples/*/ws/
