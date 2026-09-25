@@ -1,38 +1,53 @@
 mod commands;
+mod i18n;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Command, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rospm_core::manifest::RosFlavor;
 use rospm_core::mirror::Mirror;
 use rospm_core::platform::Platform;
 use rospm_core::provider::Shell;
 
 use commands::Global;
+use i18n::tr;
 
+// Translation resources, compiled in (spec §4.2). `en` is the fallback.
+rust_i18n::i18n!("locales", fallback = "en");
+
+// Descriptions are looked up at build time of the clap command, i.e. after
+// `i18n::install`, so `--help` follows the selected language. The auto
+// help/version flags are replaced so their descriptions are translated too.
 #[derive(Parser)]
 #[command(
     name = "rospm",
     version,
-    about = "Describe, lock and replay ROS 2 project environments",
-    long_about = "rospm wraps rosdep, vcstool, colcon, apt, pixi and docker behind one \
-                  manifest (rospm.toml) and one lock file (rospm.lock).\n\n\
-                  Commands that modify the system (apply, uninstall, build, export, import, \
-                  deps install) always print their plan first and accept --dry-run."
+    disable_help_flag = true,
+    disable_version_flag = true,
+    disable_help_subcommand = true,
+    about = tr("cli.about"),
+    long_about = tr("cli.long_about")
 )]
 struct Cli {
-    /// Path to rospm.toml (default: search upwards from the current directory)
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH", help = tr("cli.manifest"))]
     manifest: Option<PathBuf>,
 
-    /// Machine-readable JSON output where supported
-    #[arg(long, global = true)]
+    #[arg(long, global = true, help = tr("cli.json"))]
     json: bool,
 
-    /// Increase log verbosity (-v, -vv)
-    #[arg(short, long, global = true, action = ArgAction::Count)]
+    #[arg(short, long, global = true, action = ArgAction::Count, help = tr("cli.verbose"))]
     verbose: u8,
+
+    // Read before parsing (see `i18n::detect`); declared so clap accepts it.
+    #[arg(long, global = true, value_name = "LANG", value_parser = ["zh", "en"], hide_possible_values = true, help = tr("cli.lang"))]
+    lang: Option<String>,
+
+    #[arg(short = 'h', long, global = true, action = ArgAction::Help, help = tr("cli.help_flag"))]
+    help: Option<bool>,
+
+    #[arg(short = 'V', long, action = ArgAction::Version, help = tr("cli.version_flag"))]
+    version: Option<bool>,
 
     #[command(subcommand)]
     command: Cmd,
@@ -40,141 +55,184 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a rospm.toml template in the current directory
+    #[command(about = tr("cli.init.about"))]
     Init {
-        /// Draft the manifest from this host and directory (best effort;
-        /// undetected fields are marked TODO)
-        #[arg(long)]
+        #[arg(long, help = tr("cli.init.from_env"))]
         from_env: bool,
-        /// Which ROS metapackage to install: `ros-base` (bare bones, default)
-        /// or `desktop` (adds RViz, demos, tutorials)
-        #[arg(long, value_name = "FLAVOR", value_parser = ["ros-base", "desktop"])]
+        #[arg(long, value_name = "FLAVOR", value_parser = ["ros-base", "desktop"], hide_possible_values = true, help = tr("cli.init.base"))]
         base: Option<String>,
-        /// Overwrite an existing rospm.toml
-        #[arg(long)]
+        #[arg(long, help = tr("cli.init.force"))]
         force: bool,
     },
 
-    /// Validate the manifest and compare it with this host (read-only)
+    #[command(about = tr("cli.check.about"))]
     Check {
-        /// Evaluate platform overrides for this target instead of the host
-        #[arg(long, value_name = "PLATFORM")]
+        #[arg(long, value_name = "PLATFORM", help = tr("cli.check.target"))]
         target: Option<Platform>,
-        /// Exit non-zero when the host does not match the manifest
-        #[arg(long)]
+        #[arg(long, help = tr("cli.check.strict"))]
         strict: bool,
     },
 
-    /// Resolve and write rospm.lock (roadmap P2)
+    #[command(about = tr("cli.lock.about"))]
     Lock {
-        #[arg(long, value_name = "PLATFORM")]
+        #[arg(long, value_name = "PLATFORM", help = tr("cli.check.target"))]
         platform: Option<Platform>,
     },
 
-    /// Compare rospm.lock with the current environment (roadmap P2)
+    #[command(about = tr("cli.verify.about"))]
     Verify,
 
-    /// Set up the ROS apt source, install the ROS base, import sources and
-    /// resolve dependencies [modifies system]
+    #[command(about = tr("cli.apply.about"))]
     Apply {
-        /// Honour rospm.lock (snapshot repositories, pinned revisions)
-        #[arg(long)]
+        #[arg(long, help = tr("cli.apply.locked"))]
         locked: bool,
-        /// Use only bundled payloads, never the network
-        #[arg(long)]
+        #[arg(long, help = tr("cli.apply.offline"))]
         offline: bool,
-        /// Download ROS from this source set instead of probing and asking:
-        /// official | tuna | ustc | aliyun (also `ROSPM_MIRROR`)
-        #[arg(long, value_name = "NAME", value_parser = clap::builder::PossibleValuesParser::new(rospm_core::mirror::NAMES))]
+        #[arg(long, value_name = "NAME", help = tr("cli.apply.mirror"), hide_possible_values = true, value_parser = clap::builder::PossibleValuesParser::new(rospm_core::mirror::NAMES))]
         mirror: Option<String>,
-        /// Print the plan and exit
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 
-    /// Remove the ROS installation described by the manifest; project files
-    /// and workspaces are kept [modifies system]
+    #[command(about = tr("cli.uninstall.about"))]
     Uninstall {
-        /// Leave the ROS apt source and keyring in place
-        #[arg(long)]
+        #[arg(long, help = tr("cli.uninstall.keep_source"))]
         keep_source: bool,
-        /// Do not ask for confirmation
-        #[arg(short, long)]
+        #[arg(short, long, help = tr("cli.uninstall.yes"))]
         yes: bool,
-        /// Print the plan and exit
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 
-    /// Build workspaces with colcon in overlay order [produces artifacts]
+    #[command(about = tr("cli.build.about"))]
     Build {
-        /// Build only this workspace (its underlays must already be built)
+        #[arg(help = tr("cli.build.workspace"))]
         workspace: Option<String>,
-        /// Print the plan and exit
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 
-    /// Print a script that enters the project environment (`source <(rospm env)`)
+    #[command(about = tr("cli.env.about"))]
     Env {
-        #[arg(long, default_value = "bash")]
+        #[arg(long, default_value = "bash", hide_default_value = true, help = tr("cli.env.shell"))]
         shell: Shell,
     },
 
-    /// Start a subshell with the project environment loaded
+    #[command(about = tr("cli.shell.about"))]
     Shell,
 
-    /// Inspect or complete dependencies from package.xml files
+    #[command(about = tr("cli.deps.about"))]
     Deps {
         #[command(subcommand)]
         command: DepsCmd,
     },
 
-    /// Produce an offline bundle (roadmap P6) [produces artifacts]
+    #[command(about = tr("cli.export.about"))]
     Export {
-        #[arg(long, value_name = "PLATFORM")]
+        #[arg(long, value_name = "PLATFORM", help = tr("cli.export.target"))]
         target: Option<Platform>,
-        #[arg(short, long, value_name = "PATH")]
+        #[arg(short, long, value_name = "PATH", help = tr("cli.export.output"))]
         output: Option<PathBuf>,
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 
-    /// Verify and install an offline bundle (roadmap P6) [modifies system]
+    #[command(about = tr("cli.import.about"))]
     Import {
+        #[arg(help = tr("cli.import.bundle"))]
         bundle: PathBuf,
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 
-    /// Generate editor configuration (roadmap P7)
+    #[command(about = tr("cli.editor.about"))]
     Editor {
-        /// vscode | clion | devcontainer (default: all enabled in the manifest)
+        #[arg(help = tr("cli.editor.kind"))]
         kind: Option<String>,
     },
 
-    /// Check that the wrapped tools are available on this machine and
-    /// whether the ROS sources (official and mirrors) are reachable
+    #[command(about = tr("cli.doctor.about"))]
     Doctor {
-        /// Skip the network probe
-        #[arg(long)]
+        #[arg(long, help = tr("cli.doctor.no_network"))]
         no_network: bool,
+    },
+
+    // Replaces clap's built-in `help` subcommand, whose text is not translatable.
+    #[command(about = tr("cli.help.about"))]
+    Help {
+        #[arg(help = tr("cli.help.command"))]
+        command: Vec<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum DepsCmd {
-    /// Report missing dependencies without installing (roadmap P2)
+    #[command(about = tr("cli.deps.check"))]
     Check,
-    /// Install missing dependencies through rosdep (roadmap P2) [modifies system]
+    #[command(about = tr("cli.deps.install"))]
     Install {
-        #[arg(long)]
+        #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 }
 
+/// clap hard-codes its section headings ("Usage:", "Commands:", …); a
+/// per-command template supplies translated ones instead. Applied
+/// recursively because templates are not inherited by subcommands.
+fn localize_help(cmd: Command) -> Command {
+    let has_subcommands = cmd.has_subcommands();
+    let has_positionals = cmd.get_positionals().next().is_some();
+    let mut t = String::from("{before-help}{about-with-newline}\n");
+    t.push_str(&tr("help.usage"));
+    t.push_str(" {usage}\n");
+    if has_subcommands {
+        t.push('\n');
+        t.push_str(&tr("help.commands"));
+        t.push_str("\n{subcommands}\n");
+    }
+    if has_positionals {
+        t.push('\n');
+        t.push_str(&tr("help.arguments"));
+        t.push_str("\n{positionals}\n");
+    }
+    t.push('\n');
+    t.push_str(&tr("help.options"));
+    t.push_str("\n{options}{after-help}");
+    cmd.help_template(t).mut_subcommands(localize_help)
+}
+
+fn parse_cli() -> Cli {
+    let cmd = localize_help(Cli::command());
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
+}
+
+/// `rospm help [COMMAND…]`: the long help of the named (sub)command.
+fn print_help(path: &[String]) -> anyhow::Result<()> {
+    let mut cmd = localize_help(Cli::command());
+    // Build first so global flags and `rospm …` usage prefixes reach subcommands.
+    cmd.build();
+    let mut cur = &mut cmd;
+    for name in path {
+        cur = match cur.find_subcommand_mut(name) {
+            Some(sc) => sc,
+            None => {
+                anyhow::bail!("{}", rospm_core::msg!("cli.help.unknown", command = name))
+            }
+        };
+    }
+    match cur.print_long_help() {
+        Ok(()) => Ok(()),
+        // `rospm help | head`: nothing to report.
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Language first: everything below, including `--help`, is rendered with it.
+    i18n::install(i18n::from_process());
+    let cli = parse_cli();
     init_logging(cli.verbose);
     let global = Global {
         manifest: cli.manifest,
@@ -224,16 +282,18 @@ fn main() -> ExitCode {
         Cmd::Import { .. } => commands::not_implemented("import", "P6"),
         Cmd::Editor { .. } => commands::not_implemented("editor", "P7"),
         Cmd::Doctor { no_network } => commands::doctor(&global, no_network),
+        Cmd::Help { command } => print_help(&command),
     };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
+            let text = commands::describe(&err);
             if global.json {
-                let payload = serde_json::json!({ "ok": false, "error": format!("{err:#}") });
+                let payload = serde_json::json!({ "ok": false, "error": text });
                 println!("{payload}");
             } else {
-                eprintln!("error: {err:#}");
+                eprintln!("{}", rospm_core::msg!("cli.err.prefix", text = text));
             }
             ExitCode::FAILURE
         }

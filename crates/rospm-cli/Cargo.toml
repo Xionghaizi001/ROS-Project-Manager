@@ -18,3 +18,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 which.workspace = true
+rust-i18n.workspace = true
+
+[dev-dependencies]
+serde_yaml.workspace = true

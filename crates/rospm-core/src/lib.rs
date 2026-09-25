@@ -15,11 +15,14 @@
 //!   `apply` runs before downloading (decision #17).
 //! - [`introspect`]: `init --from-env`, a best-effort draft manifest from the
 //!   host and the project directory (decision #3).
+//! - [`message`]: locale-independent user-facing text. The library emits
+//!   message keys + arguments; the CLI renders them (spec §4.2).
 
 pub mod error;
 pub mod introspect;
 pub mod lock;
 pub mod manifest;
+pub mod message;
 pub mod mirror;
 pub mod net;
 pub mod package_xml;
@@ -31,3 +34,4 @@ pub mod repos;
 pub mod scm;
 
 pub use error::{Error, Result};
+pub use message::Message;

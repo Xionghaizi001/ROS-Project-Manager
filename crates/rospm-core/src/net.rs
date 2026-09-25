@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::message::Message;
 use crate::mirror::{self, Mirror};
+use crate::msg;
 
 /// Default per-request timeout.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -40,7 +42,7 @@ pub struct Endpoint {
 #[serde(rename_all = "snake_case", tag = "outcome")]
 pub enum Outcome {
     Ok { millis: u64, bytes: u64 },
-    Failed { error: String },
+    Failed { error: Message },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -64,7 +66,7 @@ impl ProbeResult {
     }
 
     /// One-line human form of the outcome (`ok 144 ms, 4.6 KB` / `FAILED: timed out`).
-    pub fn describe(&self) -> String {
+    pub fn describe(&self) -> Message {
         match &self.outcome {
             Outcome::Ok { millis, bytes } => {
                 let rate = if *millis > 0 && *bytes >= 64 * 1024 {
@@ -72,9 +74,14 @@ impl ProbeResult {
                 } else {
                     String::new()
                 };
-                format!("ok      {millis:>5} ms  {:>8}{rate}", human_bytes(*bytes))
+                msg!(
+                    "net.ok",
+                    millis = format!("{millis:>5}"),
+                    bytes = format!("{:>8}", human_bytes(*bytes)),
+                    rate = rate
+                )
             }
-            Outcome::Failed { error } => format!("FAILED  {error}"),
+            Outcome::Failed { error } => msg!("net.failed", error = error),
         }
     }
 }
@@ -165,7 +172,7 @@ pub fn probe(endpoints: &[Endpoint], timeout: Duration) -> Vec<ProbeResult> {
                     url: String::new(),
                 },
                 outcome: Outcome::Failed {
-                    error: "probe thread panicked".into(),
+                    error: Message::text("probe thread panicked"),
                 },
             })
         })
@@ -190,7 +197,7 @@ fn fetch(endpoint: Endpoint, timeout: Duration) -> ProbeResult {
                     bytes: body.len() as u64,
                 },
                 Ok(_) => Outcome::Failed {
-                    error: format!("HTTP {}", status.as_u16()),
+                    error: msg!("net.http_status", status = status.as_u16()),
                 },
                 Err(e) => Outcome::Failed {
                     error: short_error(&e, timeout),
@@ -204,14 +211,14 @@ fn fetch(endpoint: Endpoint, timeout: Duration) -> ProbeResult {
     ProbeResult { endpoint, outcome }
 }
 
-fn short_error(e: &ureq::Error, timeout: Duration) -> String {
+fn short_error(e: &ureq::Error, timeout: Duration) -> Message {
     match e {
-        ureq::Error::Timeout(_) => format!("timed out after {} s", timeout.as_secs()),
-        ureq::Error::Io(io) => format!("{}", io.kind()).replace('_', " "),
+        ureq::Error::Timeout(_) => msg!("net.timeout", secs = timeout.as_secs()),
+        ureq::Error::Io(io) => Message::text(format!("{}", io.kind()).replace('_', " ")),
         other => {
             let s = other.to_string();
             // Keep the first sentence; ureq errors can be long.
-            s.split(": ").next().unwrap_or(&s).to_string()
+            Message::text(s.split(": ").next().unwrap_or(&s).to_string())
         }
     }
 }
@@ -307,7 +314,7 @@ mod tests {
         res(
             url,
             Outcome::Failed {
-                error: "timed out".into(),
+                error: Message::text("timed out"),
             },
         )
     }
@@ -398,8 +405,8 @@ mod tests {
 
     #[test]
     fn describe_is_compact() {
-        assert!(ok("u", 12).describe().starts_with("ok"));
-        assert!(fail("u").describe().starts_with("FAILED"));
+        assert_eq!(ok("u", 12).describe().key_name(), Some("net.ok"));
+        assert_eq!(fail("u").describe().key_name(), Some("net.failed"));
         assert_eq!(human_bytes(4682), "4.6 KB");
     }
 }

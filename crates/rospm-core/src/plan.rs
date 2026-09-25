@@ -12,6 +12,8 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
+use crate::message::Message;
+use crate::msg;
 
 /// One external command. `preamble` lines (typically `source …`) are run in
 /// the same `bash -c` before the command so ROS overlays are visible to it.
@@ -160,17 +162,26 @@ pub enum Step {
     },
     /// Informational line, printed but not executed. Used for degradations
     /// ("snapshot unreachable, falling back to …") so they are never silent.
-    Note(String),
+    Note(Message),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Plan {
-    pub title: String,
+    pub title: Message,
     pub steps: Vec<Step>,
 }
 
+impl Default for Plan {
+    fn default() -> Self {
+        Plan {
+            title: Message::text(""),
+            steps: Vec::new(),
+        }
+    }
+}
+
 impl Plan {
-    pub fn new(title: impl Into<String>) -> Self {
+    pub fn new(title: impl Into<Message>) -> Self {
         Plan {
             title: title.into(),
             steps: Vec::new(),
@@ -225,7 +236,7 @@ impl Plan {
         self
     }
 
-    pub fn note(&mut self, text: impl Into<String>) -> &mut Self {
+    pub fn note(&mut self, text: impl Into<Message>) -> &mut Self {
         self.steps.push(Step::Note(text.into()));
         self
     }
@@ -243,7 +254,7 @@ impl Plan {
     }
 
     pub fn render(&self) -> String {
-        let mut out = format!("# plan: {}\n", self.title);
+        let mut out = format!("# {}\n", msg!("plan.title", title = &self.title));
         for (i, step) in self.steps.iter().enumerate() {
             let n = i + 1;
             match step {
@@ -255,13 +266,20 @@ impl Plan {
                     contents,
                     sudo,
                 } => {
-                    let _ = writeln!(
-                        out,
-                        "[{n}] write {}{} ({} bytes)",
-                        path.display(),
-                        if *sudo { " (sudo)" } else { "" },
-                        contents.len()
-                    );
+                    let what = if *sudo {
+                        msg!(
+                            "plan.write_file_sudo",
+                            path = path.display(),
+                            bytes = contents.len()
+                        )
+                    } else {
+                        msg!(
+                            "plan.write_file",
+                            path = path.display(),
+                            bytes = contents.len()
+                        )
+                    };
+                    let _ = writeln!(out, "[{n}] {what}");
                     // Small system files (apt sources) are worth reviewing verbatim.
                     if contents.lines().count() <= 16 {
                         for line in contents.lines() {
@@ -276,8 +294,13 @@ impl Plan {
                 } => {
                     let _ = writeln!(
                         out,
-                        "[{n}] fetch {url} -> {} (sudo), verify fingerprint {fingerprint}",
-                        dest.display()
+                        "[{n}] {}",
+                        msg!(
+                            "plan.fetch_key",
+                            url = url,
+                            dest = dest.display(),
+                            fingerprint = fingerprint
+                        )
                     );
                 }
                 Step::Note(text) => {
@@ -293,7 +316,7 @@ impl Plan {
         let stdout = || PathBuf::from("<stdout>");
         write!(out, "{}", self.render()).map_err(|e| Error::io(stdout(), e))?;
         if dry_run {
-            writeln!(out, "# dry-run: nothing executed").map_err(|e| Error::io(stdout(), e))?;
+            writeln!(out, "# {}", msg!("plan.dry_run")).map_err(|e| Error::io(stdout(), e))?;
             return Ok(());
         }
         self.perform(out)
@@ -324,8 +347,13 @@ impl Plan {
                     contents,
                     sudo,
                 } => {
-                    writeln!(out, "==> [{}] write {}", i + 1, path.display())
-                        .map_err(|e| Error::io(stdout(), e))?;
+                    writeln!(
+                        out,
+                        "==> [{}] {}",
+                        i + 1,
+                        msg!("plan.writing", path = path.display())
+                    )
+                    .map_err(|e| Error::io(stdout(), e))?;
                     if *sudo {
                         write_file_sudo(path, contents)?;
                     } else {
@@ -342,9 +370,14 @@ impl Plan {
                 } => {
                     writeln!(
                         out,
-                        "==> [{}] fetch {url} -> {} (verify fingerprint {fingerprint})",
+                        "==> [{}] {}",
                         i + 1,
-                        dest.display()
+                        msg!(
+                            "plan.fetching_key",
+                            url = url,
+                            dest = dest.display(),
+                            fingerprint = fingerprint
+                        )
                     )
                     .map_err(|e| Error::io(stdout(), e))?;
                     fetch_key(url, dest, fingerprint)?;
@@ -411,22 +444,24 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         .output()
         .map_err(|e| Error::io("gpg", e))?;
     if !gpg.status.success() {
-        return Err(Error::Host(format!(
-            "gpg could not read the key downloaded from {url}: {}",
-            String::from_utf8_lossy(&gpg.stderr).trim()
+        return Err(Error::Host(msg!(
+            "plan.key_unreadable",
+            url = url,
+            error = String::from_utf8_lossy(&gpg.stderr).trim()
         )));
     }
     let found = fingerprints(&String::from_utf8_lossy(&gpg.stdout));
     if !found.iter().any(|f| f.eq_ignore_ascii_case(fingerprint)) {
-        return Err(Error::Host(format!(
-            "key downloaded from {url} has fingerprint {} but rospm expects {fingerprint}; \
-             not installed to {}",
-            if found.is_empty() {
+        return Err(Error::Host(msg!(
+            "plan.key_fingerprint_mismatch",
+            url = url,
+            found = if found.is_empty() {
                 "<none>".to_string()
             } else {
                 found.join(", ")
             },
-            dest.display()
+            expected = fingerprint,
+            dest = dest.display()
         )));
     }
 

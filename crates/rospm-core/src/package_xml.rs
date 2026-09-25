@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::{Error, Result};
+use crate::msg;
 
 /// Marker files that make colcon / ament / catkin skip a directory tree.
 pub const IGNORE_MARKERS: &[&str] = &["COLCON_IGNORE", "AMENT_IGNORE", "CATKIN_IGNORE"];
@@ -71,16 +72,13 @@ impl PackageXml {
     pub fn parse(text: &str, path: &Path) -> Result<PackageXml> {
         let doc = roxmltree::Document::parse(text).map_err(|e| Error::PackageXml {
             path: path.to_path_buf(),
-            message: e.to_string(),
+            message: msg!("package_xml.malformed", source = e),
         })?;
         let root = doc.root_element();
         if root.tag_name().name() != "package" {
             return Err(Error::PackageXml {
                 path: path.to_path_buf(),
-                message: format!(
-                    "root element is <{}>, expected <package>",
-                    root.tag_name().name()
-                ),
+                message: msg!("package_xml.root_element", found = root.tag_name().name()),
             });
         }
         let format = root
@@ -96,7 +94,7 @@ impl PackageXml {
         };
         let name = text_of("name").ok_or_else(|| Error::PackageXml {
             path: path.to_path_buf(),
-            message: "missing <name>".into(),
+            message: msg!("package_xml.missing_name"),
         })?;
         let mut depends = Vec::new();
         for node in root.children().filter(|n| n.is_element()) {

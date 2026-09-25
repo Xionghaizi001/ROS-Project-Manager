@@ -7,6 +7,7 @@ use std::str::FromStr;
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, ProviderKind};
 use crate::mirror::Mirror;
+use crate::msg;
 use crate::plan::Plan;
 use crate::platform::Platform;
 use crate::probe::{EnvReport, Host, Status};
@@ -116,9 +117,9 @@ impl Unimplemented {
     fn err(&self) -> Error {
         Error::NotImplemented {
             feature: match self.kind {
-                ProviderKind::Pixi => "pixi provider",
-                ProviderKind::Docker => "docker provider",
-                ProviderKind::Native => "native provider",
+                ProviderKind::Pixi => "provider = \"pixi\"",
+                ProviderKind::Docker => "provider = \"docker\"",
+                ProviderKind::Native => "provider = \"native\"",
             },
             phase: self.phase,
         }
@@ -148,8 +149,8 @@ impl Provider for Unimplemented {
         report.push(
             "provider",
             self.kind.to_string(),
-            "environment probing",
-            format!("not implemented yet (roadmap {})", self.phase),
+            msg!("probe.provider.probing"),
+            msg!("probe.provider.not_implemented", phase = self.phase),
             Status::Info,
         );
         Ok(report)

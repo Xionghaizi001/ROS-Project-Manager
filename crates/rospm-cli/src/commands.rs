@@ -1,5 +1,10 @@
 //! Command implementations. Anything scheduled for a later roadmap phase
 //! returns [`not_implemented`] with the phase so users know where it stands.
+//!
+//! All user-facing text goes through the i18n layer (spec §4.2): either a
+//! `msg!` key rendered by [`crate::i18n::render`] via `Display`, or
+//! [`tr`] for plain CLI strings. `--json` key names and enum values stay
+//! English.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Write};
@@ -16,7 +21,9 @@ use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
 use rospm_core::probe::{EnvReport, Host, Status, NATIVE_CORE_TOOLS, TOOLS};
 use rospm_core::provider::{self, Context, Shell};
 use rospm_core::repos::ReposFile;
-use rospm_core::Error;
+use rospm_core::{msg, Error};
+
+use crate::i18n::{self, tr};
 
 pub struct Global {
     pub manifest: Option<PathBuf>,
@@ -33,11 +40,15 @@ fn locate(global: &Global) -> Result<PathBuf> {
     if let Some(p) = &global.manifest {
         return Ok(p.clone());
     }
-    let cwd = std::env::current_dir().context("cannot determine current directory")?;
+    let cwd = std::env::current_dir().context(tr("cli.err.no_cwd"))?;
     Manifest::find(&cwd).ok_or_else(|| {
         anyhow!(
-            "no {MANIFEST_FILE} found in {} or any parent directory (run `rospm init`)",
-            cwd.display()
+            "{}",
+            msg!(
+                "cli.err.manifest_not_found",
+                file = MANIFEST_FILE,
+                dir = cwd.display()
+            )
         )
     })
 }
@@ -53,7 +64,7 @@ fn load(global: &Global) -> Result<Loaded> {
         .unwrap_or_else(|| PathBuf::from("."));
     let root = root
         .canonicalize()
-        .with_context(|| format!("cannot resolve project directory {}", root.display()))?;
+        .with_context(|| msg!("cli.err.cannot_resolve", path = root.display()).to_string())?;
     Ok(Loaded {
         path,
         root,
@@ -62,20 +73,60 @@ fn load(global: &Global) -> Result<Loaded> {
 }
 
 fn host_platform() -> Result<Platform> {
-    Platform::current().ok_or_else(|| {
-        anyhow!("this host is not a supported platform (expected linux x86_64 or aarch64)")
-    })
+    Platform::current().ok_or_else(|| anyhow!("{}", tr("cli.err.unsupported_host")))
 }
 
 pub fn not_implemented(feature: &'static str, phase: &'static str) -> Result<()> {
     Err(Error::NotImplemented { feature, phase }.into())
 }
 
+/// The error chain as one localised line. A `rospm_core::Error` already
+/// describes its own source, so the chain stops there.
+pub fn describe(err: &anyhow::Error) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for cause in err.chain() {
+        if let Some(core) = cause.downcast_ref::<Error>() {
+            parts.push(core.to_string());
+            break;
+        }
+        parts.push(cause.to_string());
+    }
+    parts.join(": ")
+}
+
 // ---------------------------------------------------------------- init
 
-const TEMPLATE: &str = include_str!("../templates/rospm.toml");
-/// `ros_distro` hard-coded in the template; `--base` composes the package from it.
+/// One template per language (comments differ, keys and values do not).
+const TEMPLATE_EN: &str = include_str!("../templates/rospm.en.toml");
+const TEMPLATE_ZH_CN: &str = include_str!("../templates/rospm.zh-CN.toml");
+/// `ros_distro` hard-coded in the templates; `--base` composes the package from it.
 const TEMPLATE_DISTRO: RosDistro = RosDistro::Jazzy;
+/// Start of the commented-out `ros_base` line that `--base` replaces.
+const TEMPLATE_ROS_BASE_LINE: &str = "# ros_base = \"ros-jazzy-ros-base\"";
+
+fn template() -> &'static str {
+    match i18n::current() {
+        i18n::Lang::En => TEMPLATE_EN,
+        i18n::Lang::ZhCn => TEMPLATE_ZH_CN,
+    }
+}
+
+/// Uncomment the `ros_base` line and set it to `pkg`.
+fn set_template_ros_base(text: &str, pkg: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let idx = lines
+        .iter()
+        .position(|l| l.starts_with(TEMPLATE_ROS_BASE_LINE))
+        .expect("internal error: template ros_base line changed");
+    lines[idx] = format!(
+        "ros_base = {:<26} # {}",
+        format!("\"{pkg}\""),
+        tr("template.ros_base_comment")
+    );
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
 
 pub fn init(global: &Global, from_env: bool, base: Option<RosFlavor>, force: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -84,10 +135,7 @@ pub fn init(global: &Global, from_env: bool, base: Option<RosFlavor>, force: boo
         .clone()
         .unwrap_or_else(|| cwd.join(MANIFEST_FILE));
     if path.exists() && !force {
-        bail!(
-            "{} already exists (use --force to overwrite)",
-            path.display()
-        );
+        bail!("{}", msg!("cli.init.exists", path = path.display()));
     }
     let root = path
         .parent()
@@ -103,27 +151,22 @@ pub fn init(global: &Global, from_env: bool, base: Option<RosFlavor>, force: boo
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "my_project".into());
-    let mut text = TEMPLATE.replace("@NAME@", &name);
+    let mut text = template().replace("@NAME@", &name);
     if let Some(flavor) = base {
         // The template's distro is fixed (jazzy); `--base` only picks the metapackage.
         let pkg = flavor.package(TEMPLATE_DISTRO);
-        text = text.replace(
-            "# ros_base = \"ros-jazzy-ros-base\"        # or ros-jazzy-desktop; `rospm init --base desktop` sets it",
-            &format!(
-                "ros_base = {pkg:<26} # ros-base (bare bones) | desktop (adds RViz, demos)",
-                pkg = format!("\"{pkg}\"")
-            ),
-        );
+        text = set_template_ros_base(&text, &pkg);
         assert!(
             text.contains(&pkg),
             "internal error: template ros_base line changed"
         );
     }
     // The template must always satisfy our own validator.
-    Manifest::parse(&text, &path).context("internal error: template is invalid")?;
-    std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
-    println!("created {}", path.display());
-    println!("next: edit the [workspaces] section and create main.repos, then run `rospm check`");
+    Manifest::parse(&text, &path).context(tr("cli.init.template_invalid"))?;
+    std::fs::write(&path, text)
+        .with_context(|| msg!("cli.err.cannot_write", path = path.display()).to_string())?;
+    println!("{}", msg!("cli.init.created", path = path.display()));
+    println!("{}", tr("cli.init.next_template"));
     Ok(())
 }
 
@@ -143,22 +186,23 @@ fn init_from_env(global: &Global, root: &Path, path: &Path, base: Option<RosFlav
             Some(distro) => {
                 let pkg = flavor.package(distro);
                 draft.ros_base = Some(pkg.clone());
-                draft
-                    .todos
-                    .retain(|t| !t.starts_with("environment.native.ros_base"));
-                draft
-                    .notes
-                    .push(format!("environment.native.ros_base: {pkg} (from --base {flavor})"));
+                draft.todos.retain(|t| !t.has_key_prefix("init.ros_base."));
+                draft.notes.push(msg!(
+                    "init.ros_base.from_flag",
+                    package = pkg,
+                    flavor = flavor
+                ));
             }
-            None => draft.todos.push(format!(
-                "environment.native.ros_base: --base {flavor} ignored because ros_distro was not detected"
-            )),
+            None => draft
+                .todos
+                .push(msg!("init.ros_base.flag_ignored", flavor = flavor)),
         }
     }
     let text = draft.render();
     // Decision #3: best effort, but never an invalid file.
-    Manifest::parse(&text, path).context("internal error: drafted manifest is invalid")?;
-    std::fs::write(path, &text).with_context(|| format!("cannot write {}", path.display()))?;
+    Manifest::parse(&text, path).context(tr("cli.init.draft_invalid"))?;
+    std::fs::write(path, &text)
+        .with_context(|| msg!("cli.err.cannot_write", path = path.display()).to_string())?;
 
     if global.json {
         let report = InitReport {
@@ -170,20 +214,24 @@ fn init_from_env(global: &Global, root: &Path, path: &Path, base: Option<RosFlav
         return Ok(());
     }
 
-    println!("created {} from this host and directory", path.display());
+    println!(
+        "{}",
+        msg!("cli.init.created_from_env", path = path.display())
+    );
     for n in &draft.notes {
-        println!("detected    {n}");
+        println!("{}", msg!("cli.init.detected", text = n));
     }
     for t in &draft.todos {
-        println!("TODO        {t}");
+        println!("{}", msg!("cli.init.todo", text = t));
     }
     if draft.todos.is_empty() {
-        println!("next: review the file, then run `rospm check`");
+        println!("{}", tr("cli.init.next_review"));
+    } else if draft.todos.len() == 1 {
+        println!("{}", tr("cli.init.next_todos_one"));
     } else {
         println!(
-            "next: resolve the {} TODO line{} above (also marked in the file), then run `rospm check`",
-            draft.todos.len(),
-            if draft.todos.len() == 1 { "" } else { "s" }
+            "{}",
+            msg!("cli.init.next_todos_many", count = draft.todos.len())
         );
     }
     Ok(())
@@ -223,8 +271,8 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
         Err(err) => {
             if global.json {
                 let errors: Vec<String> = match err.downcast_ref::<Error>() {
-                    Some(Error::Validation(list)) => list.clone(),
-                    _ => vec![format!("{err:#}")],
+                    Some(Error::Validation(list)) => list.iter().map(ToString::to_string).collect(),
+                    _ => vec![describe(&err)],
                 };
                 println!("{}", serde_json::json!({ "ok": false, "errors": errors }));
                 std::process::exit(1);
@@ -241,16 +289,10 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
 
     let mut notes = Vec::new();
     if !m.project.platforms.contains(&platform) {
-        notes.push(format!(
-            "platform {platform} is not listed in project.platforms"
-        ));
+        notes.push(msg!("cli.check.platform_not_listed", platform = platform).to_string());
     }
     if target.is_some() {
-        notes.push(
-            "repository availability for the target platform is checked in roadmap P5; \
-             only manifest-level overrides were applied"
-                .into(),
-        );
+        notes.push(tr("cli.check.target_note"));
     }
 
     let mut effective_apt = BTreeMap::new();
@@ -262,12 +304,17 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
     // amd64's dpkg for an arm64 target would just report noise.
     let cross = host.platform.map(|h| h != platform).unwrap_or(true);
     let env_report = if cross {
-        notes.push(format!(
-            "environment probing skipped: target {platform} differs from this host ({})",
-            host.platform
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "unsupported".into())
-        ));
+        notes.push(
+            msg!(
+                "cli.check.probing_skipped",
+                target = platform,
+                host = host
+                    .platform
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| tr("probe.platform.unsupported"))
+            )
+            .to_string(),
+        );
         None
     } else {
         let ctx = Context {
@@ -323,25 +370,58 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
     if global.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
-        println!("manifest    {}", report.manifest);
         println!(
-            "project     {} (ROS {}, provider {})",
-            report.project, report.ros_distro, report.provider
+            "{}",
+            msg!("cli.check.manifest_line", path = report.manifest)
         );
-        println!("platforms   {}", report.platforms.join(", "));
-        println!("build order {}", report.build_order.join(" -> "));
+        println!(
+            "{}",
+            msg!(
+                "cli.check.project_line",
+                name = report.project,
+                distro = report.ros_distro,
+                provider = report.provider
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.check.platforms_line",
+                platforms = report.platforms.join(", ")
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.check.build_order_line",
+                order = report.build_order.join(" -> ")
+            )
+        );
         for (p, pkgs) in &report.effective_apt {
             if !pkgs.is_empty() {
-                println!("apt[{p}]    {}", pkgs.join(" "));
+                println!(
+                    "{}",
+                    msg!(
+                        "cli.check.apt_line",
+                        platform = p,
+                        packages = pkgs.join(" ")
+                    )
+                );
             }
         }
         if !report.pip_recorded.is_empty() {
-            println!("pip (recorded only) {}", report.pip_recorded.join(" "));
+            println!(
+                "{}",
+                msg!(
+                    "cli.check.pip_line",
+                    packages = report.pip_recorded.join(" ")
+                )
+            );
         }
         for n in &report.notes {
-            println!("note        {n}");
+            println!("{}", msg!("cli.check.note_line", text = n));
         }
-        println!("ok          manifest is valid");
+        println!("{}", tr("cli.check.valid_line"));
         if let Some(r) = &env_report {
             println!();
             print_env_report(r, &report.evaluated_platform);
@@ -357,45 +437,48 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
 /// Expected-vs-actual table. Read-only; the hints point at the command that
 /// would change things, nothing is executed here.
 fn print_env_report(r: &EnvReport, platform: &str) {
-    println!("environment ({platform}, expected vs actual)");
-    let width = r
-        .items
+    println!("{}", msg!("cli.check.env_header", platform = platform));
+    let subjects: Vec<String> = r.items.iter().map(|i| i.subject.to_string()).collect();
+    let width = subjects
         .iter()
-        .map(|i| i.subject.len())
+        .map(|s| i18n::display_width(s))
         .max()
         .unwrap_or(0)
         .min(48);
-    for item in &r.items {
+    for (item, subject) in r.items.iter().zip(&subjects) {
         let mark = match item.status {
-            Status::Ok => "  ok      ",
-            Status::Missing => "  MISSING ",
-            Status::Mismatch => "  MISMATCH",
-            Status::Unknown => "  unknown ",
-            Status::Info => "  info    ",
+            Status::Ok => tr("cli.status.ok"),
+            Status::Missing => tr("cli.status.missing"),
+            Status::Mismatch => tr("cli.status.mismatch"),
+            Status::Unknown => tr("cli.status.unknown"),
+            Status::Info => tr("cli.status.info"),
         };
         println!(
-            "{mark} {:<8} {:<width$}  {}  |  {}",
-            item.area, item.subject, item.expected, item.actual
+            "  {} {:<8} {}  {}  |  {}",
+            i18n::pad(&mark, 8),
+            item.area,
+            i18n::pad(subject, width),
+            item.expected,
+            item.actual
         );
     }
     let problems = r.problems();
     let unknown = r.unknown();
     if r.ready() {
-        println!("ready       host matches the manifest");
+        println!("{}", tr("cli.check.ready"));
     } else {
         let mut parts = Vec::new();
-        if problems > 0 {
-            parts.push(format!(
-                "{problems} problem{}",
-                if problems == 1 { "" } else { "s" }
-            ));
+        if problems == 1 {
+            parts.push(tr("cli.check.problems_one"));
+        } else if problems > 1 {
+            parts.push(msg!("cli.check.problems_many", count = problems).to_string());
         }
         if unknown > 0 {
-            parts.push(format!("{unknown} undetermined"));
+            parts.push(msg!("cli.check.undetermined", count = unknown).to_string());
         }
         println!(
-            "not ready   {}; `rospm apply --dry-run` shows what would be installed, `rospm build --dry-run` what would be built",
-            parts.join(", ")
+            "{}",
+            msg!("cli.check.not_ready", summary = parts.join(", "))
         );
     }
 }
@@ -427,10 +510,16 @@ fn requested_mirror(flag: Option<Mirror>) -> Result<Option<Mirror>> {
     }
     match std::env::var("ROSPM_MIRROR") {
         Ok(v) if !v.trim().is_empty() => {
-            let m = v
-                .trim()
-                .parse::<Mirror>()
-                .map_err(|e| anyhow!("ROSPM_MIRROR: {e}"))?;
+            let m = v.trim().parse::<Mirror>().map_err(|_| {
+                anyhow!(
+                    "{}",
+                    msg!(
+                        "cli.apply.bad_mirror_env",
+                        value = v.trim(),
+                        names = mirror::NAMES.join(" | ")
+                    )
+                )
+            })?;
             Ok(Some(m))
         }
         _ => Ok(None),
@@ -450,9 +539,12 @@ pub fn apply(
     let sources = if dry_run || offline {
         let m = requested.unwrap_or(mirror::OFFICIAL);
         println!(
-            "# network: not probed ({}); planning with the {} sources (pass --mirror <name> to plan with a mirror)",
-            if dry_run { "--dry-run" } else { "--offline" },
-            m.name
+            "# {}",
+            msg!(
+                "cli.apply.not_probed",
+                reason = if dry_run { "--dry-run" } else { "--offline" },
+                name = m.name
+            )
         );
         m
     } else {
@@ -467,9 +559,8 @@ pub fn apply(
         Err(Error::CommandFailed { command, status }) if !dry_run && sources.is_official() => {
             // Networks that pass a short probe can still stall on a longer
             // transfer; point at the switch instead of leaving the user to guess.
-            Err(anyhow!(Error::CommandFailed { command, status }).context(
-                "a step failed while using the official sources; `rospm doctor` shows which sources are reachable and `rospm apply --mirror <name>` retries from a mirror",
-            ))
+            Err(anyhow!(Error::CommandFailed { command, status })
+                .context(tr("cli.apply.official_failed_hint")))
         }
         Err(e) => Err(e.into()),
         Ok(()) => Ok(()),
@@ -499,9 +590,12 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
         );
     }
     println!(
-        "network check ({} URLs, {} s timeout each)",
-        endpoints.len(),
-        net::DEFAULT_TIMEOUT.as_secs()
+        "{}",
+        msg!(
+            "cli.apply.network_check",
+            count = endpoints.len(),
+            secs = net::DEFAULT_TIMEOUT.as_secs()
+        )
     );
     let results = net::probe(&endpoints, net::DEFAULT_TIMEOUT);
     print_probe_table(&results);
@@ -511,72 +605,97 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
         .filter(|r| r.endpoint.role == Role::GitHost && !r.ok())
     {
         eprintln!(
-            "warning: {} is not reachable; `vcs import` of the .repos sources will probably fail (rospm has no mirror for git hosts)",
-            r.endpoint.source
+            "{}",
+            msg!("cli.apply.git_host_unreachable", host = r.endpoint.source)
         );
     }
 
     if let Some(mr) = requested {
         return match net::mirror_ok(&results, &mr, codename) {
             Some(true) => {
-                println!("sources     {} ({})", mr.name, mr.label);
+                println!(
+                    "{}",
+                    msg!("cli.apply.sources_line", name = mr.name, label = mr.label)
+                );
                 Ok(mr)
             }
             _ if mr.is_official() => {
-                eprintln!("warning: the official sources did not answer; continuing with them because --mirror official was requested");
+                eprintln!("{}", tr("cli.apply.official_forced"));
                 Ok(mr)
             }
             _ => bail!(
-                "mirror `{}` did not answer on every endpoint it needs; pick another (--mirror {}) or --mirror official",
-                mr.name,
-                mirror::NAMES.join("|")
+                "{}",
+                msg!(
+                    "cli.apply.mirror_unreachable",
+                    name = mr.name,
+                    names = mirror::NAMES.join(" | ")
+                )
             ),
         };
     }
 
     match net::verdict(&results, codename) {
         Verdict::OfficialOk => {
-            println!("sources     official");
+            println!(
+                "{}",
+                msg!(
+                    "cli.apply.sources_line",
+                    name = mirror::OFFICIAL.name,
+                    label = mirror::OFFICIAL.label
+                )
+            );
             Ok(mirror::OFFICIAL)
         }
         Verdict::UseMirror { failed, candidates } => {
-            println!("official sources unreachable:");
+            println!("{}", tr("cli.apply.official_unreachable"));
             for f in &failed {
                 println!("  - {f}");
             }
             let best = candidates[0];
             let names: Vec<&str> = candidates.iter().map(|c| c.name).collect();
             println!(
-                "mirrors that answered (fastest first): {}",
-                names.join(", ")
+                "{}",
+                msg!("cli.apply.mirrors_answered", names = names.join(", "))
             );
             let stdin = std::io::stdin();
             if !stdin.is_terminal() {
                 bail!(
-                    "the official ROS sources are unreachable from this host; re-run with `--mirror {}` (or {}) to install from a mirror, or `--mirror official` to try anyway",
-                    best.name,
-                    names.join(" | ")
+                    "{}",
+                    msg!(
+                        "cli.apply.need_mirror_flag",
+                        best = best.name,
+                        names = names.join(" | ")
+                    )
                 );
             }
             eprint!(
-                "use the {} mirror ({}) for the ROS apt source, ros.key and rosdep? [Y/n] ",
-                best.name, best.label
+                "{}",
+                msg!(
+                    "cli.apply.confirm_mirror",
+                    name = best.name,
+                    label = best.label
+                )
             );
             let mut answer = String::new();
             stdin.read_line(&mut answer)?;
             if matches!(answer.trim(), "" | "y" | "Y" | "yes") {
-                println!("sources     {} ({})", best.name, best.label);
+                println!(
+                    "{}",
+                    msg!(
+                        "cli.apply.sources_line",
+                        name = best.name,
+                        label = best.label
+                    )
+                );
                 Ok(best)
             } else {
-                bail!(
-                    "aborted; re-run with `--mirror official` to try the official sources anyway, or `--mirror <name>` for a specific mirror"
-                )
+                bail!("{}", tr("cli.apply.aborted"))
             }
         }
         Verdict::NothingReachable { failed } => {
             bail!(
-                "neither the official ROS sources nor any known mirror answered ({} URLs failed, see the table above); check the network or proxy settings, or pass `--mirror official` to try anyway",
-                failed.len()
+                "{}",
+                msg!("cli.apply.nothing_reachable", count = failed.len())
             )
         }
     }
@@ -597,14 +716,15 @@ fn repos_urls(loaded: &Loaded) -> Vec<String> {
 
 fn print_probe_table(results: &[ProbeResult]) {
     for r in results {
-        let role = match r.endpoint.role {
-            Role::RosApt => "ROS apt  ",
-            Role::Rosdistro => "rosdistro",
-            Role::GitHost => "git host ",
-        };
+        let role = tr(match r.endpoint.role {
+            Role::RosApt => "cli.apply.role.ros_apt",
+            Role::Rosdistro => "cli.apply.role.rosdistro",
+            Role::GitHost => "cli.apply.role.git_host",
+        });
         println!(
-            "  {:<34} {role} {:<9} {}",
-            r.describe(),
+            "  {} {} {:<9} {}",
+            i18n::pad(&r.describe().to_string(), 34),
+            i18n::pad(&role, 9),
             r.endpoint.source,
             r.endpoint.url
         );
@@ -627,19 +747,19 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
     write!(out, "{}", plan.render())?;
     out.flush()?;
     if plan.action_count() == 0 {
-        println!("nothing to do");
+        println!("{}", tr("cli.uninstall.nothing_to_do"));
         return Ok(());
     }
     if !yes {
         let stdin = std::io::stdin();
         if !stdin.is_terminal() {
-            bail!("refusing to uninstall without confirmation (pass --yes, or run interactively)");
+            bail!("{}", tr("cli.uninstall.needs_confirmation"));
         }
-        eprint!("proceed with the plan above? [y/N] ");
+        eprint!("{}", tr("cli.uninstall.confirm"));
         let mut answer = String::new();
         stdin.read_line(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y" | "yes") {
-            bail!("aborted");
+            bail!("{}", tr("cli.uninstall.aborted"));
         }
     }
     plan.perform(&mut out)?;
@@ -689,8 +809,8 @@ pub fn shell(global: &Global) -> Result<()> {
     std::fs::write(&rc_file, rc)?;
 
     eprintln!(
-        "entering rospm shell for `{}` (exit to leave)",
-        loaded.manifest.project.name
+        "{}",
+        msg!("cli.shell.entering", name = loaded.manifest.project.name)
     );
     let status = std::process::Command::new("bash")
         .arg("--rcfile")
@@ -698,9 +818,9 @@ pub fn shell(global: &Global) -> Result<()> {
         .arg("-i")
         .current_dir(&loaded.root)
         .status()
-        .context("failed to start bash")?;
+        .context(tr("cli.shell.start_failed"))?;
     if !status.success() {
-        bail!("shell exited with {status}");
+        bail!("{}", msg!("cli.shell.exited", status = status));
     }
     Ok(())
 }
@@ -748,7 +868,7 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
         .iter()
         .map(|(tool, purpose)| ToolStatus {
             tool: tool.to_string(),
-            purpose: purpose.to_string(),
+            purpose: tr(purpose),
             found: host.tool(tool).map(|p| p.display().to_string()),
         })
         .collect();
@@ -778,86 +898,143 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
-            "platform      {}",
-            report.platform.as_deref().unwrap_or("unsupported")
+            "{}",
+            msg!(
+                "cli.doctor.platform",
+                value = report
+                    .platform
+                    .clone()
+                    .unwrap_or_else(|| tr("probe.platform.unsupported"))
+            )
         );
         println!(
-            "os            {}",
-            report.os.as_deref().unwrap_or("unknown")
+            "{}",
+            msg!(
+                "cli.doctor.os",
+                value = report
+                    .os
+                    .clone()
+                    .unwrap_or_else(|| tr("cli.doctor.unknown"))
+            )
         );
         println!(
-            "ROS installs  {}",
-            if report.ros_distros_installed.is_empty() {
-                "none found under /opt/ros".to_string()
+            "{}",
+            msg!(
+                "cli.doctor.ros_installs",
+                value = if report.ros_distros_installed.is_empty() {
+                    tr("cli.doctor.no_ros")
+                } else {
+                    report.ros_distros_installed.join(", ")
+                }
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.doctor.ros_apt_source",
+                value = report
+                    .ros_apt_source
+                    .clone()
+                    .unwrap_or_else(|| tr("cli.doctor.source_not_configured"))
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.doctor.universe",
+                value = match report.apt_universe {
+                    Some(true) => tr("probe.universe.enabled"),
+                    Some(false) => tr("cli.doctor.universe_not_enabled"),
+                    None => tr("cli.doctor.unknown"),
+                }
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.doctor.locale",
+                value = if report.locale_utf8 {
+                    "UTF-8".to_string()
+                } else {
+                    tr("cli.doctor.not_utf8")
+                }
+            )
+        );
+        let done_or_not = |done: bool| {
+            if done {
+                tr("cli.doctor.done")
             } else {
-                report.ros_distros_installed.join(", ")
+                tr("cli.doctor.not_run")
             }
-        );
+        };
         println!(
-            "ROS apt src   {}",
-            report
-                .ros_apt_source
-                .as_deref()
-                .unwrap_or("not configured (`rospm apply` adds it)")
-        );
-        println!(
-            "apt universe  {}",
-            match report.apt_universe {
-                Some(true) => "enabled",
-                Some(false) => "not enabled",
-                None => "unknown",
-            }
-        );
-        println!(
-            "locale        {}",
-            if report.locale_utf8 {
-                "UTF-8"
-            } else {
-                "not UTF-8 (ROS needs a UTF-8 locale)"
-            }
-        );
-        println!(
-            "rosdep        init: {}  update: {}",
-            if report.rosdep_initialized {
-                "done"
-            } else {
-                "not run"
-            },
-            if report.rosdep_updated {
-                "done"
-            } else {
-                "not run"
-            }
+            "{}",
+            msg!(
+                "cli.doctor.rosdep",
+                init = done_or_not(report.rosdep_initialized),
+                update = done_or_not(report.rosdep_updated)
+            )
         );
         for t in &report.tools {
             let mark = if t.found.is_some() { "ok " } else { "-- " };
             println!(
-                "{mark} {:<12} {:<45} {}",
+                "{mark} {:<12} {} {}",
                 t.tool,
-                t.purpose,
-                t.found.as_deref().unwrap_or("not found")
+                i18n::pad(&t.purpose, 45),
+                t.found
+                    .clone()
+                    .unwrap_or_else(|| tr("cli.doctor.not_found"))
             );
         }
         if !report.ok {
             println!(
-                "core tools missing: native provider needs {}",
-                NATIVE_CORE_TOOLS.join(", ")
+                "{}",
+                msg!(
+                    "cli.doctor.core_missing",
+                    tools = NATIVE_CORE_TOOLS.join(", ")
+                )
             );
         }
         match &report.network {
             Some(results) => {
                 println!(
-                    "network       official sources and known mirrors ({} s timeout each; `rospm apply --mirror <name>` switches)",
-                    net::DEFAULT_TIMEOUT.as_secs()
+                    "{}",
+                    msg!(
+                        "cli.doctor.network_header",
+                        secs = net::DEFAULT_TIMEOUT.as_secs()
+                    )
                 );
                 print_probe_table(results);
             }
-            None => println!("network       not probed (--no-network)"),
+            None => println!("{}", tr("cli.doctor.network_skipped")),
         }
     }
     if report.ok {
         Ok(())
     } else {
         std::process::exit(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_templates_are_valid_manifests() {
+        for (lang, text) in [("en", TEMPLATE_EN), ("zh-CN", TEMPLATE_ZH_CN)] {
+            let text = text.replace("@NAME@", "demo");
+            let m = Manifest::parse(&text, Path::new("rospm.toml"))
+                .unwrap_or_else(|e| panic!("{lang} template is invalid: {e}"));
+            assert_eq!(m.project.ros_distro, TEMPLATE_DISTRO, "{lang}");
+            assert!(
+                text.contains(TEMPLATE_ROS_BASE_LINE),
+                "{lang} template lost the ros_base line `--base` rewrites"
+            );
+            let with_base = set_template_ros_base(&text, "ros-jazzy-desktop");
+            let m = Manifest::parse(&with_base, Path::new("rospm.toml"))
+                .unwrap_or_else(|e| panic!("{lang} template with --base is invalid: {e}"));
+            assert_eq!(m.ros_base_package(), "ros-jazzy-desktop", "{lang}");
+        }
     }
 }
