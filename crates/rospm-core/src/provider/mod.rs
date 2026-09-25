@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, ProviderKind};
+use crate::mirror::Mirror;
 use crate::plan::Plan;
 use crate::platform::Platform;
 use crate::probe::{EnvReport, Host, Status};
@@ -25,6 +26,8 @@ pub struct Context<'a> {
     /// Facts about this machine, probed once per command. Plans consult it
     /// so they only contain the steps that are actually missing.
     pub host: &'a Host,
+    /// Where the native provider downloads ROS from (decision #17).
+    pub mirror: Mirror,
 }
 
 /// Login shells we can emit `source` lines for. ROS ships `setup.bash`,

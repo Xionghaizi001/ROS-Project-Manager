@@ -28,13 +28,17 @@ rospm --manifest examples/minimal/rospm.toml apply --dry-run      # includes the
 rospm --manifest examples/minimal/rospm.toml uninstall --dry-run  # lists every ros-jazzy-* package it would remove
 rospm --manifest examples/minimal/rospm.toml build --dry-run
 source <(rospm --manifest examples/minimal/rospm.toml env)
-rospm doctor
+rospm --manifest examples/minimal/rospm.toml apply --dry-run --mirror tuna  # plan against a mirror (tuna | ustc | aliyun)
+rospm doctor                            # tools, ROS apt source, and a reachability/speed table of official sources and mirrors
 ```
 
 Commands that modify the system (`apply`, `uninstall`, `build`, `export`, `import`, `deps install`)
 always print their plan first and accept `--dry-run`. `apply` refuses to run on an Ubuntu
 release other than the one the manifest names; `uninstall` additionally asks for confirmation
-(or `--yes`).
+(or `--yes`). Before downloading anything, `apply` probes the official ROS sources and the built-in
+mirrors; if the official ones fail it asks (on a terminal) whether to switch to the fastest mirror, or tells
+you which `--mirror <name>` (or `ROSPM_MIRROR=<name>`) to pass. The apt signing key is verified against
+the built-in fingerprint whichever source it comes from. See `docs/spec.md` §4.1.1.
 
 ## Layout
 

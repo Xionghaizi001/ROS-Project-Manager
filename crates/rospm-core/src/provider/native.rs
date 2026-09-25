@@ -15,7 +15,7 @@ use crate::plan::{shell_quote, Command, Plan};
 use crate::platform::ubuntu_codename;
 use crate::probe::{
     self, EnvReport, Status, NATIVE_CORE_TOOLS, ROSDEP_DEFAULT_LIST, ROS_APT_KEYRING, ROS_APT_LIST,
-    ROS_APT_NEEDLE, ROS_APT_URL, ROS_KEY_URL,
+    ROS_APT_NEEDLE, ROS_KEY_FINGERPRINT,
 };
 use crate::provider::{Context, Provider, Shell};
 use crate::repos::{same_git_url, ReposFile};
@@ -106,10 +106,26 @@ impl Provider for Native {
         }
 
         // 1. Bootstrap the ROS apt source (official install guide, minus the
-        // steps this host already satisfies).
+        // steps this host already satisfies). URLs come from the chosen
+        // source set (decision #17); the key is verified either way.
+        let mirror = ctx.mirror;
+        if !mirror.is_official() {
+            plan.note(format!(
+                "sources: {} mirror ({}); the apt signing key is still verified against the built-in fingerprint",
+                mirror.name, mirror.label
+            ));
+        }
         let need_locale = !host.locale_utf8;
         let need_universe = host.apt_sources.universe != Some(true);
-        let need_source = host.apt_sources.ros2.is_none();
+        // Rewrite rospm's own source file when a different source set was
+        // chosen; a file written by something else (ros2-apt-source) is left alone.
+        let rewrite_source = host
+            .apt_sources
+            .ros2
+            .as_deref()
+            .is_some_and(|f| f == Path::new(ROS_APT_LIST))
+            && host.apt_sources.ros2_mirror != Some(mirror.name);
+        let need_source = host.apt_sources.ros2.is_none() || rewrite_source;
         plan.run(Command::new("apt-get").arg("update").sudo());
         if need_locale || need_universe || need_source {
             let mut prereqs: Vec<&str> = Vec::new();
@@ -120,7 +136,8 @@ impl Provider for Native {
                 prereqs.push("software-properties-common");
             }
             if need_source {
-                prereqs.extend(["curl", "ca-certificates"]);
+                // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
+                prereqs.extend(["curl", "ca-certificates", "gnupg"]);
             }
             plan.run(
                 Command::new("apt-get")
@@ -153,24 +170,37 @@ impl Provider for Native {
             );
         }
         if need_source {
-            plan.run(
-                Command::new("curl")
-                    .args(["-sSL", ROS_KEY_URL, "-o", ROS_APT_KEYRING])
-                    .sudo(),
-            );
+            if rewrite_source {
+                plan.note(format!(
+                    "{ROS_APT_LIST} currently points at the {} sources; rewriting it for {}",
+                    host.apt_sources.ros2_mirror.unwrap_or("unknown"),
+                    mirror.name
+                ));
+            }
+            plan.fetch_key(mirror.ros_key_url(), ROS_APT_KEYRING, ROS_KEY_FINGERPRINT);
             plan.write_file_sudo(
                 ROS_APT_LIST,
                 format!(
-                    "deb [arch={} signed-by={ROS_APT_KEYRING}] {ROS_APT_URL} {codename} main\n",
-                    ctx.platform.dpkg_arch()
+                    "deb [arch={} signed-by={ROS_APT_KEYRING}] {} {codename} main\n",
+                    ctx.platform.dpkg_arch(),
+                    mirror.ros_apt
                 ),
             );
             plan.run(Command::new("apt-get").arg("update").sudo());
         } else if let Some(file) = &host.apt_sources.ros2 {
             plan.note(format!(
-                "ROS apt source already configured in {}",
-                file.display()
+                "ROS apt source already configured in {} ({})",
+                file.display(),
+                host.apt_sources.ros2_mirror.unwrap_or("unknown source")
             ));
+            if host.apt_sources.ros2_mirror != Some(mirror.name) {
+                plan.note(format!(
+                    "--mirror {} not applied to the apt source: {} was not written by rospm; \
+                     edit it by hand if it should use another server",
+                    mirror.name,
+                    file.display()
+                ));
+            }
         }
 
         // 2. ROS base + tooling.
@@ -204,15 +234,28 @@ impl Provider for Native {
 
         // 4. rosdep, per workspace, in overlay order.
         if m.dependencies.rosdep.enabled {
-            if !host.rosdep.initialized {
+            if mirror.mirrors_rosdistro() {
+                // `rosdep init` would write GitHub URLs; write the same file
+                // with the mirror's instead (and overwrite a GitHub one, which
+                // is what fails when the mirror is needed).
+                if host.rosdep.initialized {
+                    plan.note(format!(
+                        "{ROSDEP_DEFAULT_LIST} exists; rewriting it for the {} mirror",
+                        mirror.name
+                    ));
+                }
+                plan.write_file_sudo(ROSDEP_DEFAULT_LIST, mirror.rosdep_sources_list());
+            } else if !host.rosdep.initialized {
                 plan.run(Command::new("rosdep").arg("init").sudo());
             }
-            plan.run(
-                Command::new("rosdep")
-                    .arg("update")
-                    .arg("--rosdistro")
-                    .arg(distro.as_str()),
-            );
+            let mut update = Command::new("rosdep")
+                .arg("update")
+                .arg("--rosdistro")
+                .arg(distro.as_str());
+            if mirror.mirrors_rosdistro() {
+                update = update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url());
+            }
+            plan.run(update);
             for name in &order {
                 let ws = &m.workspaces[name];
                 let ws_path = ctx.root.join(&ws.path);
@@ -491,13 +534,26 @@ impl Provider for Native {
         };
         r.push("apt", "universe component", "enabled", actual, s);
         let (s, actual) = match &host.apt_sources.ros2 {
-            Some(file) => (Status::Ok, file.display().to_string()),
+            Some(file) => (
+                Status::Ok,
+                format!(
+                    "{} ({})",
+                    file.display(),
+                    host.apt_sources.ros2_mirror.unwrap_or("unknown source")
+                ),
+            ),
             None => (
                 Status::Missing,
                 format!("not configured (`rospm apply` writes {ROS_APT_LIST})"),
             ),
         };
-        r.push("apt", "ROS apt source", ROS_APT_NEEDLE, actual, s);
+        r.push(
+            "apt",
+            "ROS apt source",
+            format!("{ROS_APT_NEEDLE} or a known mirror"),
+            actual,
+            s,
+        );
 
         // Tools apply/build shell out to.
         for tool in NATIVE_CORE_TOOLS.iter().chain(["apt-get"].iter()) {
@@ -515,6 +571,29 @@ impl Provider for Native {
                     "present",
                     "not found in PATH",
                     Status::Missing,
+                ),
+            }
+        }
+
+        // `colcon mixin` is only needed (and only probed) when a workspace names mixins.
+        let uses_mixins = m.workspaces.values().any(|ws| !ws.colcon.mixins.is_empty());
+        if uses_mixins {
+            match host.colcon_mixin_available() {
+                Some(true) => r.push("tool", "colcon mixin", "present", "present", Status::Ok),
+                Some(false) => r.push(
+                    "tool",
+                    "colcon mixin",
+                    "present",
+                    "not available (`sudo apt-get install python3-colcon-mixin`, then \
+                     `colcon mixin add default <index url>` and `colcon mixin update`)",
+                    Status::Missing,
+                ),
+                None => r.push(
+                    "tool",
+                    "colcon mixin",
+                    "present",
+                    "unknown (colcon not found)",
+                    Status::Unknown,
                 ),
             }
         }

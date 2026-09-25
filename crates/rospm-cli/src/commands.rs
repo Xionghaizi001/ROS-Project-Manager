@@ -10,9 +10,12 @@ use serde::Serialize;
 
 use rospm_core::introspect::{self, HostFacts};
 use rospm_core::manifest::{Manifest, RosFlavor, MANIFEST_FILE};
-use rospm_core::platform::{Platform, RosDistro};
+use rospm_core::mirror::{self, Mirror};
+use rospm_core::net::{self, ProbeResult, Role, Verdict};
+use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
 use rospm_core::probe::{EnvReport, Host, Status, NATIVE_CORE_TOOLS, TOOLS};
 use rospm_core::provider::{self, Context, Shell};
+use rospm_core::repos::ReposFile;
 use rospm_core::Error;
 
 pub struct Global {
@@ -42,13 +45,15 @@ fn locate(global: &Global) -> Result<PathBuf> {
 fn load(global: &Global) -> Result<Loaded> {
     let path = locate(global)?;
     let manifest = Manifest::load(&path)?;
+    // `--manifest rospm.toml` (no directory part) has an empty parent.
     let root = path
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let root = root
         .canonicalize()
-        .with_context(|| format!("cannot resolve {}", root.display()))?;
+        .with_context(|| format!("cannot resolve project directory {}", root.display()))?;
     Ok(Loaded {
         path,
         root,
@@ -272,6 +277,7 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
             locked: false,
             offline: false,
             host: &host,
+            mirror: mirror::OFFICIAL,
         };
         Some(provider::for_manifest(m).probe_env(&ctx)?)
     };
@@ -401,6 +407,7 @@ fn context<'a>(
     host: &'a Host,
     locked: bool,
     offline: bool,
+    mirror: Mirror,
 ) -> Result<Context<'a>> {
     Ok(Context {
         manifest: &loaded.manifest,
@@ -409,18 +416,199 @@ fn context<'a>(
         locked,
         offline,
         host,
+        mirror,
     })
 }
 
-pub fn apply(global: &Global, locked: bool, offline: bool, dry_run: bool) -> Result<()> {
+/// `--mirror` beats `ROSPM_MIRROR`; neither means "probe and decide".
+fn requested_mirror(flag: Option<Mirror>) -> Result<Option<Mirror>> {
+    if flag.is_some() {
+        return Ok(flag);
+    }
+    match std::env::var("ROSPM_MIRROR") {
+        Ok(v) if !v.trim().is_empty() => {
+            let m = v
+                .trim()
+                .parse::<Mirror>()
+                .map_err(|e| anyhow!("ROSPM_MIRROR: {e}"))?;
+            Ok(Some(m))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub fn apply(
+    global: &Global,
+    locked: bool,
+    offline: bool,
+    dry_run: bool,
+    mirror: Option<Mirror>,
+) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, locked, offline)?;
+    let requested = requested_mirror(mirror)?;
+    let sources = if dry_run || offline {
+        let m = requested.unwrap_or(mirror::OFFICIAL);
+        println!(
+            "# network: not probed ({}); planning with the {} sources (pass --mirror <name> to plan with a mirror)",
+            if dry_run { "--dry-run" } else { "--offline" },
+            m.name
+        );
+        m
+    } else {
+        select_sources(&loaded, requested)?
+    };
+    let ctx = context(&loaded, &host, locked, offline, sources)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
     let mut out = std::io::stdout().lock();
-    plan.execute(dry_run, &mut out)?;
+    let result = plan.execute(dry_run, &mut out);
     out.flush()?;
-    Ok(())
+    match result {
+        Err(Error::CommandFailed { command, status }) if !dry_run && sources.is_official() => {
+            // Networks that pass a short probe can still stall on a longer
+            // transfer; point at the switch instead of leaving the user to guess.
+            Err(anyhow!(Error::CommandFailed { command, status }).context(
+                "a step failed while using the official sources; `rospm doctor` shows which sources are reachable and `rospm apply --mirror <name>` retries from a mirror",
+            ))
+        }
+        Err(e) => Err(e.into()),
+        Ok(()) => Ok(()),
+    }
+}
+
+/// Probe the sources `apply` is about to download from and pick one
+/// (decision #17). Never switches silently: a mirror is used only when the
+/// user passed `--mirror` / `ROSPM_MIRROR` or confirmed the prompt.
+fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> {
+    let m = &loaded.manifest;
+    let ubuntu = m.ubuntu();
+    let Some(codename) = ubuntu_codename(&ubuntu) else {
+        // plan_apply reports the unsupported Ubuntu release with a proper message.
+        return Ok(requested.unwrap_or(mirror::OFFICIAL));
+    };
+    let git_urls = repos_urls(loaded);
+    let mut endpoints = match requested {
+        Some(mr) => net::endpoints_for(&mr, codename),
+        None => net::all_endpoints(codename, &git_urls),
+    };
+    if requested.is_some() {
+        endpoints.extend(
+            net::all_endpoints(codename, &git_urls)
+                .into_iter()
+                .filter(|e| e.role == Role::GitHost),
+        );
+    }
+    println!(
+        "network check ({} URLs, {} s timeout each)",
+        endpoints.len(),
+        net::DEFAULT_TIMEOUT.as_secs()
+    );
+    let results = net::probe(&endpoints, net::DEFAULT_TIMEOUT);
+    print_probe_table(&results);
+
+    for r in results
+        .iter()
+        .filter(|r| r.endpoint.role == Role::GitHost && !r.ok())
+    {
+        eprintln!(
+            "warning: {} is not reachable; `vcs import` of the .repos sources will probably fail (rospm has no mirror for git hosts)",
+            r.endpoint.source
+        );
+    }
+
+    if let Some(mr) = requested {
+        return match net::mirror_ok(&results, &mr, codename) {
+            Some(true) => {
+                println!("sources     {} ({})", mr.name, mr.label);
+                Ok(mr)
+            }
+            _ if mr.is_official() => {
+                eprintln!("warning: the official sources did not answer; continuing with them because --mirror official was requested");
+                Ok(mr)
+            }
+            _ => bail!(
+                "mirror `{}` did not answer on every endpoint it needs; pick another (--mirror {}) or --mirror official",
+                mr.name,
+                mirror::NAMES.join("|")
+            ),
+        };
+    }
+
+    match net::verdict(&results, codename) {
+        Verdict::OfficialOk => {
+            println!("sources     official");
+            Ok(mirror::OFFICIAL)
+        }
+        Verdict::UseMirror { failed, candidates } => {
+            println!("official sources unreachable:");
+            for f in &failed {
+                println!("  - {f}");
+            }
+            let best = candidates[0];
+            let names: Vec<&str> = candidates.iter().map(|c| c.name).collect();
+            println!(
+                "mirrors that answered (fastest first): {}",
+                names.join(", ")
+            );
+            let stdin = std::io::stdin();
+            if !stdin.is_terminal() {
+                bail!(
+                    "the official ROS sources are unreachable from this host; re-run with `--mirror {}` (or {}) to install from a mirror, or `--mirror official` to try anyway",
+                    best.name,
+                    names.join(" | ")
+                );
+            }
+            eprint!(
+                "use the {} mirror ({}) for the ROS apt source, ros.key and rosdep? [Y/n] ",
+                best.name, best.label
+            );
+            let mut answer = String::new();
+            stdin.read_line(&mut answer)?;
+            if matches!(answer.trim(), "" | "y" | "Y" | "yes") {
+                println!("sources     {} ({})", best.name, best.label);
+                Ok(best)
+            } else {
+                bail!(
+                    "aborted; re-run with `--mirror official` to try the official sources anyway, or `--mirror <name>` for a specific mirror"
+                )
+            }
+        }
+        Verdict::NothingReachable { failed } => {
+            bail!(
+                "neither the official ROS sources nor any known mirror answered ({} URLs failed, see the table above); check the network or proxy settings, or pass `--mirror official` to try anyway",
+                failed.len()
+            )
+        }
+    }
+}
+
+/// Git URLs from every `.repos` file the manifest names (best effort).
+fn repos_urls(loaded: &Loaded) -> Vec<String> {
+    let mut urls = Vec::new();
+    for ws in loaded.manifest.workspaces.values() {
+        if let Some(sources) = &ws.sources {
+            if let Ok(repos) = ReposFile::load(&loaded.root.join(sources)) {
+                urls.extend(repos.repositories.values().map(|r| r.url.clone()));
+            }
+        }
+    }
+    urls
+}
+
+fn print_probe_table(results: &[ProbeResult]) {
+    for r in results {
+        let role = match r.endpoint.role {
+            Role::RosApt => "ROS apt  ",
+            Role::Rosdistro => "rosdistro",
+            Role::GitHost => "git host ",
+        };
+        println!(
+            "  {:<34} {role} {:<9} {}",
+            r.describe(),
+            r.endpoint.source,
+            r.endpoint.url
+        );
+    }
 }
 
 /// Removes packages, so unlike `apply` it asks first: `--yes` skips the
@@ -428,7 +616,7 @@ pub fn apply(global: &Global, locked: bool, offline: bool, dry_run: bool) -> Res
 pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false)?;
+    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_uninstall(&ctx, keep_source)?;
     let mut out = std::io::stdout().lock();
     if dry_run {
@@ -462,7 +650,7 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
 pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false)?;
+    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace)?;
     let mut out = std::io::stdout().lock();
     plan.execute(dry_run, &mut out)?;
@@ -473,7 +661,7 @@ pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<
 pub fn env(global: &Global, shell: Shell) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false)?;
+    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, shell)?;
     print!("{script}");
     Ok(())
@@ -482,7 +670,7 @@ pub fn env(global: &Global, shell: Shell) -> Result<()> {
 pub fn shell(global: &Global) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false)?;
+    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
 
     let env_dir = loaded.root.join(".rospm");
@@ -539,10 +727,23 @@ struct DoctorReport {
     rosdep_initialized: bool,
     rosdep_updated: bool,
     tools: Vec<ToolStatus>,
+    /// Reachability of the official sources and known mirrors (`None` with `--no-network`).
+    network: Option<Vec<ProbeResult>>,
 }
 
-pub fn doctor(global: &Global) -> Result<()> {
+pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
     let host = Host::probe();
+    let network = if no_network {
+        None
+    } else {
+        let codename = host
+            .os
+            .as_ref()
+            .and_then(|os| os.codename.clone())
+            .unwrap_or_else(|| "jammy".into());
+        let endpoints = net::all_endpoints(&codename, &[]);
+        Some(net::probe(&endpoints, net::DEFAULT_TIMEOUT))
+    };
     let tools: Vec<ToolStatus> = TOOLS
         .iter()
         .map(|(tool, purpose)| ToolStatus {
@@ -570,6 +771,7 @@ pub fn doctor(global: &Global) -> Result<()> {
         rosdep_initialized: host.rosdep.initialized,
         rosdep_updated: host.rosdep.updated,
         tools,
+        network,
     };
 
     if global.json {
@@ -641,6 +843,16 @@ pub fn doctor(global: &Global) -> Result<()> {
                 "core tools missing: native provider needs {}",
                 NATIVE_CORE_TOOLS.join(", ")
             );
+        }
+        match &report.network {
+            Some(results) => {
+                println!(
+                    "network       official sources and known mirrors ({} s timeout each; `rospm apply --mirror <name>` switches)",
+                    net::DEFAULT_TIMEOUT.as_secs()
+                );
+                print_probe_table(results);
+            }
+            None => println!("network       not probed (--no-network)"),
         }
     }
     if report.ok {

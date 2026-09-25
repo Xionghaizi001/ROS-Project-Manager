@@ -32,8 +32,8 @@ pub const NATIVE_CORE_TOOLS: &[&str] = &["git", "vcs", "colcon", "rosdep"];
 /// rosdep's default sources list, written by `sudo rosdep init`.
 pub const ROSDEP_DEFAULT_LIST: &str = "/etc/ros/rosdep/sources.list.d/20-default.list";
 
-/// The ROS 2 apt repository (live; snapshots arrive in P2).
-pub const ROS_APT_URL: &str = "http://packages.ros.org/ros2/ubuntu";
+/// The official ROS 2 apt repository (live; snapshots arrive in P2; mirrors in [`crate::mirror`]).
+pub const ROS_APT_URL: &str = crate::mirror::OFFICIAL_ROS_APT;
 /// Substring that identifies the ROS 2 repository in any apt source file,
 /// whatever its form (`ros2.list` written by hand or by rospm, `ros2.sources`
 /// written by the `ros2-apt-source` package).
@@ -43,7 +43,12 @@ pub const ROS_APT_KEYRING: &str = "/usr/share/keyrings/ros-archive-keyring.gpg";
 /// Where rospm writes the source entry (same path as the official guide).
 pub const ROS_APT_LIST: &str = "/etc/apt/sources.list.d/ros2.list";
 /// Signing key for `packages.ros.org` (dearmored; the snapshot key differs, see P2).
+/// Mirrors serve the same file under `<rosdistro>/ros.key` ([`crate::mirror::Mirror::ros_key_url`]).
 pub const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";
+/// Full fingerprint of the Open Robotics signing key (`info@osrfoundation.org`,
+/// RSA 4096, created 2019-05-30, valid until 2030-06-01). `apply` refuses a
+/// downloaded `ros.key` whose fingerprint differs.
+pub const ROS_KEY_FINGERPRINT: &str = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct OsRelease {
@@ -108,8 +113,11 @@ impl RosdepState {
 /// What apt is configured to pull from, as far as ROS needs to know.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct AptSources {
-    /// First source file that references `packages.ros.org/ros2`, if any.
+    /// First source file that references a ROS 2 apt repository (official or
+    /// a known mirror, see [`crate::mirror`]), if any.
     pub ros2: Option<PathBuf>,
+    /// Name of the source set that file points at (`official`, `tuna`, …).
+    pub ros2_mirror: Option<&'static str>,
     /// The signing key at [`ROS_APT_KEYRING`] exists.
     pub keyring: bool,
     /// `universe` is enabled in some source. `None` when no source file
@@ -141,6 +149,7 @@ impl AptSources {
         }
         let mut out = AptSources {
             ros2: None,
+            ros2_mirror: None,
             keyring: keyring.is_file(),
             universe: None,
         };
@@ -151,8 +160,11 @@ impl AptSources {
             if out.universe.is_none() {
                 out.universe = Some(false);
             }
-            if out.ros2.is_none() && source_text_mentions(&text, ROS_APT_NEEDLE) {
-                out.ros2 = Some(file.clone());
+            if out.ros2.is_none() {
+                if let Some(m) = crate::mirror::mirror_for_apt_source(&text) {
+                    out.ros2 = Some(file.clone());
+                    out.ros2_mirror = Some(m.name);
+                }
             }
             if source_text_enables_universe(&text) {
                 out.universe = Some(true);
@@ -412,6 +424,23 @@ impl Host {
 
     pub fn has_ros_distro(&self, distro: &str) -> bool {
         self.ros_distros.iter().any(|d| d == distro)
+    }
+
+    /// Whether `colcon mixin` works. The `mixin` verb is a separate package
+    /// (`python3-colcon-mixin`) that `python3-colcon-common-extensions` from
+    /// the ROS apt repository does not pull in, so a manifest that names
+    /// mixins fails at `colcon build --mixin …` unless it is installed.
+    /// `None` when colcon itself is missing.
+    pub fn colcon_mixin_available(&self) -> Option<bool> {
+        let colcon = self.tool("colcon")?;
+        let status = process::Command::new(colcon)
+            .args(["mixin", "show"])
+            .stdin(process::Stdio::null())
+            .stdout(process::Stdio::null())
+            .stderr(process::Stdio::null())
+            .status()
+            .ok()?;
+        Some(status.success())
     }
 
     /// `git -C <dir> remote get-url origin`, if git is available and `dir` is a checkout.

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use rospm_core::manifest::Manifest;
+use rospm_core::mirror;
 use rospm_core::plan::{shell_quote, Command, Step};
 use rospm_core::platform::Platform;
 use rospm_core::probe::{
@@ -24,6 +25,7 @@ fn ready_host() -> Host {
     h.locale_utf8 = true;
     h.apt_sources = AptSources {
         ros2: Some(PathBuf::from(ROS_APT_LIST)),
+        ros2_mirror: Some("official"),
         keyring: true,
         universe: Some(true),
     };
@@ -39,6 +41,7 @@ fn ctx<'a>(m: &'a Manifest, host: &'a Host) -> Context<'a> {
         locked: false,
         offline: false,
         host,
+        mirror: mirror::OFFICIAL,
     }
 }
 
@@ -107,11 +110,12 @@ fn native_apply_bootstraps_the_ros_apt_source_on_a_bare_host() {
             .find(needle)
             .unwrap_or_else(|| panic!("missing `{needle}` in:\n{rendered}"))
     };
-    let prereqs =
-        pos("sudo apt-get install -y locales software-properties-common curl ca-certificates");
+    let prereqs = pos(
+        "sudo apt-get install -y locales software-properties-common curl ca-certificates gnupg",
+    );
     let locale = pos("sudo locale-gen en_US en_US.UTF-8");
     let universe = pos("sudo add-apt-repository -y universe");
-    let key = pos(&format!("-o {ROS_APT_KEYRING}"));
+    let key = pos(&format!("fetch https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -> {ROS_APT_KEYRING} (sudo), verify fingerprint C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"));
     let list = pos(&format!("write {ROS_APT_LIST} (sudo)"));
     let entry = pos(&format!(
         "| deb [arch=amd64 signed-by={ROS_APT_KEYRING}] http://packages.ros.org/ros2/ubuntu noble main"
@@ -143,6 +147,7 @@ fn native_apply_skips_bootstrap_when_the_host_is_ready() {
         "locale-gen",
         "add-apt-repository",
         "curl",
+        "fetch ",
         "write /etc/apt",
         "rosdep init",
     ] {
@@ -303,4 +308,59 @@ fn pixi_and_docker_providers_report_their_phase() {
         .plan_uninstall(&ctx(&m, &host), false)
         .unwrap_err();
     assert!(err.to_string().contains("P3"), "{err}");
+}
+
+#[test]
+fn native_apply_with_a_mirror_rewrites_every_download_url() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = bare_host();
+    host.rosdep.initialized = true; // an existing GitHub list gets rewritten
+    let mut c = ctx(&m, &host);
+    c.mirror = mirror::TUNA;
+    let plan = provider::for_manifest(&m).plan_apply(&c).unwrap();
+    let rendered = plan.render();
+    for needle in [
+        "fetch https://mirrors.tuna.tsinghua.edu.cn/rosdistro/ros.key",
+        "verify fingerprint C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654",
+        "https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu noble main",
+        "write /etc/ros/rosdep/sources.list.d/20-default.list (sudo)",
+        "yaml https://mirrors.tuna.tsinghua.edu.cn/rosdistro/rosdep/base.yaml",
+        "ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-v4.yaml rosdep update",
+        "rewriting it for the tuna mirror",
+    ] {
+        assert!(rendered.contains(needle), "missing `{needle}` in:\n{rendered}");
+    }
+    assert!(!rendered.contains("githubusercontent"), "{rendered}");
+    assert!(!rendered.contains("packages.ros.org"), "{rendered}");
+    assert!(!rendered.contains("rosdep init"), "{rendered}");
+
+    // An apt-only mirror keeps rosdep on the official tree.
+    c.mirror = mirror::ALIYUN;
+    let rendered = provider::for_manifest(&m).plan_apply(&c).unwrap().render();
+    assert!(rendered.contains("https://mirrors.aliyun.com/ros2/ubuntu noble main"));
+    assert!(
+        rendered.contains("fetch https://raw.githubusercontent.com/ros/rosdistro/master/ros.key")
+    );
+    assert!(!rendered.contains("20-default.list"), "{rendered}");
+    assert!(!rendered.contains("ROSDISTRO_INDEX_URL"), "{rendered}");
+}
+
+#[test]
+fn native_apply_rewrites_its_own_apt_source_for_a_new_mirror_but_not_foreign_files() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = ready_host(); // ros2.list written by rospm, official
+    let mut c = ctx(&m, &host);
+    c.mirror = mirror::USTC;
+    let rendered = provider::for_manifest(&m).plan_apply(&c).unwrap().render();
+    assert!(rendered.contains("currently points at the official sources; rewriting it for ustc"));
+    assert!(rendered.contains("https://mirrors.ustc.edu.cn/ros2/ubuntu noble main"));
+
+    host.apt_sources.ros2 = Some(PathBuf::from("/etc/apt/sources.list.d/ros2.sources"));
+    let c2 = Context {
+        mirror: mirror::USTC,
+        ..ctx(&m, &host)
+    };
+    let rendered = provider::for_manifest(&m).plan_apply(&c2).unwrap().render();
+    assert!(rendered.contains("was not written by rospm"), "{rendered}");
+    assert!(!rendered.contains("write /etc/apt"), "{rendered}");
 }

@@ -58,7 +58,7 @@ pub enum Error {
     #[error("this host does not satisfy the manifest: {0}")]
     Host(String),
 
-    #[error("command failed: {command} (exit status {status})")]
+    #[error("command failed: {command} ({status})")]
     CommandFailed { command: String, status: String },
 }
 

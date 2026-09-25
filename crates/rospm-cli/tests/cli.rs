@@ -243,3 +243,86 @@ fn check_on_the_bundled_example_stays_green_without_ros() {
     assert_eq!(v["ok"], true);
     assert_eq!(v["environment"]["probed"], true);
 }
+
+#[test]
+fn apply_dry_run_plans_with_a_mirror_without_probing_the_network() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/minimal/rospm.toml");
+    let manifest = example.to_string_lossy().into_owned();
+
+    // Default: official sources, no probe (dry-run must stay offline-safe).
+    let out = rospm()
+        .args(["--manifest", &manifest, "apply", "--dry-run"])
+        .env_remove("ROSPM_MIRROR")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        // Host on another Ubuntu release: plan_apply refuses before anything else.
+        assert!(
+            stderr.contains("rospm does not install or upgrade Ubuntu"),
+            "{stderr}"
+        );
+        return;
+    }
+    assert!(
+        stdout.contains("# network: not probed (--dry-run)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("network check ("), "{stdout}");
+
+    // Explicit mirror via flag and via ROSPM_MIRROR.
+    let cases: [(&[&str], Option<&str>); 2] = [
+        (&["apply", "--dry-run", "--mirror", "tuna"], None),
+        (&["apply", "--dry-run"], Some("tuna")),
+    ];
+    for (args, env) in cases {
+        let mut cmd = rospm();
+        cmd.args(["--manifest", &manifest]).args(args);
+        match env {
+            Some(v) => cmd.env("ROSPM_MIRROR", v),
+            None => cmd.env_remove("ROSPM_MIRROR"),
+        };
+        let out = cmd.output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            stdout.contains("planning with the tuna sources"),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains("https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu noble main"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("verify fingerprint C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"));
+        assert!(stdout.contains(
+            "ROSDISTRO_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/rosdistro/index-v4.yaml"
+        ));
+        assert!(stdout.contains("dry-run: nothing executed"), "{stdout}");
+    }
+
+    // Unknown names are rejected up front.
+    let out = rospm()
+        .args([
+            "--manifest",
+            &manifest,
+            "apply",
+            "--dry-run",
+            "--mirror",
+            "sjtu",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let out = rospm()
+        .args(["--manifest", &manifest, "apply", "--dry-run"])
+        .env("ROSPM_MIRROR", "sjtu")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("ROSPM_MIRROR"));
+}

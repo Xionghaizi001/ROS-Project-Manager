@@ -203,7 +203,7 @@ version = "1.26.4"
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；默认只报告（退出码 0），`--strict` 在主机未就绪时退出 1；`--target` 与主机不同则跳过探测，P5 起查目标架构包可用性 | — |
 | `lock [--platform <p>]` | 写项目文件 / 幂等 | 生成 `rospm.lock`；同一输入产生同一输出 | — |
 | `verify` | 只读 | 对比锁文件与当前环境，报告漂移；清单哈希不一致则提示重新 `lock` | — |
-| `apply [--locked] [--offline]` | 修改系统 | 按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 切换快照源 | 必须 |
+| `apply [--locked] [--offline] [--mirror <name>]` | 修改系统 | 先测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 切换快照源；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |
@@ -212,7 +212,7 @@ version = "1.26.4"
 | `export [--target <p>] [-o <path>]` | 产出产物 | 生成离线包，见 §5 | 必须 |
 | `import <bundle>` | 修改系统 | 校验并解包，然后等价于 `apply --locked --offline` | 必须 |
 | `editor [vscode\|clion\|devcontainer]` | 写项目文件 / 幂等 | 生成编辑器配置 | — |
-| `doctor` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用 | — |
+| `doctor [--no-network]` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用；ROS apt 源 / `universe` / locale 状态；官方源与各镜像的测速表（§4.1.1） | — |
 
 全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`（P1.5 起，见 §4.2）。
 
@@ -223,15 +223,36 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 | 步骤 | 命令 | 跳过条件（由 `check` 同一探测决定） |
 |---|---|---|
 | 0 | 校验主机 | `/etc/os-release` 的 Ubuntu 版本 ≠ `environment.native.ubuntu` → 报错退出；不可读 → 告警后按清单假定 |
-| 1 | `apt-get update`；安装前置包 `locales` / `software-properties-common` / `curl ca-certificates` | 只安装下面步骤实际需要的 |
+| 1 | `apt-get update`；安装前置包 `locales` / `software-properties-common` / `curl ca-certificates gnupg` | 只安装下面步骤实际需要的 |
 | 2 | `locale-gen en_US en_US.UTF-8` + `update-locale` | `LC_ALL` / `LC_CTYPE` / `LANG` 已是 UTF-8 |
 | 3 | `add-apt-repository -y universe` | 任一 apt 源文件（一行式或 deb822）已启用 `universe` |
-| 4 | 下载 `ros.key` 到 `/usr/share/keyrings/ros-archive-keyring.gpg`；写 `/etc/apt/sources.list.d/ros2.list`（`deb [arch=<dpkg arch> signed-by=…] http://packages.ros.org/ros2/ubuntu <codename> main`）；`apt-get update` | 任一 apt 源文件已引用 `packages.ros.org/ros2`（含 `ros2-apt-source` 包写的 `ros2.sources`） |
+| 4 | 下载 `ros.key`（`curl -f`，连接 15s / 单次 60s 超时，瞬时错误重试 2 次）到临时文件，用 `gpg --show-keys` 核对完整指纹 `C1CF 6E31 E6BA DE88 68B1 72B4 F42E D6FB AB17 C654`（Open Robotics，有效期至 2030-06-01），一致才 `sudo install` 到 `/usr/share/keyrings/ros-archive-keyring.gpg`；写 `/etc/apt/sources.list.d/ros2.list`（`deb [arch=<dpkg arch> signed-by=…] http://packages.ros.org/ros2/ubuntu <codename> main`）；`apt-get update` | 任一 apt 源文件已引用 `packages.ros.org/ros2`（含 `ros2-apt-source` 包写的 `ros2.sources`） |
 | 5 | `apt-get install -y <ros_base> python3-rosdep python3-vcstool python3-colcon-common-extensions` | 无（apt 自身幂等） |
 
 - rospm 自己写 keyring + `sources.list.d`，而不是安装 `ros2-apt-source` 包：P2 `apply --locked` 要把同一文件指向 `snapshots.ros.org` 并以 `signed-by=` 引用快照密钥，两者共用一套源文件管理代码（决策 #14）。
 - `--dry-run` 会完整打印将写入的源文件内容。
+- 密钥指纹内置于二进制（`probe::ROS_KEY_FINGERPRINT`）。指纹不符或下载失败（404、超时）时 `apply` 报错退出，不写 keyring；不能因为网络停滞无限等待（P1 实测中 `curl` 曾在 HTTP/2 连接上挂起 2 分钟以上）。
+- `[workspaces.<name>.colcon].mixins` 依赖 `python3-colcon-mixin`，该包不在 `python3-colcon-common-extensions` 的依赖里，且 mixin 仓库需要用户自行 `colcon mixin add/update`（决策 #8）。清单声明了 mixins 时，`check` 额外探测 `colcon mixin` 是否可用。
 - 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动（§7）。
+
+#### 4.1.1 源镜像与网络探测（决策 #17）
+
+内置源集（`rospm-core::mirror`）：
+
+| 名称 | ROS apt | rosdistro（`ros.key`、`index-v4.yaml`、rosdep yaml） |
+|---|---|---|
+| `official` | `http://packages.ros.org/ros2/ubuntu` | `https://raw.githubusercontent.com/ros/rosdistro/master` |
+| `tuna` | `https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu` | `https://mirrors.tuna.tsinghua.edu.cn/rosdistro` |
+| `ustc` | `https://mirrors.ustc.edu.cn/ros2/ubuntu` | `https://mirrors.ustc.edu.cn/rosdistro` |
+| `aliyun` | `https://mirrors.aliyun.com/ros2/ubuntu` | 无，回退官方 |
+
+**探测**（`rospm-core::net`）：非 `--dry-run` 的 `apply` 在执行任何步骤之前，并行 GET 每个源集的 `dists/<codename>/InRelease` 与 `rosdistro/rosdep/base.yaml`（约 270 KB，用来测吞吐并发现"能建连但中途停滞"的连接），以及 `.repos` 中每个 git 主机的根页面；每个 URL 8 s 超时，结果打成表（`ok 144 ms 4.6 KB [KB/s]` / `FAILED 原因`）。`doctor` 打印同一张表（`--no-network` 跳过）。
+
+**判定**：官方两项都可达 → 用官方。否则在"所需端点全部可达"的镜像里按总延迟排序（`aliyun` 只有 apt，需官方 rosdistro 可达才算候选）：终端交互时询问 `use the <name> mirror …? [Y/n]`，非终端直接报错并列出可用的 `--mirror <name>`；一个都不可达则报错提示检查网络 / 代理。`--mirror <name>` / `ROSPM_MIRROR` 显式指定时只探测该源集，不可达则报错（`--mirror official` 例外：告警后继续）。git 主机不可达只告警（没有镜像）。
+
+**换源的实际效果**：`ros.key` 从镜像的 `rosdistro/ros.key` 下载，仍按内置指纹校验；`ros2.list` 指向镜像 apt；rosdep 不跑 `rosdep init`，而由 rospm 写 `20-default.list`（镜像自己的那份仍指向 GitHub，不能直接用），且不含上游的 `gbpdistro … fuerte` 行（rosdep 处理该行时会从硬编码的 GitHub 地址取 `targets.yaml`，实测在 GitHub 不通时仅此一行就让 `rosdep update` 失败；ROS 2 用不到 fuerte），`rosdep update` 带 `ROSDISTRO_INDEX_URL=<镜像>/index-v4.yaml`。`ros2.list` 若是 rospm 自己写的且指向别的源集则重写；若是别人写的（如 `ros2-apt-source` 的 `ros2.sources`）则保留并注明。`uninstall` 不动 `20-default.list`（rosdep 属于保留的工具）。
+
+**不做**：不改 Ubuntu 自身的 apt 源（用户系统配置）；不为 git 提供镜像；`--dry-run` 不测速（保持离线可用与确定性，可用 `--mirror` 看镜像版计划）。计划中官方源步骤失败时的错误信息会提示 `rospm doctor` 与 `--mirror`。
 
 ### 4.2 输出语言（i18n，P1.5，决策 #16）
 

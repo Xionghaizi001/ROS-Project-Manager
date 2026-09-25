@@ -11,6 +11,8 @@
 //! - [`repos`] / [`package_xml`]: read-only views of the files a ROS workspace
 //!   already has (`.repos`, `package.xml`).
 //! - [`probe`]: read-only facts about the host (OS, ROS installs, dpkg, rosdep).
+//! - [`mirror`] / [`net`]: package-source mirrors and the reachability probe
+//!   `apply` runs before downloading (decision #17).
 //! - [`introspect`]: `init --from-env`, a best-effort draft manifest from the
 //!   host and the project directory (decision #3).
 
@@ -18,6 +20,8 @@ pub mod error;
 pub mod introspect;
 pub mod lock;
 pub mod manifest;
+pub mod mirror;
+pub mod net;
 pub mod package_xml;
 pub mod plan;
 pub mod platform;

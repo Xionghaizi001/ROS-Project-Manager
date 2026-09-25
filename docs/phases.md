@@ -38,7 +38,7 @@
 ## Phase 1 — MVP：native 提供者的描述与重放（约 3–4 周）
 
 范围：x86_64、Ubuntu 22.04/24.04、Humble/Jazzy、native(apt) 提供者、git 源码、colcon。
-状态：**进行中**。`init` / `check` 已完成（2026-09-25）；`apply` 的 ROS 安装 bootstrap 与 `uninstall` 计划已落地（2026-09-26）；`apply` / `build` / `uninstall` 仍缺真实机器验证。
+状态：**22.04 / Humble 验收通过**（2026-09-26，见 [p1-native-validation.md](p1-native-validation.md)）。`init` / `check` 已完成（2026-09-25）；`apply` / `build` / `shell` / `uninstall` 已在干净的 Ubuntu 22.04 主机上实跑闭环。剩余：24.04 + Jazzy 同流程、`env --shell fish`。
 
 ### `rospm init`
 - [x] 生成清单模板（`templates/rospm.toml`），已存在需 `--force`，模板自校验。
@@ -61,17 +61,19 @@
 - [x] native 计划生成：ROS apt 源 → 底包 → `vcs import` → `rosdep install` → 额外 apt；`--dry-run` 打印计划。
 - [x] 安装 ROS 的 bootstrap（2026-09-26，spec §4.1，决策 #14）：主机 Ubuntu 版本与清单不符直接报错；按探测结果只补缺的步骤：`locales` + `locale-gen`/`update-locale`、`add-apt-repository universe`、下载 `ros.key` 到 keyring、写 `sources.list.d/ros2.list`（`--dry-run` 打印文件内容）、`apt-get update`。系统文件经 `sudo tee` 写入。CI 冒烟对 22.04 / 24.04 各用一份匹配的示例清单，并断言计划里含源文件写入。
 - [x] `--locked` 在 P2 前明确降级告警；`--offline` 返回 NotImplemented(P6)。
-- [ ] 非 dry-run 在真实机器上执行并处理失败（sudo 交互、apt 锁、rosdep 未初始化等）。
-- [ ] `ros.key` 下载失败 / 密钥指纹核验（当前只 `curl -o`，未校验指纹）。
+- [x] 非 dry-run 在真实机器上执行并处理失败（2026-09-26）：干净 22.04 主机上从无 ROS apt 源起步，11 步全部成功；命令失败时以非零退出并打印失败命令（实测 `curl` 被 SIGTERM 中断的场景）；二次 `apply` 幂等（bootstrap 步骤按探测结果跳过，apt / vcs / rosdep 自身幂等）。sudo 免密与 `rosdep init` 未初始化两种情况已覆盖；apt 锁冲突与 sudo 交互式输密码未构造场景。
+- [x] `ros.key` 下载与密钥指纹核验（2026-09-26）：先下到临时文件（`curl -f`、连接 / 单次超时、瞬时错误重试），`gpg --show-keys` 核对完整指纹 `C1CF…C654` 后才 `sudo install` 到 keyring；404、指纹不符、下载挂起都报错且不写 keyring。前置包加入 `gnupg`（ubuntu 容器镜像只有 `gpgv`）。三个需要网络的 `#[ignore]` 测试本机实跑通过；真实 `apply` 中该步骤在网络停滞时 3 分钟内有界失败、网络正常时通过指纹校验并安装。
+
+- [x] 源镜像与网络测速（2026-09-26，决策 #17，spec §4.1.1）：内置 `tuna` / `ustc` / `aliyun`，`apply` 执行前并行测速并打表，官方不通时交互引导或报错提示 `--mirror`；`doctor` 展示同一张表。镜像 URL 布局与 rosdep 源列表已实测；`apply --mirror tuna` 在 GitHub 不通的主机上完整闭环（13 步、rosdep 走镜像），交互提示与非终端报错均实测（[p1-native-validation.md §7](p1-native-validation.md)）。
 
 ### `rospm uninstall`
 - [x] 计划生成（2026-09-26，决策 #15）：用 dpkg 列出全部已装 `ros-<distro>-*` 并显式写进 `apt-get remove`，`autoremove`；删除 rospm 写的 `ros2.list` 与 keyring，`--keep-source`、`/opt/ros` 下还有其它发行版、或源文件非 rospm 所写（如 `ros2-apt-source`）时保留并说明；不卸 rosdep / vcstool / colcon；提示 `/opt/ros/<distro>` 可能残留。
 - [x] 非 `--dry-run` 需交互确认或 `--yes`；stdin 非终端且无 `--yes` 拒绝执行；dpkg-query 不可用时报错而不猜。
-- [ ] 真实机器上验证卸载后 `check` 报告与干净机器一致。
+- [x] 真实机器上验证卸载后 `check` 报告与干净机器一致（2026-09-26）：197 个 `ros-humble-*` 全部移除，`/opt/ros` 整目录消失，`ros2.list` 与 keyring 删除，`check` 对 ROS apt 源 / `/opt/ros/humble` / 底包三项回到 `MISSING`，`--strict` 退出 1。与干净机器的差异只在设计上保留的部分：rosdep / vcstool / colcon 工具、`rosdep init` 与缓存，以及 rosdep 装的系统依赖（OpenCV、cmake 等约 260 个非 ROS 包，apt 不视为自动安装，`autoremove` 不会回收）。
 
 ### `rospm build`
 - [x] 封装 colcon，按叠加顺序 source underlay，注入清单中的 colcon 配置；`--dry-run`。
-- [ ] 真实机器上验证 `[workspaces.<name>.colcon]` 各字段的实际效果。
+- [x] 真实机器上验证 `[workspaces.<name>.colcon]` 各字段的实际效果（2026-09-26）：`build_args`（`--symlink-install`，21 包 2m40s）；`defaults`（`COLCON_DEFAULTS_FILE` 生效，`packages-select` 只构建 1 包、`cmake-args` 进入 CMakeCache）；`mixins`（`--mixin release` / `debug` 切换 `CMAKE_BUILD_TYPE`）。发现 `mixins` 依赖 `python3-colcon-mixin` 且需用户自行 `colcon mixin add/update`，否则 colcon 报 `unrecognized arguments: --mixin`；`check` 现在在清单声明 mixins 时探测 `colcon mixin` 可用性。
 
 ### `rospm env` / `rospm shell`
 - [x] `env --shell bash|zsh`；按 workspace 顺序 source，导出 `[env]`。
@@ -83,9 +85,9 @@
 - [x] 输出 ROS apt 源、`universe`、locale 状态（2026-09-26）。
 
 ### 验收
-- [ ] 在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功（`apply` 须从无 ROS apt 源起步）。
+- [x] 在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功（`apply` 须从无 ROS apt 源起步）。（2026-09-26，WSL2 Ubuntu 22.04.5，`examples/minimal-humble`，`ros2 run demo_nodes_cpp talker` 在 `rospm shell` 内正常发布）
 - [ ] 同样流程在 24.04 + Jazzy 上通过。
-- [ ] `rospm uninstall --yes` 后 `rospm check` 对 ROS 各项回到 `MISSING`。
+- [x] `rospm uninstall --yes` 后 `rospm check` 对 ROS 各项回到 `MISSING`。（2026-09-26，三次 uninstall 均通过；第二轮 apply 的 `rosdep update` 因主机到 GitHub 的连接超时未完成，bootstrap 与密钥校验步骤已有实机证据）
 
 ---
 

@@ -5,6 +5,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser, Subcommand};
 use rospm_core::manifest::RosFlavor;
+use rospm_core::mirror::Mirror;
 use rospm_core::platform::Platform;
 use rospm_core::provider::Shell;
 
@@ -82,6 +83,10 @@ enum Cmd {
         /// Use only bundled payloads, never the network
         #[arg(long)]
         offline: bool,
+        /// Download ROS from this source set instead of probing and asking:
+        /// official | tuna | ustc | aliyun (also `ROSPM_MIRROR`)
+        #[arg(long, value_name = "NAME", value_parser = clap::builder::PossibleValuesParser::new(rospm_core::mirror::NAMES))]
+        mirror: Option<String>,
         /// Print the plan and exit
         #[arg(long)]
         dry_run: bool,
@@ -148,8 +153,13 @@ enum Cmd {
         kind: Option<String>,
     },
 
-    /// Check that the wrapped tools are available on this machine
-    Doctor,
+    /// Check that the wrapped tools are available on this machine and
+    /// whether the ROS sources (official and mirrors) are reachable
+    Doctor {
+        /// Skip the network probe
+        #[arg(long)]
+        no_network: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,8 +198,14 @@ fn main() -> ExitCode {
         Cmd::Apply {
             locked,
             offline,
+            mirror,
             dry_run,
-        } => commands::apply(&global, locked, offline, dry_run),
+        } => {
+            let mirror = mirror
+                .as_deref()
+                .map(|m| m.parse::<Mirror>().expect("validated by clap"));
+            commands::apply(&global, locked, offline, dry_run, mirror)
+        }
         Cmd::Uninstall {
             keep_source,
             yes,
@@ -207,7 +223,7 @@ fn main() -> ExitCode {
         Cmd::Export { .. } => commands::not_implemented("export", "P6"),
         Cmd::Import { .. } => commands::not_implemented("import", "P6"),
         Cmd::Editor { .. } => commands::not_implemented("editor", "P7"),
-        Cmd::Doctor => commands::doctor(&global),
+        Cmd::Doctor { no_network } => commands::doctor(&global, no_network),
     };
 
     match result {
