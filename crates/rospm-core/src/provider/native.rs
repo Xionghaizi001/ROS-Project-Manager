@@ -16,8 +16,8 @@ use crate::package_xml::WorkspacePackages;
 use crate::plan::{shell_quote, Command, Plan};
 use crate::platform::ubuntu_codename;
 use crate::probe::{
-    self, EnvReport, Status, NATIVE_CORE_TOOLS, ROSDEP_DEFAULT_LIST, ROS_APT_KEYRING, ROS_APT_LIST,
-    ROS_APT_NEEDLE, ROS_KEY_FINGERPRINT,
+    self, EnvReport, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, ROSDEP_DEFAULT_LIST,
+    ROS_APT_KEYRING, ROS_APT_LIST, ROS_APT_NEEDLE, ROS_KEY_FINGERPRINT,
 };
 use crate::provider::{Context, Provider, Shell};
 use crate::repos::{same_git_url, ReposFile};
@@ -117,7 +117,9 @@ impl Provider for Native {
                 label = mirror.label
             ));
         }
-        let need_locale = !host.locale_utf8;
+        // Only the system default (/etc/default/locale) is ever touched; the
+        // caller's own `LANG=C` is not a reason to rewrite it.
+        let need_locale = host.locale.needs_fix();
         let need_universe = host.apt_sources.universe != Some(true);
         // Rewrite rospm's own source file when a different source set was
         // chosen; a file written by something else (ros2-apt-source) is left alone.
@@ -154,12 +156,31 @@ impl Provider for Native {
                     .args(["en_US", "en_US.UTF-8"])
                     .sudo(),
             );
-            plan.run(
-                Command::new("update-locale")
-                    .args(["LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8"])
-                    .sudo(),
-            );
-            plan.note(msg!("native.apply.locale_switched"));
+            // Set LANG only, never LC_ALL (it would pin every category for
+            // every user). If the file's non-UTF-8 value came from LC_ALL /
+            // LC_CTYPE, drop that variable (bare name = remove) so LANG applies.
+            let mut update = Command::new("update-locale").arg("LANG=en_US.UTF-8");
+            if let Some(var) = host.locale.system_var.filter(|v| *v != "LANG") {
+                update = update.arg(var);
+            }
+            plan.run(update.sudo());
+            let from = match (&host.locale.system_var, &host.locale.system) {
+                (Some(var), Some(value)) => format!("{var}={value}"),
+                _ if host.locale.system_file => "POSIX".to_string(),
+                _ => msg!("native.apply.locale_no_file").to_string(),
+            };
+            plan.note(msg!(
+                "native.apply.locale_switched",
+                file = DEFAULT_LOCALE_FILE,
+                from = from
+            ));
+        } else if !host.locale.process_utf8() {
+            plan.note(msg!(
+                "native.apply.shell_locale_not_utf8",
+                value = host.locale.process.as_deref().unwrap_or("POSIX"),
+                file = DEFAULT_LOCALE_FILE,
+                system = host.locale.system.as_deref().unwrap_or("POSIX")
+            ));
         }
         if need_universe {
             plan.run(
@@ -508,14 +529,65 @@ impl Provider for Native {
         }
 
         // Prerequisites the official install guide sets up before ROS itself.
-        let (s, actual) = if host.locale_utf8 {
-            (Status::Ok, Message::text("UTF-8"))
-        } else {
-            (Status::Missing, msg!("probe.locale.not_utf8"))
+        // System locale: what `apply` fixes. Without /etc/default/locale the
+        // process value stands in for it (bare container).
+        let system_value = host.locale.system.as_deref().unwrap_or("POSIX");
+        let process_value = host.locale.process.as_deref().unwrap_or("POSIX");
+        let (s, actual) = match host.locale.system_utf8() {
+            Some(true) => (
+                Status::Ok,
+                msg!(
+                    "probe.locale.system",
+                    value = system_value,
+                    file = DEFAULT_LOCALE_FILE
+                ),
+            ),
+            Some(false) => (
+                Status::Missing,
+                msg!(
+                    "probe.locale.system_not_utf8",
+                    value = system_value,
+                    file = DEFAULT_LOCALE_FILE
+                ),
+            ),
+            None if host.locale.process_utf8() => (
+                Status::Ok,
+                msg!(
+                    "probe.locale.no_file",
+                    file = DEFAULT_LOCALE_FILE,
+                    value = process_value
+                ),
+            ),
+            None => (
+                Status::Missing,
+                msg!(
+                    "probe.locale.no_file_not_utf8",
+                    file = DEFAULT_LOCALE_FILE,
+                    value = process_value
+                ),
+            ),
         };
         r.push(
             "os",
-            msg!("probe.subject.locale"),
+            msg!("probe.subject.locale_system"),
+            Message::text("UTF-8"),
+            actual,
+            s,
+        );
+        // Current shell: informational, `apply` leaves it alone (it is the
+        // caller's choice, e.g. `LANG=C` in CI), but ROS tools started from
+        // this shell would still see it.
+        let (s, actual) = if host.locale.process_utf8() {
+            (Status::Ok, Message::text(process_value))
+        } else {
+            (
+                Status::Info,
+                msg!("probe.locale.shell_not_utf8", value = process_value),
+            )
+        };
+        r.push(
+            "os",
+            msg!("probe.subject.locale_shell"),
             Message::text("UTF-8"),
             actual,
             s,

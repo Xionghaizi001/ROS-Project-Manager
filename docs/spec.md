@@ -224,12 +224,13 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 |---|---|---|
 | 0 | 校验主机 | `/etc/os-release` 的 Ubuntu 版本 ≠ `environment.native.ubuntu` → 报错退出；不可读 → 告警后按清单假定 |
 | 1 | `apt-get update`；安装前置包 `locales` / `software-properties-common` / `curl ca-certificates gnupg` | 只安装下面步骤实际需要的 |
-| 2 | `locale-gen en_US en_US.UTF-8` + `update-locale` | `LC_ALL` / `LC_CTYPE` / `LANG` 已是 UTF-8 |
+| 2 | `locale-gen en_US en_US.UTF-8` + `update-locale LANG=en_US.UTF-8`（只设 `LANG`，不设 `LC_ALL`） | **系统** locale 已是 UTF-8：`/etc/default/locale` 中 `LC_ALL` / `LC_CTYPE` / `LANG` 的首个非空值含 `UTF-8`；无该文件时才看当前进程环境 |
 | 3 | `add-apt-repository -y universe` | 任一 apt 源文件（一行式或 deb822）已启用 `universe` |
 | 4 | 下载 `ros.key`（`curl -f`，连接 15s / 单次 60s 超时，瞬时错误重试 2 次）到临时文件，用 `gpg --show-keys` 核对完整指纹 `C1CF 6E31 E6BA DE88 68B1 72B4 F42E D6FB AB17 C654`（Open Robotics，有效期至 2030-06-01），一致才 `sudo install` 到 `/usr/share/keyrings/ros-archive-keyring.gpg`；写 `/etc/apt/sources.list.d/ros2.list`（`deb [arch=<dpkg arch> signed-by=…] http://packages.ros.org/ros2/ubuntu <codename> main`）；`apt-get update` | 任一 apt 源文件已引用 `packages.ros.org/ros2`（含 `ros2-apt-source` 包写的 `ros2.sources`） |
 | 5 | `apt-get install -y <ros_base> python3-rosdep python3-vcstool python3-colcon-common-extensions` | 无（apt 自身幂等） |
 
 - rospm 自己写 keyring + `sources.list.d`，而不是安装 `ros2-apt-source` 包：P2 `apply --locked` 要把同一文件指向 `snapshots.ros.org` 并以 `signed-by=` 引用快照密钥，两者共用一套源文件管理代码（决策 #14）。
+- locale 只看**系统默认值**（`/etc/default/locale`，PAM 登录时读取、`update-locale` 写入），不看调用 rospm 的进程环境：`LANG=C rospm apply`（CI、脚本、临时切英文输出）不得改写用户的系统 locale。文件里非 UTF-8 的值来自 `LC_ALL` / `LC_CTYPE` 时，`update-locale` 以裸变量名把它移除（注释掉）而不是覆盖，让新的 `LANG` 生效。没有 `/etc/default/locale`（裸容器）时退回进程环境判断。`check` / `doctor` 分两行：`system locale`（`apply` 会修的那个，非 UTF-8 为 `MISSING`）与 `shell locale`（仅当前 shell，非 UTF-8 为 `info`，`--strict` 不受影响）；计划注释写明改的是哪个文件、原值是什么。rospm 自身的输出语言选择（§4.2）与此无关，仍只看进程环境。
 - `--dry-run` 会完整打印将写入的源文件内容。
 - 密钥指纹内置于二进制（`probe::ROS_KEY_FINGERPRINT`）。指纹不符或下载失败（404、超时）时 `apply` 报错退出，不写 keyring；不能因为网络停滞无限等待（P1 实测中 `curl` 曾在 HTTP/2 连接上挂起 2 分钟以上）。
 - `[workspaces.<name>.colcon].mixins` 依赖 `python3-colcon-mixin`，该包不在 `python3-colcon-common-extensions` 的依赖里，且 mixin 仓库需要用户自行 `colcon mixin add/update`（决策 #8）。清单声明了 mixins 时，`check` 额外探测 `colcon mixin` 是否可用。

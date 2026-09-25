@@ -60,7 +60,8 @@ jobs:
       - run: bin/rospm --manifest ${{ matrix.manifest }} check
       - run: mkdir -p /tmp/scratch/ws/src && cd /tmp/scratch && $GITHUB_WORKSPACE/bin/rospm init --from-env --base desktop && $GITHUB_WORKSPACE/bin/rospm check --json
       # A bare container has no ROS apt source: the plan must bootstrap it before the base install.
-      - run: bin/rospm --manifest ${{ matrix.manifest }} apply --dry-run | tee /tmp/apply.txt && grep -q 'write /etc/apt/sources.list.d/ros2.list (sudo)' /tmp/apply.txt
+      # The locale step, when planned, sets LANG only: LC_ALL would pin every category system-wide.
+      - run: bin/rospm --manifest ${{ matrix.manifest }} apply --dry-run | tee /tmp/apply.txt && grep -q 'write /etc/apt/sources.list.d/ros2.list (sudo)' /tmp/apply.txt && ! grep -q 'LC_ALL=' /tmp/apply.txt
       - run: bin/rospm --manifest ${{ matrix.manifest }} uninstall --dry-run
       - run: bin/rospm --manifest ${{ matrix.manifest }} build --dry-run
       - run: bin/rospm --manifest ${{ matrix.manifest }} env

@@ -5,7 +5,8 @@ use rospm_core::mirror;
 use rospm_core::plan::{shell_quote, Command, Step};
 use rospm_core::platform::Platform;
 use rospm_core::probe::{
-    parse_dpkg_query, AptSources, Host, OsRelease, PackageDb, ROS_APT_KEYRING, ROS_APT_LIST,
+    parse_dpkg_query, AptSources, Host, LocaleState, OsRelease, PackageDb, Status, ROS_APT_KEYRING,
+    ROS_APT_LIST,
 };
 use rospm_core::provider::{self, Context, Shell};
 
@@ -26,7 +27,7 @@ fn ready_host() -> Host {
     h.os = Some(OsRelease::parse(
         "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.2 LTS\"\n",
     ));
-    h.locale_utf8 = true;
+    h.locale = LocaleState::with_system("C.UTF-8");
     h.apt_sources = AptSources {
         ros2: Some(PathBuf::from(ROS_APT_LIST)),
         ros2_mirror: Some("official"),
@@ -118,6 +119,10 @@ fn native_apply_bootstraps_the_ros_apt_source_on_a_bare_host() {
         "sudo apt-get install -y locales software-properties-common curl ca-certificates gnupg",
     );
     let locale = pos("sudo locale-gen en_US en_US.UTF-8");
+    // Only LANG is set system-wide; LC_ALL would pin every category for everyone.
+    pos("sudo update-locale LANG=en_US.UTF-8\n");
+    assert!(!rendered.contains("LC_ALL="), "{rendered}");
+    pos("native.apply.locale_switched(file=/etc/default/locale, from=native.apply.locale_no_file)");
     let universe = pos("sudo add-apt-repository -y universe");
     let key = pos(&format!(
         "plan.fetch_key(url=https://raw.githubusercontent.com/ros/rosdistro/master/ros.key, dest={ROS_APT_KEYRING}, fingerprint=C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654)"
@@ -163,6 +168,132 @@ fn native_apply_skips_bootstrap_when_the_host_is_ready() {
         "native.apply.source_already_configured(file=/etc/apt/sources.list.d/ros2.list, source=official)"
     ));
     assert!(rendered.contains("sudo apt-get install -y ros-jazzy-ros-base"));
+}
+
+#[test]
+fn native_apply_reads_the_system_locale_not_the_callers_environment() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+
+    // `LANG=C rospm apply` on a host whose /etc/default/locale is UTF-8 must
+    // not rewrite that file (it did before P1.5's last item).
+    let mut host = ready_host();
+    host.locale = LocaleState::with_system("zh_CN.UTF-8");
+    host.locale.process = Some("C".into());
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&ctx(&m, &host))
+        .unwrap()
+        .render();
+    assert!(!rendered.contains("locale-gen"), "{rendered}");
+    assert!(!rendered.contains("update-locale"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "native.apply.shell_locale_not_utf8(value=C, file=/etc/default/locale, system=zh_CN.UTF-8)"
+        ),
+        "{rendered}"
+    );
+
+    // The reverse: a UTF-8 shell does not excuse a POSIX system default.
+    let mut host = ready_host();
+    host.locale = LocaleState::with_system("C");
+    host.locale.process = Some("en_US.UTF-8".into());
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&ctx(&m, &host))
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains("sudo locale-gen en_US en_US.UTF-8"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("sudo update-locale LANG=en_US.UTF-8\n"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("native.apply.locale_switched(file=/etc/default/locale, from=LANG=C)"),
+        "{rendered}"
+    );
+
+    // A non-UTF-8 LC_ALL in the file overrides LANG, so it is removed
+    // (bare variable name) rather than overwritten.
+    let mut host = ready_host();
+    host.locale = LocaleState::from_default_locale("LANG=en_US.UTF-8\nLC_ALL=C\n");
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&ctx(&m, &host))
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains("sudo update-locale LANG=en_US.UTF-8 LC_ALL\n"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("from=LC_ALL=C)"), "{rendered}");
+
+    // The file exists but selects nothing: POSIX, fix it.
+    let mut host = ready_host();
+    host.locale = LocaleState::from_default_locale("# empty\n");
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&ctx(&m, &host))
+        .unwrap()
+        .render();
+    assert!(rendered.contains("from=POSIX)"), "{rendered}");
+}
+
+#[test]
+fn native_check_reports_system_and_shell_locale_separately() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = ready_host();
+    host.locale = LocaleState::with_system("zh_CN.UTF-8");
+    host.locale.process = Some("C".into());
+    let report = provider::for_manifest(&m)
+        .probe_env(&ctx(&m, &host))
+        .unwrap();
+    let row = |subject: &str| {
+        report
+            .items
+            .iter()
+            .find(|i| i.subject.to_string() == subject)
+            .unwrap_or_else(|| panic!("no `{subject}` row"))
+    };
+    let system = row("probe.subject.locale_system");
+    assert_eq!(system.status, Status::Ok);
+    assert_eq!(
+        system.actual.to_string(),
+        "probe.locale.system(value=zh_CN.UTF-8, file=/etc/default/locale)"
+    );
+    // The shell is only informational: `LANG=C rospm check --strict` in CI passes.
+    let shell = row("probe.subject.locale_shell");
+    assert_eq!(shell.status, Status::Info);
+    assert_eq!(
+        shell.actual.to_string(),
+        "probe.locale.shell_not_utf8(value=C)"
+    );
+
+    host.locale = LocaleState::with_system("C");
+    let report = provider::for_manifest(&m)
+        .probe_env(&ctx(&m, &host))
+        .unwrap();
+    let system = report
+        .items
+        .iter()
+        .find(|i| i.subject.to_string() == "probe.subject.locale_system")
+        .unwrap();
+    assert_eq!(system.status, Status::Missing);
+
+    // No file at all: the process value decides, and the row says so.
+    host.locale = LocaleState::default();
+    host.locale.process = Some("C.UTF-8".into());
+    let report = provider::for_manifest(&m)
+        .probe_env(&ctx(&m, &host))
+        .unwrap();
+    let system = report
+        .items
+        .iter()
+        .find(|i| i.subject.to_string() == "probe.subject.locale_system")
+        .unwrap();
+    assert_eq!(system.status, Status::Ok);
+    assert_eq!(
+        system.actual.to_string(),
+        "probe.locale.no_file(file=/etc/default/locale, value=C.UTF-8)"
+    );
 }
 
 #[test]

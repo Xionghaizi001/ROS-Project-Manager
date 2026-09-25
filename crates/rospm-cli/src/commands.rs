@@ -18,7 +18,7 @@ use rospm_core::manifest::{Manifest, RosFlavor, MANIFEST_FILE};
 use rospm_core::mirror::{self, Mirror};
 use rospm_core::net::{self, ProbeResult, Role, Verdict};
 use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
-use rospm_core::probe::{EnvReport, Host, Status, NATIVE_CORE_TOOLS, TOOLS};
+use rospm_core::probe::{EnvReport, Host, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, TOOLS};
 use rospm_core::provider::{self, Context, Shell};
 use rospm_core::repos::ReposFile;
 use rospm_core::{msg, Error};
@@ -834,6 +834,18 @@ struct ToolStatus {
     found: Option<String>,
 }
 
+/// System default (`/etc/default/locale`, what `apply` fixes) versus the
+/// current shell (the caller's choice, left alone).
+#[derive(Serialize)]
+struct LocaleReport {
+    system_file: bool,
+    system: Option<String>,
+    /// `None` when there is no readable system file.
+    system_utf8: Option<bool>,
+    shell: Option<String>,
+    shell_utf8: bool,
+}
+
 #[derive(Serialize)]
 struct DoctorReport {
     ok: bool,
@@ -843,7 +855,7 @@ struct DoctorReport {
     /// apt source file referencing packages.ros.org/ros2, if configured.
     ros_apt_source: Option<String>,
     apt_universe: Option<bool>,
-    locale_utf8: bool,
+    locale: LocaleReport,
     rosdep_initialized: bool,
     rosdep_updated: bool,
     tools: Vec<ToolStatus>,
@@ -887,7 +899,13 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
             .as_ref()
             .map(|p| p.display().to_string()),
         apt_universe: host.apt_sources.universe,
-        locale_utf8: host.locale_utf8,
+        locale: LocaleReport {
+            system_file: host.locale.system_file,
+            system: host.locale.system.clone(),
+            system_utf8: host.locale.system_utf8(),
+            shell: host.locale.process.clone(),
+            shell_utf8: host.locale.process_utf8(),
+        },
         rosdep_initialized: host.rosdep.initialized,
         rosdep_updated: host.rosdep.updated,
         tools,
@@ -949,14 +967,33 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
                 }
             )
         );
+        let system_value = report.locale.system.as_deref().unwrap_or("POSIX");
+        let shell_value = report.locale.shell.as_deref().unwrap_or("POSIX");
         println!(
             "{}",
             msg!(
-                "cli.doctor.locale",
-                value = if report.locale_utf8 {
-                    "UTF-8".to_string()
+                "cli.doctor.locale_system",
+                value = match report.locale.system_utf8 {
+                    Some(true) => format!("{system_value} ({DEFAULT_LOCALE_FILE})"),
+                    Some(false) => msg!(
+                        "cli.doctor.not_utf8",
+                        value = system_value,
+                        file = DEFAULT_LOCALE_FILE
+                    )
+                    .to_string(),
+                    None =>
+                        msg!("cli.doctor.locale_no_file", file = DEFAULT_LOCALE_FILE).to_string(),
+                }
+            )
+        );
+        println!(
+            "{}",
+            msg!(
+                "cli.doctor.locale_shell",
+                value = if report.locale.shell_utf8 {
+                    shell_value.to_string()
                 } else {
-                    tr("cli.doctor.not_utf8")
+                    msg!("cli.doctor.shell_not_utf8", value = shell_value).to_string()
                 }
             )
         );

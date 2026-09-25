@@ -194,18 +194,122 @@ pub fn source_text_enables_universe(text: &str) -> bool {
     })
 }
 
-/// Whether the process locale is UTF-8, judged the way ROS's install guide
-/// does (`LC_ALL`, then `LC_CTYPE`, then `LANG`). Unset means POSIX, not UTF-8.
-pub fn locale_is_utf8() -> bool {
-    ["LC_ALL", "LC_CTYPE", "LANG"]
+/// Debian/Ubuntu's system-wide locale defaults, read by PAM at login and
+/// written by `update-locale`.
+pub const DEFAULT_LOCALE_FILE: &str = "/etc/default/locale";
+
+/// The variables that decide the character encoding, in the order glibc
+/// consults them (also how ROS's install guide judges "is UTF-8").
+const LOCALE_VARS: [&str; 3] = ["LC_ALL", "LC_CTYPE", "LANG"];
+
+/// Whether a locale name (`zh_CN.UTF-8`, `C.utf8`, `POSIX`, …) selects UTF-8.
+/// `None` (unset) means POSIX, which is not.
+pub fn locale_is_utf8(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        let v = v.to_ascii_lowercase();
+        v.contains("utf-8") || v.contains("utf8")
+    })
+}
+
+/// The first of `LC_ALL` / `LC_CTYPE` / `LANG` that `get` resolves to a
+/// non-empty value, with the variable it came from.
+fn pick_locale(get: impl Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+    LOCALE_VARS
         .iter()
-        .filter_map(|k| std::env::var(k).ok())
-        .find(|v| !v.is_empty())
-        .map(|v| {
-            let v = v.to_ascii_lowercase();
-            v.contains("utf-8") || v.contains("utf8")
-        })
-        .unwrap_or(false)
+        .find_map(|k| get(k).filter(|v| !v.is_empty()).map(|v| (*k, v)))
+}
+
+/// The locale ROS needs to be UTF-8, seen from the two places it can come
+/// from. `apply` only ever fixes the *system* default: the process value is
+/// whatever the caller chose (`LANG=C rospm apply` in a script or CI must not
+/// rewrite `/etc/default/locale`, which happened before this split).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LocaleState {
+    /// [`DEFAULT_LOCALE_FILE`] exists and was readable.
+    pub system_file: bool,
+    /// What that file selects (`LC_ALL`, then `LC_CTYPE`, then `LANG`).
+    /// `None` when the file is unreadable or sets none of them (POSIX).
+    pub system: Option<String>,
+    /// Which variable in the file `system` came from.
+    pub system_var: Option<&'static str>,
+    /// The same lookup in the current process environment.
+    pub process: Option<String>,
+}
+
+impl LocaleState {
+    pub fn probe() -> LocaleState {
+        Self::probe_in(Path::new(DEFAULT_LOCALE_FILE))
+    }
+
+    /// Read `file` as the system default and the environment as the process
+    /// locale.
+    pub fn probe_in(file: &Path) -> LocaleState {
+        let mut out = match fs::read_to_string(file) {
+            Ok(text) => Self::from_default_locale(&text),
+            Err(_) => LocaleState::default(),
+        };
+        out.process = pick_locale(|k| std::env::var(k).ok()).map(|(_, v)| v);
+        out
+    }
+
+    /// Parse the contents of `/etc/default/locale` (`KEY=value` lines, values
+    /// optionally quoted, `#` comments). The process side is left unset.
+    pub fn from_default_locale(text: &str) -> LocaleState {
+        let vars: BTreeMap<String, String> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.split_once('='))
+            .map(|(k, v)| {
+                let v = v.trim();
+                let v = v
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
+                    .or_else(|| v.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                    .unwrap_or(v);
+                (k.trim().to_string(), v.to_string())
+            })
+            .collect();
+        let (system_var, system) = match pick_locale(|k| vars.get(k).cloned()) {
+            Some((var, value)) => (Some(var), Some(value)),
+            None => (None, None),
+        };
+        LocaleState {
+            system_file: true,
+            system,
+            system_var,
+            process: None,
+        }
+    }
+
+    /// A host whose `/etc/default/locale` sets `LANG=<system>`; for tests.
+    pub fn with_system(system: &str) -> LocaleState {
+        LocaleState {
+            system_file: true,
+            system: Some(system.to_string()),
+            system_var: Some("LANG"),
+            process: None,
+        }
+    }
+
+    /// Whether the system default is UTF-8; `None` when there is no readable
+    /// [`DEFAULT_LOCALE_FILE`].
+    pub fn system_utf8(&self) -> Option<bool> {
+        self.system_file
+            .then(|| locale_is_utf8(self.system.as_deref()))
+    }
+
+    /// Whether the current process locale is UTF-8.
+    pub fn process_utf8(&self) -> bool {
+        locale_is_utf8(self.process.as_deref())
+    }
+
+    /// Whether `apply` has to set a UTF-8 system locale: the system default is
+    /// not UTF-8, or there is no system file and the process locale is not
+    /// UTF-8 either (a bare container, where the process value is all there is).
+    pub fn needs_fix(&self) -> bool {
+        !self.system_utf8().unwrap_or_else(|| self.process_utf8())
+    }
 }
 
 /// `$ROS_HOME`, defaulting to `~/.ros` like rosdep does.
@@ -354,8 +458,9 @@ pub struct Host {
     pub ros_home: PathBuf,
     pub rosdep: RosdepState,
     pub apt_sources: AptSources,
-    /// Process locale is UTF-8 (ROS requires it; `apply` fixes it otherwise).
-    pub locale_utf8: bool,
+    /// System and process locale (ROS requires UTF-8; `apply` fixes the
+    /// system default when it is not).
+    pub locale: LocaleState,
     pub tools: BTreeMap<String, Option<PathBuf>>,
     pub packages: PackageDb,
 }
@@ -380,7 +485,7 @@ impl Host {
             rosdep: RosdepState::probe(&ros_home),
             ros_home,
             apt_sources: AptSources::probe(),
-            locale_utf8: locale_is_utf8(),
+            locale: LocaleState::probe(),
             tools,
             packages,
         }
@@ -397,7 +502,7 @@ impl Host {
             ros_home: PathBuf::from("/nonexistent/.ros"),
             rosdep: RosdepState::default(),
             apt_sources: AptSources::default(),
-            locale_utf8: false,
+            locale: LocaleState::default(),
             tools: TOOLS.iter().map(|(t, _)| (t.to_string(), None)).collect(),
             packages: PackageDb::Unavailable,
         }
@@ -581,6 +686,69 @@ mod tests {
         assert!(os.is_ubuntu());
         assert_eq!(os.version_id.as_deref(), Some("22.04"));
         assert_eq!(os.codename.as_deref(), Some("jammy"));
+    }
+
+    #[test]
+    fn default_locale_file_parses_like_glibc_reads_it() {
+        // Ubuntu's usual file: LANG set, LC_ALL present but empty (ignored).
+        let l = LocaleState::from_default_locale("LANG=zh_CN.UTF-8\n#LANGUAGE=zh_CN:zh\nLC_ALL=\n");
+        assert_eq!(l.system.as_deref(), Some("zh_CN.UTF-8"));
+        assert_eq!(l.system_var, Some("LANG"));
+        assert_eq!(l.system_utf8(), Some(true));
+        assert!(!l.needs_fix());
+
+        // Quoted values; LC_ALL wins over LANG and can make the system non-UTF-8.
+        let l = LocaleState::from_default_locale("LANG=\"en_US.UTF-8\"\nLC_ALL='C'\n");
+        assert_eq!(l.system.as_deref(), Some("C"));
+        assert_eq!(l.system_var, Some("LC_ALL"));
+        assert_eq!(l.system_utf8(), Some(false));
+        assert!(l.needs_fix());
+
+        // File exists but selects nothing: POSIX.
+        let l = LocaleState::from_default_locale("#  File generated by update-locale\n");
+        assert!(l.system_file);
+        assert_eq!(l.system, None);
+        assert_eq!(l.system_utf8(), Some(false));
+        assert!(l.needs_fix());
+
+        assert!(locale_is_utf8(Some("C.utf8")));
+        assert!(!locale_is_utf8(Some("POSIX")));
+        assert!(!locale_is_utf8(None));
+    }
+
+    #[test]
+    fn process_locale_only_matters_without_a_system_file() {
+        // No /etc/default/locale (bare container): the process decides.
+        let mut l = LocaleState::default();
+        assert_eq!(l.system_utf8(), None);
+        assert!(l.needs_fix());
+        l.process = Some("C.UTF-8".into());
+        assert!(!l.needs_fix());
+
+        // With a UTF-8 system default, `LANG=C rospm apply` changes nothing.
+        let mut l = LocaleState::with_system("en_US.UTF-8");
+        l.process = Some("C".into());
+        assert!(!l.process_utf8());
+        assert!(!l.needs_fix());
+
+        // And a UTF-8 shell does not excuse a POSIX system default.
+        let mut l = LocaleState::with_system("C");
+        l.process = Some("en_US.UTF-8".into());
+        assert!(l.needs_fix());
+    }
+
+    #[test]
+    fn probe_in_reads_the_file_and_falls_back_to_the_environment() {
+        let dir = std::env::temp_dir().join(format!("rospm-locale-{}", process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("locale");
+        fs::write(&file, "LANG=en_US.UTF-8\n").unwrap();
+        let l = LocaleState::probe_in(&file);
+        assert_eq!(l.system_utf8(), Some(true));
+        let l = LocaleState::probe_in(&dir.join("missing"));
+        assert!(!l.system_file);
+        assert_eq!(l.system_utf8(), None);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
