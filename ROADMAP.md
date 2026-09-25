@@ -1,6 +1,7 @@
 # ROS Project Manager — 可行性评估与 Roadmap
 
 > 基于 `desc.md`（2026-09-14 版本）编写。工具名 `rospm`（2026-09-15 确认）。
+> 配套文档：[决策记录](docs/decisions.md) · [规格草案](docs/spec.md) · [分阶段实施清单](docs/phases.md) · [P0 外部事实核验](docs/p0-external-validation.md)。
 
 ## 1. 可行性结论
 
@@ -78,71 +79,32 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 - apt 一侧建议**先 shell out**（`apt-get`、`apt-cache`、`dpkg-query`），稍后再考虑 `rust-apt` 绑定，避免早期被 libapt-pkg ABI 绑死。
 - C++ 的唯一优势是与 ROS 生态同语言，但对本工具（不链接 ROS 库）无实际收益。
 
-## 5. Roadmap
+## 5. Roadmap 总览
 
-每个阶段末尾都有一个"可演示的产出"，不满足就不进入下一阶段。
+各阶段的逐项任务、完成状态与验收门槛已拆到 [docs/phases.md](docs/phases.md)；本节只保留阶段目标与当前状态。状态更新日期：2026-09-25。
 
-### Phase 0 — 规格与骨架（约 1–2 周）
-- [x] 补齐 §3 所列决策，写成 `docs/decisions.md` 与 `docs/spec.md`（2026-09-15）。
-- [x] 定义 manifest v0 schema 与 lock v0 schema，附示例（`examples/minimal`，spec §2.1）。
-- [x] Rust 工程骨架：`clap` CLI、`Provider` trait、`Scm` trait、日志、错误类型、`Plan` + `--dry-run` 基础设施。
-- [x] CI：fmt + clippy + 单元测试（x86_64 / arm64）+ Ubuntu 22.04 / 24.04 容器冒烟（`.github/workflows/ci.yml`，尚未在 GitHub 上实际运行）。
-- [ ] 验证 spec §8 列出的 4 项外部事实（ROS 快照仓库格式、Ubuntu 快照在 22.04 的用法、pixi-pack aarch64、RoboStack rosdep 源）。
-- **产出**：`rospm --help` 可运行 ✅；spec 与示例清单待 review。
-- 骨架已超前实现 P1 的部分内容：native 提供者的 `apply` / `build` / `env` / `shell` 计划生成，以及 `init`（无 `--from-env`）、`doctor`。P1 剩余：环境探测（`check` 读取已安装包与 rosdep 状态）、`init --from-env`、在干净虚拟机上实跑。
+| 阶段 | 目标 | 预估 | 状态 |
+|---|---|---|---|
+| P0 | 规格、决策、schema、Rust 骨架、CI | 1–2 周 | **基本完成**：决策/spec/schema/骨架/单测 ✅；CI 已写未在 GitHub 跑通；外部事实 4 项中 2 项通过、3 个子项待补（ROS 快照签名、补丁版 rosdep ROS 包映射、真实 ARM pixi-pack） |
+| P1 | native 提供者的描述与重放（x86_64、22.04/24.04、Humble/Jazzy） | 3–4 周 | **进行中**：`init` / `check` / `apply` / `build` / `env` / `shell` / `doctor` 骨架与 `--dry-run` 计划已就绪；缺环境探测、`init --from-env`、fish、干净虚拟机实跑 |
+| P2 | 锁文件与依赖补全：`lock` / `apply --locked` / `verify` / `deps` | 3 周 | 未开始（lock schema 与解析已随骨架落地） |
+| P3 | Pixi 提供者：生成 `pixi.toml`，锁定委托 `pixi.lock`，RoboStack rosdep 源 | 3 周 | 未开始（占位返回 NotImplemented） |
+| P4 | Docker 提供者：Dockerfile / compose / devcontainer，digest 锁定，buildx | 2–3 周 | 未开始（占位返回 NotImplemented） |
+| P5 | aarch64 与平台覆盖：仓库索引查询、替换映射表、ARM CI | 3 周 | 未开始（`[target.<arch>]` schema 与合并已实现） |
+| P6 | 离线导出与导入：bundle 格式、`export` / `import` / `apply --offline` | 3–4 周 | 未开始 |
+| P7 | 编辑器集成与打磨，1.0 发布，冻结 schema v1 | 2 周 | 未开始 |
+| P8 | GUI（选装） | 独立排期 | 未开始 |
 
-### Phase 1 — MVP：native 提供者的描述与重放（约 3–4 周）
-范围：x86_64、Ubuntu 22.04/24.04、Humble/Jazzy、native(apt) 提供者、git 源码、colcon。
-- `rospm init`：生成清单模板；可选从当前目录的 `.repos` / `package.xml` 反推。
-- `rospm check`：检查 ROS 底包、rosdep 初始化、所需 apt 包、源码是否存在，输出差异报告，不修改系统。
-- `rospm apply`：安装 ROS 底包、`vcs import` 源码、`rosdep install`，全程支持 `--dry-run`。
-- `rospm build`：封装 colcon，注入清单中的 colcon 配置。
-- `rospm env` / `rospm shell`：生成 source 脚本或启动带环境变量的子 shell（`ROS_DOMAIN_ID`、`RMW_IMPLEMENTATION` 等）。
-- **产出**：在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
+阶段目标一句话：
 
-### Phase 2 — 锁文件与依赖补全（约 3 周）
-- `rospm lock`：源码 → commit SHA；apt → 已安装版本 + 快照仓库日期；写入 `rospm.lock`。
-- `rospm apply --locked`：把 sources.list 切到快照仓库后安装；快照不可用时按 §2.1 降级并告警。
-- `rospm verify`：对比锁文件与当前环境，报告漂移。
-- `rospm deps check` / `rospm deps install`：解析 workspace 中全部 `package.xml`，与已安装集合求差，补装。
-- **产出**：两台机器、间隔数周执行 `apply --locked`，`verify` 报告一致。
-
-### Phase 3 — Pixi 提供者（约 3 周）
-- 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
-- 锁定委托给 `pixi.lock`；`rospm lock` 只记录其哈希与引用。
-- rosdep 切换到 RoboStack 的 yaml 源，`deps` 子命令在此提供者下输出 conda 包名。
-- 用第二个实现校正 `Provider` trait，去掉 Phase 1 中的 apt 特有假设。
-- **产出**：同一份清单，切换 `provider = "pixi"` 后在无 sudo 的机器上完成 apply/build。
-
-### Phase 4 — Docker 提供者（约 2–3 周）
-- 从清单生成 `Dockerfile`（分层：底包 → rosdep 依赖 → 源码 → 编译）、`compose.yaml`、`devcontainer.json`。
-- 锁定记录 image digest；`apply` 即 build，`shell` 即 `exec`。
-- 用 `buildx` 支持 `--platform linux/arm64`，为 Phase 5 铺路。
-- **产出**：`rospm apply` 直接产出可运行的镜像，`rospm shell` 进入容器且 ROS 环境就位。
-
-### Phase 5 — aarch64 与平台覆盖（约 3 周）
-- 清单增加 `[target.<arch>]` 段：覆盖、替换、排除。
-- `rospm check --target aarch64`：查询 apt/conda 仓库索引，报告目标架构缺失的包。
-- 内置可更新的替换映射表，与用户声明合并，用户声明优先。
-- CI 增加 aarch64 runner（或 QEMU）矩阵。
-- **产出**：x86 上生成的锁文件，在 Raspberry Pi / Jetson 上 `apply --locked` 成功，缺失包有明确替代或明确报错。
-
-### Phase 6 — 离线导出与导入（约 3–4 周）
-- 定义 bundle 格式：`manifest + lock + sources/ + payload/ + sha256sums`。
-- native：`apt-get download` 求闭包，`dpkg-scanpackages` 生成本地仓库；支持 `dpkg --add-architecture` 跨架构下载。
-- pixi：调用 `pixi-pack --platform`。
-- docker：`docker save` 指定平台镜像。
-- `rospm export --target aarch64` / `rospm import`；导入后走 `apply --locked --offline`。
-- **产出**：联网 x86 机器导出，断网 arm64 机器导入并成功编译运行。
-
-### Phase 7 — 编辑器集成与打磨（约 2 周）
-- 生成 `.vscode/settings.json`、`c_cpp_properties.json`、`launch.json`；CLion 走 `compile_commands.json`；devcontainer 复用 Phase 4。
-- shell 补全、`rospm doctor` 自检、错误信息润色、文档站。
-- 1.0 发布，冻结 manifest/lock schema v1。
-
-### Phase 8 — GUI（选装，独立排期）
-- Tauri 或 egui，只调用与 CLI 相同的库层，不另写业务逻辑。
-- 功能：清单编辑、check/verify 结果可视化、导出向导。
+- **P0 产出**：`rospm --help` 可运行 ✅；spec 与示例清单待 review。
+- **P1 产出**：干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
+- **P2 产出**：两台机器、间隔数周执行 `apply --locked`，`verify` 报告一致。
+- **P3 产出**：同一份清单切换 `provider = "pixi"` 后在无 sudo 机器上完成 apply/build。
+- **P4 产出**：`rospm apply` 产出可运行镜像，`rospm shell` 进入容器且 ROS 环境就位。
+- **P5 产出**：x86 生成的锁文件在 Raspberry Pi / Jetson 上 `apply --locked` 成功，缺失包有明确替代或明确报错。
+- **P6 产出**：联网 x86 机器导出，断网 arm64 机器导入并成功编译运行。
+- **P7 产出**：1.0 发布。
 
 ## 6. 阶段间的硬性依赖
 

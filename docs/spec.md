@@ -262,9 +262,11 @@ version = "1.26.4"
 - Nix 路线
 - 从已有环境完整还原 colcon 配置与叠加顺序（只 best-effort）
 
-## 8. P0 待验证事项
+## 8. P0 外部事实验证状态
 
-- `snapshots.ros.org` 的目录格式与 Jazzy 快照覆盖频率；Rolling 是否有快照。
-- `snapshot.ubuntu.com` 在 22.04 上的可用方式（apt 2.7.14+ 才有原生 `Snapshot:` 支持，22.04 需直接写 URL）。
-- `pixi-pack` 对 RoboStack channel 与 `--platform linux-aarch64` 的支持程度。
-- rosdep 在 RoboStack 下的 yaml 源配置方式，以及能否与 apt 侧共用同一份 `skip_keys`。
+实测过程、命令、证据及未完成项见 [P0 核验报告](p0-external-validation.md)。
+
+- ROS：日期目录和 Jazzy noble 的 amd64/arm64 索引已读取，索引大小及 SHA256 与 Release 一致；快照间隔不固定，必须发现实际日期；当前 Rolling 路径 404。快照签名认证待完成。
+- Ubuntu：22.04 的 APT **2.4.11 起已回移植快照支持**；本机 2.4.14 的原生 `--snapshot` 与直接 URL 两种方案均更新成功，直接 URL 下载指定版本样例包成功。
+- pixi-pack：0.7.11 工具运行成功，上游声明支持跨平台且提供 aarch64 发布；真实 RoboStack ARM 锁定/打包尚待完成。
+- rosdep：RoboStack 默认列表加载 `ros-noetic/master/conda.yaml`；使用独立源/缓存及 `--os=conda:linux`。系统键映射已实测；ROS 包映射依赖 conda-forge 补丁，未经补丁的上游对 Humble `rclcpp` 解析失败。`skip_keys` 共用原始键，但 Pixi keys/resolve 流程须在解析前自行过滤，安装由 Pixi 执行。

@@ -7,7 +7,7 @@ A project is described by `rospm.toml` (intent) and pinned by `rospm.lock` (resu
 with those two files plus the sources, the same environment can be rebuilt on another
 machine or another architecture.
 
-Status: **roadmap P0 — skeleton**. See `ROADMAP.md` for phases and `docs/spec.md` for
+Status: **roadmap P1 in progress** (P0 skeleton done; native plans and `--dry-run` work, environment probing pending). See `ROADMAP.md` for the overview, `docs/phases.md` for per-phase checklists and `docs/spec.md` for
 the file formats and command semantics. Design decisions live in `docs/decisions.md`.
 
 ## Build
@@ -35,6 +35,6 @@ always print their plan first and accept `--dry-run`.
 ```
 crates/rospm-core   library: manifest, lock, plan, providers, scm
 crates/rospm-cli    the `rospm` binary
-docs/               spec, decisions, roadmap
+docs/               spec, decisions, phase checklists, P0 validation report
 examples/minimal    smallest valid project
 ```
