@@ -63,7 +63,12 @@ cli:
   lock:
     about: "Resolve and write rospm.lock (roadmap P2)"
   verify:
-    about: "Compare rospm.lock with the current environment (roadmap P2)"
+    about: "Compare rospm.lock with the current environment (read-only)"
+    no_lock: "no %{file} found; run `rospm lock` first"
+    manifest_ok: "matches the lock"
+    manifest_changed: "manifest changed since lock (run `rospm lock`)"
+    manifest_line: "manifest    %{path}"
+    lock_line: "lock        %{path}"
   apply:
     about: "Set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
     locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
@@ -212,6 +217,26 @@ net:
   failed: "FAILED  %{error}"
   timeout: "timed out after %{secs} s"
   http_status: "HTTP %{status}"
+
+verify:
+  provider:
+    subject: "provider"
+  snapshot:
+    ros_subject: "ros snapshot"
+    ubuntu_subject: "ubuntu snapshot"
+    degraded: "live repository (degraded)"
+  source:
+    workspace_missing: "workspace `%{workspace}` is not in the manifest"
+    not_verified_other: "not verified (%{kind})"
+    git_unavailable: "git not found; cannot check the revision"
+    head_unknown: "could not read HEAD"
+    matches: "@ %{head}"
+    rev_mismatch: "@ %{head} (locked: %{expected})"
+  apt:
+    other_platform: "%{count} entries for %{platform} not checked on this host"
+    none_for_host: "no apt entries locked for %{platform}"
+  pip:
+    unavailable: "pip not found; cannot check installed versions"
 
 native:
   unknown_os: "unknown OS"
