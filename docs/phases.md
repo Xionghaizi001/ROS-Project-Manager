@@ -93,7 +93,7 @@
 
 ## Phase 1.5 — 输出本地化 i18n（约 1 周）
 
-状态：**完成**（2026-09-26）。决策 #16，规则见 spec §4.2。插在 P1 与 P2 之间：P1 的命令集已稳定，现存面向用户的字符串约 150 条（CLI 输出 43、计划注释与探测报告 68、`init --from-env` 说明 32），回填成本可控；P2 起每个阶段都会新增大量字符串，晚做只会更贵。不阻塞 P1 的干净虚拟机验收，可并行。
+状态：**完成，余一项待办**（2026-09-26）。决策 #16，规则见 spec §4.2。插在 P1 与 P2 之间：P1 的命令集已稳定，现存面向用户的字符串约 150 条（CLI 输出 43、计划注释与探测报告 68、`init --from-env` 说明 32），回填成本可控；P2 起每个阶段都会新增大量字符串，晚做只会更贵。不阻塞 P1 的干净虚拟机验收，可并行。
 
 - [x] 选库并落基础设施（2026-09-26）：`rust-i18n`，资源 `crates/rospm-cli/locales/{en,zh-CN}.yml` 编译期嵌入。`rospm-core` 新增 `message::Message`（原样文本或键 + 参数）与 `msg!` 宏；计划标题 / 注释、探测报告各列、`Error`、`init --from-env` 的 notes / todos / 草稿注释全部改为 `Message`，CLI 用 `set_renderer` 安装渲染函数，核心库不依赖 locale（未安装渲染器时显示 `key(arg=value)`）。
 - [x] locale 选择（2026-09-26）：`--lang` > `ROSPM_LANG` > `LANGUAGE`（冒号列表，取首个 `zh*` / `en*`）> `LC_ALL` > `LC_MESSAGES` > `LANG`；`zh*` → `zh-CN`，其余（含未设置 / `C` / `POSIX`）→ `en`。在构建 clap 命令之前完成，`--help` 与自实现的 `help` 子命令、章节标题均本地化。单测覆盖 `zh_CN.UTF-8` / `zh_TW` / `C` / `POSIX` / 未设置 / `LANGUAGE=zh:en` / `LANGUAGE=en:zh` / `LC_ALL` 优先级 / `--lang` 与 `ROSPM_LANG` 覆盖。
@@ -101,6 +101,8 @@
 - [x] `init` 模板按语言选文件（`templates/rospm.{en,zh-CN}.toml`），`--base` 改为按行重写 `ros_base`；单测断言两份模板（含 `--base` 改写后）都通过 `Manifest::parse`。
 - [x] 单测：两种语言键集合与占位符集合一致（`_test.*` 键只在 en 中，用于测缺键回退）；缺键回退英文、两边都缺时返回键名，不 panic。CLI 集成测试显式设 `LANG=C` / `LANG=zh_CN.UTF-8`，断言中文输出与退出码不变、`--json` 枚举值仍为英文。CI 冒烟增加 `LANG=zh_CN.UTF-8` 一轮（`--help` / `check` / `apply --dry-run` / 错误）。
 - [x] `docs/spec.md` §4.2 补充实现说明，README 增加 "Language / 语言切换"。
+- [x] 与 P1 实机验证 / 镜像功能合并（2026-09-26）：密钥下载步骤、镜像注释、rosdep 源改写提示、`colcon mixin` 探测、测速表与 `--mirror` 全部提示走键；`Message` 不接受裸 `&str`，漏翻直接编译失败；`--mirror` 帮助隐藏 clap 附加的英文 possible-values。
+- [ ] **locale 探测与系统 locale 修改脱钩**：`apply` 目前用当前进程的 `LC_ALL` / `LC_CTYPE` / `LANG` 判断"locale 是否 UTF-8"，用户只要以 `LANG=C` 调用（CI、脚本、或像 P1.5 测试那样临时切英文输出）就会触发系统级 `update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8`，覆盖用户原有的 `/etc/default/locale`（2026-09-26 在验证主机上实际发生，原 `LANG=zh_CN.UTF-8` 被改为 en_US 并多出 `LC_ALL`）。待办：探测改读 `/etc/default/locale`（无该文件再看进程环境）；只在系统 locale 非 UTF-8 时才计划 `locale-gen` + `update-locale`，且只设 `LANG`、不设 `LC_ALL`；`check` / `doctor` 的 locale 行同步区分"系统 locale"与"当前 shell"；计划注释说明改了哪个文件。P1.5 的语言选择（输出语言）与此无关，保持只看进程环境。
 - **产出**：`LANG=zh_CN.UTF-8` 下 `--help` / `check` / `apply --dry-run` / 错误信息全部为中文，`LANG=C` 下全部为英文。此后 review 把裸英文用户字符串视为缺陷。
 
 ---
