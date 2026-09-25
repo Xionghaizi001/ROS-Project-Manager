@@ -13,11 +13,14 @@
 //! - [`probe`]: read-only facts about the host (OS, ROS installs, dpkg, rosdep).
 //! - [`introspect`]: `init --from-env`, a best-effort draft manifest from the
 //!   host and the project directory (decision #3).
+//! - [`message`]: locale-independent user-facing text. The library emits
+//!   message keys + arguments; the CLI renders them (spec §4.2).
 
 pub mod error;
 pub mod introspect;
 pub mod lock;
 pub mod manifest;
+pub mod message;
 pub mod package_xml;
 pub mod plan;
 pub mod platform;
@@ -27,3 +30,4 @@ pub mod repos;
 pub mod scm;
 
 pub use error::{Error, Result};
+pub use message::Message;

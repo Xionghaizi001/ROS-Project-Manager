@@ -22,6 +22,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::manifest::{Manifest, ProviderKind, RESERVED_ENV};
+use crate::message::Message;
+use crate::msg;
 use crate::package_xml::WorkspacePackages;
 use crate::platform::{ubuntu_codename, Platform, RosDistro};
 use crate::probe::{Host, OsRelease, PackageDb};
@@ -145,7 +147,7 @@ pub struct DraftWorkspace {
     pub colcon_defaults: Option<PathBuf>,
     pub packages: usize,
     /// How this workspace was found (shown as a comment).
-    pub origin: String,
+    pub origin: Message,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,10 +166,11 @@ pub struct Draft {
     pub vscode: bool,
     pub clion: bool,
     pub devcontainer: bool,
-    /// Fields that could not be detected, with the reason.
-    pub todos: Vec<String>,
+    /// Fields that could not be detected, with the reason. Keys are namespaced
+    /// by manifest field (`init.ros_base.*`, `init.workspaces.*`, …).
+    pub todos: Vec<Message>,
     /// Facts that were detected, with their source.
-    pub notes: Vec<String>,
+    pub notes: Vec<Message>,
 }
 
 /// Build a draft for the project in `root`.
@@ -209,13 +212,11 @@ fn detect_platform(d: &mut Draft, facts: &HostFacts) {
     match facts.platform {
         Some(p) => {
             d.platforms.push(p);
-            d.notes.push(format!("project.platforms: host is {p}"));
+            d.notes.push(msg!("init.platforms.host", platform = p));
         }
         None => {
             d.platforms.push(Platform::LinuxX86_64);
-            d.todos.push(
-                "project.platforms: host platform unsupported, defaulted to linux-x86_64".into(),
-            );
+            d.todos.push(msg!("init.platforms.unsupported"));
         }
     }
 }
@@ -225,16 +226,14 @@ fn detect_provider(d: &mut Draft, root: &Path) {
     if pixi.is_file() {
         d.provider = ProviderKind::Pixi;
         d.pixi_manifest = Some(PathBuf::from("pixi.toml"));
-        d.notes.push(
-            "environment.provider: pixi.toml found, using the pixi provider (roadmap P3)".into(),
-        );
+        d.notes.push(msg!("init.provider.pixi"));
         if let Some(distro) = fs::read_to_string(&pixi)
             .ok()
             .and_then(|t| distro_from_pixi(&t))
         {
             d.ros_distro = Some(distro);
             d.notes
-                .push(format!("project.ros_distro: {distro} from pixi.toml"));
+                .push(msg!("init.ros_distro.from_pixi", distro = distro));
         }
     }
 }
@@ -277,12 +276,13 @@ fn detect_distro(d: &mut Draft, facts: &HostFacts) {
         match env.parse::<RosDistro>() {
             Ok(distro) => {
                 d.ros_distro = Some(distro);
-                d.notes.push(format!("project.ros_distro: {distro} from $ROS_DISTRO"));
+                d.notes
+                    .push(msg!("init.ros_distro.from_env", distro = distro));
                 return;
             }
-            Err(_) => d.todos.push(format!(
-                "project.ros_distro: $ROS_DISTRO is `{env}`, which rospm does not support (humble, jazzy, rolling)"
-            )),
+            Err(_) => d
+                .todos
+                .push(msg!("init.ros_distro.env_unsupported", value = env)),
         }
     }
     // A sourced install shows up in AMENT_PREFIX_PATH as /opt/ros/<distro>.
@@ -294,9 +294,8 @@ fn detect_distro(d: &mut Draft, facts: &HostFacts) {
                 .map(|c| c.as_os_str().to_string_lossy().parse::<RosDistro>())
             {
                 d.ros_distro = Some(distro);
-                d.notes.push(format!(
-                    "project.ros_distro: {distro} from $AMENT_PREFIX_PATH"
-                ));
+                d.notes
+                    .push(msg!("init.ros_distro.from_ament", distro = distro));
                 return;
             }
         }
@@ -309,15 +308,18 @@ fn detect_distro(d: &mut Draft, facts: &HostFacts) {
     match supported.as_slice() {
         [one] => {
             d.ros_distro = Some(*one);
-            d.notes.push(format!("project.ros_distro: {one} is the only ROS install under /opt/ros"));
+            d.notes
+                .push(msg!("init.ros_distro.only_install", distro = one));
         }
-        [] => d.todos.push(
-            "project.ros_distro: no $ROS_DISTRO and no supported ROS install under /opt/ros; defaulted to jazzy".into(),
-        ),
-        many => d.todos.push(format!(
-            "project.ros_distro: several ROS installs found ({}); source one before running `init --from-env`, or pick manually (defaulted to {})",
-            many.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
-            many[0]
+        [] => d.todos.push(msg!("init.ros_distro.none")),
+        many => d.todos.push(msg!(
+            "init.ros_distro.several",
+            distros = many
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+            default = many[0]
         )),
     }
     if d.ros_distro.is_none() {
@@ -333,26 +335,23 @@ fn detect_os(d: &mut Draft, facts: &HostFacts) {
         Some(os) if os.is_ubuntu() => match &os.version_id {
             Some(v) => {
                 if ubuntu_codename(v).is_none() {
-                    d.todos.push(format!(
-                        "environment.native.ubuntu: host runs Ubuntu {v}, which is outside the supported matrix (22.04, 24.04)"
-                    ));
+                    d.todos
+                        .push(msg!("init.ubuntu.unsupported_release", version = v));
                 }
                 d.ubuntu = Some(v.clone());
-                d.notes.push(format!(
-                    "environment.native.ubuntu: {v} from /etc/os-release"
-                ));
+                d.notes
+                    .push(msg!("init.ubuntu.from_os_release", version = v));
             }
-            None => d
-                .todos
-                .push("environment.native.ubuntu: /etc/os-release has no VERSION_ID".into()),
+            None => d.todos.push(msg!("init.ubuntu.no_version_id")),
         },
-        Some(os) => d.todos.push(format!(
-            "environment.native.ubuntu: host is {}, not Ubuntu; native provider needs Ubuntu",
-            os.pretty_name.clone().unwrap_or_else(|| "unknown".into())
+        Some(os) => d.todos.push(msg!(
+            "init.ubuntu.not_ubuntu",
+            os = os
+                .pretty_name
+                .clone()
+                .unwrap_or_else(|| msg!("native.unknown_os").to_string())
         )),
-        None => d
-            .todos
-            .push("environment.native.ubuntu: /etc/os-release not readable".into()),
+        None => d.todos.push(msg!("init.ubuntu.os_release_unreadable")),
     }
 }
 
@@ -361,8 +360,7 @@ fn detect_ros_base(d: &mut Draft, facts: &HostFacts) {
         return;
     }
     let Some(distro) = d.ros_distro else {
-        d.todos
-            .push("environment.native.ros_base: depends on ros_distro, left at the default".into());
+        d.todos.push(msg!("init.ros_base.needs_distro"));
         return;
     };
     let candidates: Vec<String> = ["desktop-full", "desktop", "ros-base"]
@@ -370,21 +368,22 @@ fn detect_ros_base(d: &mut Draft, facts: &HostFacts) {
         .map(|suffix| format!("ros-{distro}-{suffix}"))
         .collect();
     match facts.packages.status(&candidates) {
-        None => d.todos.push(
-            "environment.native.ros_base: dpkg-query unavailable, cannot tell which metapackage is installed".into(),
-        ),
+        None => d.todos.push(msg!("init.ros_base.dpkg_unavailable")),
         Some(status) => match candidates.iter().find(|c| status[*c].installed) {
             Some(pkg) => {
                 d.ros_base = Some(pkg.clone());
-                d.notes.push(format!("environment.native.ros_base: {pkg} is installed"));
+                d.notes.push(msg!("init.ros_base.installed", package = pkg));
             }
-            None if facts.installed_distros.iter().any(|x| x == distro.as_str()) => d.todos.push(format!(
-                "environment.native.ros_base: /opt/ros/{distro} exists but none of {} is installed (source install?)",
-                candidates.join(", ")
-            )),
-            None => d.todos.push(format!(
-                "environment.native.ros_base: ROS {distro} is not installed on this host"
-            )),
+            None if facts.installed_distros.iter().any(|x| x == distro.as_str()) => {
+                d.todos.push(msg!(
+                    "init.ros_base.no_metapackage",
+                    distro = distro,
+                    candidates = candidates.join(", ")
+                ))
+            }
+            None => d
+                .todos
+                .push(msg!("init.ros_base.distro_not_installed", distro = distro)),
         },
     }
 }
@@ -397,9 +396,9 @@ fn detect_env(d: &mut Draft, facts: &HostFacts) {
         d.env.insert(k.clone(), v.clone());
     }
     if !d.env.is_empty() {
-        d.notes.push(format!(
-            "env: {} from the current environment",
-            d.env.keys().cloned().collect::<Vec<_>>().join(", ")
+        d.notes.push(msg!(
+            "init.env.from_environment",
+            keys = d.env.keys().cloned().collect::<Vec<_>>().join(", ")
         ));
     }
 }
@@ -545,18 +544,17 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
         let repos = match ReposFile::load(&file) {
             Ok(r) => r,
             Err(e) => {
-                d.todos.push(format!(
-                    "workspaces: {} could not be parsed and was ignored: {e}",
-                    rel.display()
+                d.todos.push(msg!(
+                    "init.workspaces.repos_unparseable",
+                    file = rel.display(),
+                    error = e
                 ));
                 continue;
             }
         };
         if repos.repositories.is_empty() {
-            d.notes.push(format!(
-                "workspaces: {} lists no repositories and was ignored",
-                rel.display()
-            ));
+            d.notes
+                .push(msg!("init.workspaces.repos_empty", file = rel.display()));
             continue;
         }
         let best = candidates
@@ -573,19 +571,24 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
             .max_by_key(|(hits, _)| *hits);
         match best {
             Some((hits, c)) if c.sources.is_none() => {
-                d.notes.push(format!(
-                    "workspaces: {} matches {} ({hits}/{} repositories imported)",
-                    rel.display(),
-                    c.rel.display(),
-                    repos.repositories.len()
+                d.notes.push(msg!(
+                    "init.workspaces.repos_matched",
+                    file = rel.display(),
+                    workspace = c.rel.display(),
+                    hits = hits,
+                    total = repos.repositories.len()
                 ));
                 c.sources = Some(rel);
             }
-            Some((_, c)) => d.todos.push(format!(
-                "workspaces: {} also matches {} but it already uses {}; a workspace has one sources file",
-                rel.display(),
-                c.rel.display(),
-                c.sources.as_ref().map(|s| s.display().to_string()).unwrap_or_default()
+            Some((_, c)) => d.todos.push(msg!(
+                "init.workspaces.repos_conflict",
+                file = rel.display(),
+                workspace = c.rel.display(),
+                existing = c
+                    .sources
+                    .as_ref()
+                    .map(|s| s.display().to_string())
+                    .unwrap_or_default()
             )),
             None => unmatched_repos.push((rel, repos)),
         }
@@ -603,10 +606,10 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
             .collect();
         if let [i] = without_sources.as_slice() {
             let (rel, _) = unmatched_repos.remove(0);
-            d.notes.push(format!(
-                "workspaces: {} assigned to {} (its repositories are not imported yet)",
-                rel.display(),
-                candidates[*i].rel.display()
+            d.notes.push(msg!(
+                "init.workspaces.repos_assigned",
+                file = rel.display(),
+                workspace = candidates[*i].rel.display()
             ));
             candidates[*i].sources = Some(rel);
         }
@@ -642,9 +645,9 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
         for pair in sourced.iter().rev().collect::<Vec<_>>().windows(2) {
             underlays[*pair[1]].push(names[*pair[0]].clone());
         }
-        d.notes.push(format!(
-            "workspaces.*.underlays: overlay order from $AMENT_PREFIX_PATH: {}",
-            sourced
+        d.notes.push(msg!(
+            "init.underlays.from_ament",
+            order = sourced
                 .iter()
                 .rev()
                 .map(|i| names[*i].as_str())
@@ -652,29 +655,24 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
                 .join(" -> ")
         ));
     } else if candidates.len() >= 2 {
-        d.todos.push(
-            "workspaces.*.underlays: several workspaces but no overlay order in $AMENT_PREFIX_PATH; declare which sits on which".into(),
-        );
+        d.todos.push(msg!("init.underlays.unknown_order"));
     }
 
     let mut colcon_defaults: Option<PathBuf> = None;
     if let Some(f) = &facts.colcon_defaults_file {
         match f.canonicalize() {
-            Err(_) => d.todos.push(format!(
-                "workspaces.*.colcon.defaults: $COLCON_DEFAULTS_FILE={} does not exist and was not recorded",
-                f.display()
-            )),
+            Err(_) => d
+                .todos
+                .push(msg!("init.colcon_defaults.missing", file = f.display())),
             Ok(abs) => match abs.strip_prefix(root) {
                 Ok(rel) => {
-                    d.notes.push(format!(
-                        "workspaces.*.colcon.defaults: {} from $COLCON_DEFAULTS_FILE",
-                        rel.display()
-                    ));
+                    d.notes
+                        .push(msg!("init.colcon_defaults.from_env", file = rel.display()));
                     colcon_defaults = Some(rel.to_path_buf());
                 }
-                Err(_) => d.todos.push(format!(
-                    "workspaces.*.colcon.defaults: $COLCON_DEFAULTS_FILE={} lies outside the project and was not recorded",
-                    f.display()
+                Err(_) => d.todos.push(msg!(
+                    "init.colcon_defaults.outside_project",
+                    file = f.display()
                 )),
             },
         }
@@ -687,22 +685,31 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
     }
     for (i, c) in candidates.iter().enumerate() {
         let n = c.packages.packages.len();
-        let origin = format!(
-            "found {}/src with {n} package{}{}{}",
-            c.rel.display(),
-            if n == 1 { "" } else { "s" },
-            if c.built { ", built" } else { "" },
-            if c.sources.is_some() {
-                ""
+        let origin = msg!(
+            "init.origin.found",
+            dir = c.rel.display(),
+            packages = if n == 1 {
+                msg!("init.origin.one_package").to_string()
             } else {
-                ", no matching .repos"
+                msg!("init.origin.n_packages", count = n).to_string()
+            },
+            built = if c.built {
+                msg!("init.origin.built").to_string()
+            } else {
+                String::new()
+            },
+            repos = if c.sources.is_some() {
+                String::new()
+            } else {
+                msg!("init.origin.no_repos").to_string()
             }
         );
         for (file, err) in &c.packages.errors {
-            d.todos.push(format!(
-                "workspaces.{}: {} is not a valid package.xml: {err}",
-                names[i],
-                file.display()
+            d.todos.push(msg!(
+                "init.workspaces.invalid_package_xml",
+                workspace = names[i],
+                file = file.display(),
+                error = err
             ));
         }
         for key in c.packages.external_keys().keys() {
@@ -740,10 +747,11 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
         } else {
             PathBuf::from(format!("{name}_ws"))
         };
-        d.todos.push(format!(
-            "workspaces.{name}.path: {} is not imported anywhere; path `{}` is a guess",
-            rel.display(),
-            path.display()
+        d.todos.push(msg!(
+            "init.workspaces.path_guessed",
+            workspace = name,
+            file = rel.display(),
+            path = path.display()
         ));
         d.workspaces.push(DraftWorkspace {
             name,
@@ -752,16 +760,16 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
             underlays: Vec::new(),
             colcon_defaults: None,
             packages: 0,
-            origin: format!(
-                "{} lists {} repositories, none imported",
-                rel.display(),
-                repos.repositories.len()
+            origin: msg!(
+                "init.origin.repos_not_imported",
+                file = rel.display(),
+                count = repos.repositories.len()
             ),
         });
     }
 
     if d.workspaces.is_empty() {
-        d.todos.push("workspaces: no `src/` directory and no .repos file found; a placeholder workspace was written".into());
+        d.todos.push(msg!("init.workspaces.placeholder"));
         d.workspaces.push(DraftWorkspace {
             name: "main".into(),
             path: PathBuf::from("ws"),
@@ -769,18 +777,18 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
             underlays: Vec::new(),
             colcon_defaults: None,
             packages: 0,
-            origin: "placeholder".into(),
+            origin: msg!("init.origin.placeholder"),
         });
     }
 
     d.external_keys = all_keys.into_iter().collect();
     if !d.external_keys.is_empty() {
-        d.notes.push(format!(
-            "dependencies: {} rosdep keys referenced by package.xml (left to rosdep, listed as a comment)",
-            d.external_keys.len()
+        d.notes.push(msg!(
+            "init.dependencies.rosdep_keys",
+            count = d.external_keys.len()
         ));
     }
-    d.todos.push("dependencies.apt: extra apt packages outside package.xml cannot be detected; add them by hand".into());
+    d.todos.push(msg!("init.dependencies.apt_undetectable"));
 }
 
 // ---------------------------------------------------------------- rendering
@@ -804,21 +812,28 @@ impl Draft {
     /// The manifest text. Guaranteed to parse; see [`Draft::validate`].
     pub fn render(&self) -> String {
         let mut o = String::new();
-        o.push_str("# rospm project manifest, drafted by `rospm init --from-env`.\n");
-        o.push_str("# Lines marked TODO could not be detected reliably and need review.\n");
-        o.push_str("# Field reference: docs/spec.md §2.\n");
+        o.push_str(&format!("# {}\n", msg!("draft.header.drafted_by")));
+        o.push_str(&format!("# {}\n", msg!("draft.header.todo_lines")));
+        o.push_str(&format!("# {}\n", msg!("draft.header.reference")));
         o.push_str("schema_version = 1\n\n");
 
         o.push_str("[project]\n");
         o.push_str(&format!("name = {}\n", q(&self.name)));
         match self.ros_distro {
-            Some(d) => o.push_str(&format!("ros_distro = {:<24} # humble | jazzy | rolling\n", q(d.as_str()))),
-            None => o.push_str("ros_distro = \"jazzy\"                  # TODO: not detected; humble | jazzy | rolling\n"),
+            Some(d) => o.push_str(&format!(
+                "ros_distro = {:<24} # humble | jazzy | rolling\n",
+                q(d.as_str())
+            )),
+            None => o.push_str(&format!(
+                "ros_distro = \"jazzy\"                  # TODO: {}; humble | jazzy | rolling\n",
+                msg!("draft.not_detected")
+            )),
         }
         let platforms: Vec<String> = self.platforms.iter().map(ToString::to_string).collect();
         o.push_str(&format!(
-            "platforms = {:<25} # add \"linux-aarch64\" for ARM targets\n\n",
-            list(&platforms)
+            "platforms = {:<25} # {}\n\n",
+            list(&platforms),
+            msg!("draft.platforms_hint")
         ));
 
         o.push_str("[environment]\n");
@@ -841,11 +856,19 @@ impl Draft {
                 o.push_str("[environment.native]\n");
                 match &self.ubuntu {
                     Some(u) => o.push_str(&format!("ubuntu = {}\n", q(u))),
-                    None => o.push_str("# ubuntu = \"24.04\"                     # TODO: not detected; defaults to the distro's release\n"),
+                    None => o.push_str(&format!(
+                        "# ubuntu = \"24.04\"                     # TODO: {}; {}\n",
+                        msg!("draft.not_detected"),
+                        msg!("draft.ubuntu_hint")
+                    )),
                 }
                 match &self.ros_base {
                     Some(b) => o.push_str(&format!("ros_base = {}\n", q(b))),
-                    None => o.push_str("# ros_base = \"ros-<distro>-ros-base\"    # TODO: not detected; or ros-<distro>-desktop\n"),
+                    None => o.push_str(&format!(
+                        "# ros_base = \"ros-<distro>-ros-base\"    # TODO: {}; {}\n",
+                        msg!("draft.not_detected"),
+                        msg!("draft.ros_base_hint")
+                    )),
                 }
                 o.push('\n');
             }
@@ -858,15 +881,19 @@ impl Draft {
             o.push_str(&format!("path = {}\n", qp(&ws.path)));
             match &ws.sources {
                 Some(s) => o.push_str(&format!("sources = {}\n", qp(s))),
-                None => o.push_str("# sources = \"main.repos\"              # TODO: no .repos file matched; omit for purely local sources\n"),
+                None => o.push_str(&format!(
+                    "# sources = \"main.repos\"              # TODO: {}\n",
+                    msg!("draft.sources_hint")
+                )),
             }
             if ws.underlays.is_empty()
                 && self.workspaces.len() > 1
                 && self.workspaces.iter().all(|w| w.underlays.is_empty())
             {
-                o.push_str(
-                    "underlays = []                        # TODO: overlay order not detected\n",
-                );
+                o.push_str(&format!(
+                    "underlays = []                        # TODO: {}\n",
+                    msg!("draft.underlays_hint")
+                ));
             } else {
                 o.push_str(&format!("underlays = {}\n", list(&ws.underlays)));
             }
@@ -875,17 +902,26 @@ impl Draft {
             if let Some(f) = &ws.colcon_defaults {
                 o.push_str(&format!("defaults = {}\n", qp(f)));
             }
-            o.push_str("mixins = []                           # TODO: colcon mixins are not recoverable from an environment (decision #8)\n");
+            o.push_str(&format!(
+                "mixins = []                           # TODO: {}\n",
+                msg!("draft.mixins_hint")
+            ));
             o.push_str("build_args = [\"--symlink-install\"]\n\n");
         }
 
         o.push_str("[dependencies]\n");
-        o.push_str("apt = []                              # TODO: extra apt packages not covered by package.xml\n");
-        o.push_str("pip = []                              # recorded only, installed via rosdep (decision #6)\n");
+        o.push_str(&format!(
+            "apt = []                              # TODO: {}\n",
+            msg!("draft.apt_hint")
+        ));
+        o.push_str(&format!(
+            "pip = []                              # {}\n",
+            msg!("draft.pip_hint")
+        ));
         if !self.external_keys.is_empty() {
             o.push_str(&format!(
-                "# {} rosdep keys referenced by package.xml (resolved by `rosdep install`, nothing to declare):\n",
-                self.external_keys.len()
+                "# {}\n",
+                msg!("draft.rosdep_keys", count = self.external_keys.len())
             ));
             for chunk in self.external_keys.chunks(8) {
                 o.push_str(&format!("#   {}\n", chunk.join(" ")));
@@ -898,7 +934,10 @@ impl Draft {
 
         o.push_str("[env]\n");
         if self.env.is_empty() {
-            o.push_str("# ROS_DOMAIN_ID = \"0\"                  # TODO: no ROS_* variables set in the current environment\n");
+            o.push_str(&format!(
+                "# ROS_DOMAIN_ID = \"0\"                  # TODO: {}\n",
+                msg!("draft.env_hint")
+            ));
         }
         for (k, v) in &self.env {
             o.push_str(&format!("{k} = {}\n", q(v)));
@@ -949,8 +988,11 @@ mod tests {
         let d = draft(&root, &HostFacts::empty());
         assert_eq!(d.workspaces.len(), 1);
         assert!(d.ros_distro.is_none());
-        assert!(d.todos.iter().any(|t| t.contains("project.ros_distro")));
-        assert!(d.todos.iter().any(|t| t.contains("workspaces: no `src/`")));
+        assert!(d.todos.iter().any(|t| t.has_key_prefix("init.ros_distro.")));
+        assert!(d
+            .todos
+            .iter()
+            .any(|t| t.key_name() == Some("init.workspaces.placeholder")));
         let text = d.render();
         assert!(text.contains("TODO"), "{text}");
         d.validate().expect("draft must always validate");
@@ -1033,8 +1075,14 @@ mod tests {
         assert_eq!(main.underlays, vec!["deps"]);
         let extra = &d.workspaces[2];
         assert_eq!(extra.path, PathBuf::from("extra_ws"));
-        assert!(d.todos.iter().any(|t| t.contains("extra.repos")));
-        assert!(d.todos.iter().any(|t| t.contains("other.repos")));
+        assert!(d
+            .todos
+            .iter()
+            .any(|t| t.to_string().contains("extra.repos")));
+        assert!(d
+            .todos
+            .iter()
+            .any(|t| t.to_string().contains("other.repos")));
 
         // pkg_a is provided by the deps workspace, so only external keys remain.
         assert_eq!(d.external_keys, vec!["nav2_bringup", "rclcpp"]);
@@ -1081,7 +1129,10 @@ mod tests {
         assert_eq!(d.workspaces.len(), 1);
         assert_eq!(d.workspaces[0].path, PathBuf::from("."));
         assert!(d.workspaces[0].sources.is_none());
-        assert!(d.notes.iter().any(|n| n.contains("lists no repositories")));
+        assert!(d
+            .notes
+            .iter()
+            .any(|n| n.key_name() == Some("init.workspaces.repos_empty")));
         d.validate().unwrap();
     }
 
@@ -1110,7 +1161,10 @@ mod tests {
         facts.installed_distros = vec!["humble".into(), "jazzy".into()];
         let d = draft(&root, &facts);
         assert_eq!(d.ros_distro, Some(RosDistro::Humble));
-        assert!(d.todos.iter().any(|t| t.contains("several ROS installs")));
+        assert!(d
+            .todos
+            .iter()
+            .any(|t| t.key_name() == Some("init.ros_distro.several")));
         d.validate().unwrap();
     }
 

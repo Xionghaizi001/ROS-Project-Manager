@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, ProviderKind};
+use crate::message::Message;
+use crate::msg;
 use crate::package_xml::WorkspacePackages;
 use crate::plan::{shell_quote, Command, Plan};
 use crate::platform::ubuntu_codename;
@@ -58,20 +60,19 @@ impl Provider for Native {
         let m = ctx.manifest;
         let host = ctx.host;
         let distro = m.project.ros_distro;
-        let mut plan = Plan::new(format!(
-            "apply `{}` (native, {}, {})",
-            m.project.name, distro, ctx.platform
+        let mut plan = Plan::new(msg!(
+            "native.apply.title",
+            name = m.project.name,
+            distro = distro,
+            platform = ctx.platform
         ));
 
         if ctx.locked {
-            plan.note(
-                "--locked: snapshot repositories are not implemented yet (roadmap P2); \
-                 DEGRADED to live repositories",
-            );
+            plan.note(msg!("native.apply.locked_degraded"));
         }
         if ctx.offline {
             return Err(Error::NotImplemented {
-                feature: "offline apply",
+                feature: "apply --offline",
                 phase: "P6",
             });
         }
@@ -79,12 +80,8 @@ impl Provider for Native {
         // 0. Refuse to install onto the wrong Ubuntu: ROS binaries exist for
         // exactly one release per distro, and rospm never changes the OS.
         let ubuntu = m.ubuntu();
-        let codename = ubuntu_codename(&ubuntu).ok_or_else(|| {
-            Error::Host(format!(
-                "no ROS apt repository for Ubuntu {ubuntu} (environment.native.ubuntu); \
-                 supported: 22.04 (humble), 24.04 (jazzy, rolling)"
-            ))
-        })?;
+        let codename = ubuntu_codename(&ubuntu)
+            .ok_or_else(|| Error::Host(msg!("native.apply.no_repo_for_ubuntu", ubuntu = ubuntu)))?;
         match host.ubuntu_matches(&ubuntu) {
             Some(true) => {}
             Some(false) => {
@@ -92,15 +89,19 @@ impl Provider for Native {
                     .os
                     .as_ref()
                     .and_then(|os| os.pretty_name.clone())
-                    .unwrap_or_else(|| "unknown OS".into());
-                return Err(Error::Host(format!(
-                    "manifest needs Ubuntu {ubuntu} for ROS {distro}, this host is {have}; \
-                     rospm does not install or upgrade Ubuntu itself"
+                    .unwrap_or_else(|| msg!("native.unknown_os").to_string());
+                return Err(Error::Host(msg!(
+                    "native.apply.wrong_ubuntu",
+                    ubuntu = ubuntu,
+                    distro = distro,
+                    have = have
                 )));
             }
             None => {
-                plan.note(format!(
-                    "/etc/os-release is unreadable; assuming Ubuntu {ubuntu} ({codename})"
+                plan.note(msg!(
+                    "native.apply.os_release_unreadable",
+                    ubuntu = ubuntu,
+                    codename = codename
                 ));
             }
         }
@@ -140,10 +141,7 @@ impl Provider for Native {
                     .args(["LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8"])
                     .sudo(),
             );
-            plan.note(
-                "locale switched to en_US.UTF-8 system-wide; run `export LANG=en_US.UTF-8` \
-                 in the current shell or log in again",
-            );
+            plan.note(msg!("native.apply.locale_switched"));
         }
         if need_universe {
             plan.run(
@@ -167,9 +165,9 @@ impl Provider for Native {
             );
             plan.run(Command::new("apt-get").arg("update").sudo());
         } else if let Some(file) = &host.apt_sources.ros2 {
-            plan.note(format!(
-                "ROS apt source already configured in {}",
-                file.display()
+            plan.note(msg!(
+                "native.apply.source_already_configured",
+                file = file.display()
             ));
         }
 
@@ -243,9 +241,9 @@ impl Provider for Native {
 
         // 6. pip is recorded only (decision #6).
         if !m.dependencies.pip.is_empty() {
-            plan.note(format!(
-                "pip dependencies are recorded but not installed by rospm (decision #6): {}",
-                m.dependencies.pip.join(", ")
+            plan.note(msg!(
+                "native.apply.pip_recorded_only",
+                packages = m.dependencies.pip.join(", ")
             ));
         }
 
@@ -256,9 +254,10 @@ impl Provider for Native {
         let m = ctx.manifest;
         let host = ctx.host;
         let distro = m.project.ros_distro;
-        let mut plan = Plan::new(format!(
-            "uninstall ROS {distro} (native) for `{}`",
-            m.project.name
+        let mut plan = Plan::new(msg!(
+            "native.uninstall.title",
+            distro = distro,
+            name = m.project.name
         ));
 
         // Name every package explicitly so the plan says exactly what goes;
@@ -267,19 +266,14 @@ impl Provider for Native {
         let packages = host
             .packages
             .installed_with_prefix(&prefix)
-            .ok_or_else(|| {
-                Error::Host(
-                    "dpkg-query is unavailable, cannot list the installed ROS packages".into(),
-                )
-            })?;
+            .ok_or_else(|| Error::Host(msg!("native.uninstall.dpkg_unavailable")))?;
         if packages.is_empty() {
-            plan.note(format!(
-                "no {prefix}* packages are installed; nothing to remove"
-            ));
+            plan.note(msg!("native.uninstall.nothing_installed", prefix = prefix));
         } else {
-            plan.note(format!(
-                "removing {} {prefix}* packages (listed below)",
-                packages.len()
+            plan.note(msg!(
+                "native.uninstall.removing",
+                count = packages.len(),
+                prefix = prefix
             ));
             plan.run(
                 Command::new("apt-get")
@@ -289,15 +283,12 @@ impl Provider for Native {
             );
             plan.run(Command::new("apt-get").args(["autoremove", "-y"]).sudo());
         }
-        plan.note(
-            "python3-rosdep, python3-vcstool and python3-colcon-common-extensions are left \
-             installed (shared tooling); remove them by hand if unwanted",
-        );
+        plan.note(msg!("native.uninstall.tooling_kept"));
         if host.has_ros_distro(distro.as_str()) {
-            plan.note(format!(
-                "files apt does not own may remain under {}; remove the directory by hand \
-                 after checking it",
-                host.ros_setup_file(distro.as_str())
+            plan.note(msg!(
+                "native.uninstall.files_may_remain",
+                dir = host
+                    .ros_setup_file(distro.as_str())
                     .parent()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default()
@@ -312,16 +303,16 @@ impl Provider for Native {
             .collect();
         match (&host.apt_sources.ros2, keep_source) {
             (None, _) => {
-                plan.note("no ROS apt source configured; nothing to remove");
+                plan.note(msg!("native.uninstall.no_source"));
             }
             (Some(_), true) => {
-                plan.note("--keep-source: ROS apt source left in place");
+                plan.note(msg!("native.uninstall.keep_source"));
             }
             (Some(file), false) if !others.is_empty() => {
-                plan.note(format!(
-                    "ROS apt source {} kept: other ROS installs remain under /opt/ros ({})",
-                    file.display(),
-                    others
+                plan.note(msg!(
+                    "native.uninstall.source_kept_other_distros",
+                    file = file.display(),
+                    others = others
                         .iter()
                         .map(|s| s.as_str())
                         .collect::<Vec<_>>()
@@ -337,10 +328,9 @@ impl Provider for Native {
                 plan.run(Command::new("apt-get").arg("update").sudo());
             }
             (Some(file), false) => {
-                plan.note(format!(
-                    "ROS apt source {} was not written by rospm (e.g. the ros2-apt-source package); \
-                     left in place",
-                    file.display()
+                plan.note(msg!(
+                    "native.uninstall.source_not_ours",
+                    file = file.display()
                 ));
             }
         }
@@ -360,10 +350,10 @@ impl Provider for Native {
             None => order,
         };
 
-        let mut plan = Plan::new(format!(
-            "build `{}` ({})",
-            m.project.name,
-            targets.join(" -> ")
+        let mut plan = Plan::new(msg!(
+            "native.build.title",
+            name = m.project.name,
+            order = targets.join(" -> ")
         ));
         for name in &targets {
             let ws = &m.workspaces[name];
@@ -422,23 +412,23 @@ impl Provider for Native {
         match host.platform {
             Some(p) if m.project.platforms.contains(&p) => r.push(
                 "platform",
-                "host",
+                msg!("probe.subject.host"),
                 listed.join(" | "),
                 p.to_string(),
                 Status::Ok,
             ),
             Some(p) => r.push(
                 "platform",
-                "host",
+                msg!("probe.subject.host"),
                 listed.join(" | "),
                 p.to_string(),
                 Status::Mismatch,
             ),
             None => r.push(
                 "platform",
-                "host",
+                msg!("probe.subject.host"),
                 listed.join(" | "),
-                "unsupported",
+                msg!("probe.platform.unsupported"),
                 Status::Mismatch,
             ),
         }
@@ -451,69 +441,82 @@ impl Provider for Native {
                 } else {
                     Status::Mismatch
                 };
-                r.push("os", "ubuntu", &want_ubuntu, have, status);
+                r.push("os", Message::text("ubuntu"), &want_ubuntu, have, status);
             }
             Some(os) => r.push(
                 "os",
-                "ubuntu",
+                Message::text("ubuntu"),
                 &want_ubuntu,
                 os.pretty_name
                     .clone()
-                    .unwrap_or_else(|| "not Ubuntu".into()),
+                    .map(Message::text)
+                    .unwrap_or_else(|| msg!("probe.os.not_ubuntu")),
                 Status::Mismatch,
             ),
             None => r.push(
                 "os",
-                "ubuntu",
+                Message::text("ubuntu"),
                 &want_ubuntu,
-                "unreadable /etc/os-release",
+                msg!("probe.os.unreadable"),
                 Status::Unknown,
             ),
         }
 
         // Prerequisites the official install guide sets up before ROS itself.
         let (s, actual) = if host.locale_utf8 {
-            (Status::Ok, "UTF-8".to_string())
+            (Status::Ok, Message::text("UTF-8"))
         } else {
-            (
-                Status::Missing,
-                "not UTF-8 (`rospm apply` sets en_US.UTF-8)".to_string(),
-            )
+            (Status::Missing, msg!("probe.locale.not_utf8"))
         };
-        r.push("os", "locale", "UTF-8", actual, s);
+        r.push(
+            "os",
+            msg!("probe.subject.locale"),
+            Message::text("UTF-8"),
+            actual,
+            s,
+        );
         let (s, actual) = match host.apt_sources.universe {
-            Some(true) => (Status::Ok, "enabled".to_string()),
-            Some(false) => (
-                Status::Missing,
-                "not enabled (`rospm apply` runs add-apt-repository universe)".to_string(),
-            ),
-            None => (Status::Unknown, "no apt source files readable".to_string()),
+            Some(true) => (Status::Ok, msg!("probe.universe.enabled")),
+            Some(false) => (Status::Missing, msg!("probe.universe.not_enabled")),
+            None => (Status::Unknown, msg!("probe.universe.unreadable")),
         };
-        r.push("apt", "universe component", "enabled", actual, s);
+        r.push(
+            "apt",
+            msg!("probe.subject.universe"),
+            msg!("probe.universe.enabled"),
+            actual,
+            s,
+        );
         let (s, actual) = match &host.apt_sources.ros2 {
-            Some(file) => (Status::Ok, file.display().to_string()),
+            Some(file) => (Status::Ok, Message::text(file.display().to_string())),
             None => (
                 Status::Missing,
-                format!("not configured (`rospm apply` writes {ROS_APT_LIST})"),
+                msg!("probe.ros_source.not_configured", file = ROS_APT_LIST),
             ),
         };
-        r.push("apt", "ROS apt source", ROS_APT_NEEDLE, actual, s);
+        r.push(
+            "apt",
+            msg!("probe.subject.ros_source"),
+            Message::text(ROS_APT_NEEDLE),
+            actual,
+            s,
+        );
 
         // Tools apply/build shell out to.
         for tool in NATIVE_CORE_TOOLS.iter().chain(["apt-get"].iter()) {
             match host.tool(tool) {
                 Some(p) => r.push(
                     "tool",
-                    *tool,
-                    "present",
+                    Message::text(*tool),
+                    msg!("probe.present"),
                     p.display().to_string(),
                     Status::Ok,
                 ),
                 None => r.push(
                     "tool",
-                    *tool,
-                    "present",
-                    "not found in PATH",
+                    Message::text(*tool),
+                    msg!("probe.present"),
+                    msg!("probe.tool.not_in_path"),
                     Status::Missing,
                 ),
             }
@@ -526,14 +529,17 @@ impl Provider for Native {
                 "ros",
                 format!("ROS {distro}"),
                 setup.display().to_string(),
-                "present",
+                msg!("probe.present"),
                 Status::Ok,
             );
         } else {
             let others = if host.ros_distros.is_empty() {
-                "no ROS install under /opt/ros".to_string()
+                msg!("probe.ros.none_installed")
             } else {
-                format!("only: {}", host.ros_distros.join(", "))
+                msg!(
+                    "probe.ros.only_others",
+                    distros = host.ros_distros.join(", ")
+                )
             };
             r.push(
                 "ros",
@@ -556,12 +562,18 @@ impl Provider for Native {
                         r.push(
                             area,
                             name,
-                            "installed",
+                            msg!("probe.installed"),
                             s.version.clone().unwrap_or_default(),
                             Status::Ok,
                         );
                     } else {
-                        r.push(area, name, "installed", "not installed", Status::Missing);
+                        r.push(
+                            area,
+                            name,
+                            msg!("probe.installed"),
+                            msg!("probe.not_installed"),
+                            Status::Missing,
+                        );
                     }
                 }
             }
@@ -571,8 +583,8 @@ impl Provider for Native {
                     r.push(
                         area,
                         name,
-                        "installed",
-                        "dpkg-query unavailable",
+                        msg!("probe.installed"),
+                        msg!("probe.dpkg_unavailable"),
                         Status::Unknown,
                     );
                 }
@@ -582,22 +594,25 @@ impl Provider for Native {
         // rosdep state.
         if m.dependencies.rosdep.enabled {
             let (s, actual) = if host.rosdep.initialized {
-                (Status::Ok, "present".to_string())
+                (Status::Ok, msg!("probe.present"))
             } else {
-                (
-                    Status::Missing,
-                    "absent (run `sudo rosdep init`)".to_string(),
-                )
-            };
-            r.push("rosdep", "rosdep init", ROSDEP_DEFAULT_LIST, actual, s);
-            let (s, actual) = if host.rosdep.updated {
-                (Status::Ok, "present".to_string())
-            } else {
-                (Status::Missing, "absent (run `rosdep update`)".to_string())
+                (Status::Missing, msg!("probe.rosdep.not_initialized"))
             };
             r.push(
                 "rosdep",
-                "rosdep update",
+                Message::text("rosdep init"),
+                Message::text(ROSDEP_DEFAULT_LIST),
+                actual,
+                s,
+            );
+            let (s, actual) = if host.rosdep.updated {
+                (Status::Ok, msg!("probe.present"))
+            } else {
+                (Status::Missing, msg!("probe.rosdep.not_updated"))
+            };
+            r.push(
+                "rosdep",
+                Message::text("rosdep update"),
                 host.rosdep.cache_dir.display().to_string(),
                 actual,
                 s,
@@ -616,8 +631,8 @@ impl Provider for Native {
                     r.push(
                         "source",
                         format!("{name}: {}", sources.display()),
-                        "vcstool .repos file",
-                        "file not found",
+                        msg!("probe.source.repos_file"),
+                        msg!("probe.file_not_found"),
                         Status::Missing,
                     );
                 } else {
@@ -625,8 +640,8 @@ impl Provider for Native {
                         Err(e) => r.push(
                             "source",
                             format!("{name}: {}", sources.display()),
-                            "vcstool .repos file",
-                            format!("unparseable: {e}"),
+                            msg!("probe.source.repos_file"),
+                            msg!("probe.source.unparseable", error = e),
                             Status::Mismatch,
                         ),
                         Ok(repos) => {
@@ -642,7 +657,7 @@ impl Provider for Native {
                                         "source",
                                         subject,
                                         expected,
-                                        "not imported",
+                                        msg!("probe.source.not_imported"),
                                         Status::Missing,
                                     );
                                 } else if repo.kind == "git" {
@@ -651,7 +666,7 @@ impl Provider for Native {
                                             "source",
                                             subject,
                                             expected,
-                                            "directory exists but is not a git checkout",
+                                            msg!("probe.source.not_a_checkout"),
                                             Status::Mismatch,
                                         );
                                     } else {
@@ -664,7 +679,7 @@ impl Provider for Native {
                                                     "source",
                                                     subject,
                                                     expected,
-                                                    format!("imported @ {head}"),
+                                                    msg!("probe.source.imported_at", head = head),
                                                     Status::Ok,
                                                 );
                                             }
@@ -672,21 +687,21 @@ impl Provider for Native {
                                                 "source",
                                                 subject,
                                                 expected,
-                                                format!("origin is {url}"),
+                                                msg!("probe.source.origin_differs", url = url),
                                                 Status::Mismatch,
                                             ),
                                             None if host.has_tool("git") => r.push(
                                                 "source",
                                                 subject,
                                                 expected,
-                                                "git checkout without an `origin` remote",
+                                                msg!("probe.source.no_origin"),
                                                 Status::Mismatch,
                                             ),
                                             None => r.push(
                                                 "source",
                                                 subject,
                                                 expected,
-                                                "imported (origin not verified: git missing)",
+                                                msg!("probe.source.imported_unverified"),
                                                 Status::Ok,
                                             ),
                                         }
@@ -696,7 +711,7 @@ impl Provider for Native {
                                         "source",
                                         subject,
                                         expected,
-                                        format!("imported ({} checkout not verified)", repo.kind),
+                                        msg!("probe.source.imported_other_vcs", kind = repo.kind),
                                         Status::Ok,
                                     );
                                 }
@@ -710,9 +725,9 @@ impl Provider for Native {
             let pkgs = WorkspacePackages::scan(&src);
             let n = pkgs.packages.len();
             let expected_pkgs = if ws.sources.is_some() {
-                "packages from .repos"
+                msg!("probe.workspace.packages_from_repos")
             } else {
-                "local packages"
+                msg!("probe.workspace.local_packages")
             };
             if n == 0 {
                 let status = if ws.sources.is_some() {
@@ -724,15 +739,20 @@ impl Provider for Native {
                     "workspace",
                     format!("{name}: src/"),
                     expected_pkgs,
-                    "no package.xml found",
+                    msg!("probe.workspace.no_packages"),
                     status,
                 );
             } else {
+                let found = if n == 1 {
+                    msg!("probe.workspace.one_package")
+                } else {
+                    msg!("probe.workspace.n_packages", count = n)
+                };
                 r.push(
                     "workspace",
                     format!("{name}: src/"),
                     expected_pkgs,
-                    format!("{n} packages"),
+                    found,
                     Status::Ok,
                 );
             }
@@ -740,7 +760,7 @@ impl Provider for Native {
                 r.push(
                     "workspace",
                     format!("{name}: {}", file.display()),
-                    "valid package.xml",
+                    msg!("probe.workspace.valid_package_xml"),
                     err.clone(),
                     Status::Mismatch,
                 );
@@ -748,13 +768,13 @@ impl Provider for Native {
             if let Some(defaults) = &ws.colcon.defaults {
                 let f = ctx.root.join(defaults);
                 let (s, actual) = if f.is_file() {
-                    (Status::Ok, "present")
+                    (Status::Ok, msg!("probe.present"))
                 } else {
-                    (Status::Missing, "file not found")
+                    (Status::Missing, msg!("probe.file_not_found"))
                 };
                 r.push(
                     "workspace",
-                    format!("{name}: colcon defaults"),
+                    msg!("probe.subject.colcon_defaults", name = name),
                     defaults.display().to_string(),
                     actual,
                     s,
@@ -764,11 +784,11 @@ impl Provider for Native {
             r.push(
                 "workspace",
                 format!("{name}: {}", ws.path.display()),
-                "built (install/setup.bash)",
+                msg!("probe.workspace.expected_built"),
                 if built {
-                    "built"
+                    msg!("probe.workspace.built")
                 } else {
-                    "not built yet (run `rospm build`)"
+                    msg!("probe.workspace.not_built")
                 },
                 Status::Info,
             );

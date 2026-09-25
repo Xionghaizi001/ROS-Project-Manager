@@ -12,6 +12,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::message::Message;
+use crate::msg;
 use crate::platform::{Platform, RosDistro};
 
 pub const MANIFEST_FILE: &str = "rospm.toml";
@@ -325,13 +327,13 @@ impl Manifest {
 
     /// Structural validation beyond what serde enforces.
     pub fn validate(&self) -> Result<()> {
-        let mut errs: Vec<String> = Vec::new();
+        let mut errs: Vec<Message> = Vec::new();
 
         if self.project.name.trim().is_empty() {
-            errs.push("project.name must not be empty".into());
+            errs.push(msg!("manifest.name_empty"));
         }
         if self.project.platforms.is_empty() {
-            errs.push("project.platforms must list at least one platform".into());
+            errs.push(msg!("manifest.no_platforms"));
         }
 
         // Exactly the matching provider sub-table may be present (spec §2.2).
@@ -347,32 +349,35 @@ impl Manifest {
         .collect();
         for name in &present {
             if *name != env.provider.as_str() {
-                errs.push(format!(
-                    "environment.{name} is present but environment.provider is \"{}\"",
-                    env.provider
+                errs.push(msg!(
+                    "manifest.provider_table_mismatch",
+                    name = name,
+                    provider = env.provider
                 ));
             }
         }
         // `native` has usable defaults; `pixi` and `docker` need their table.
         if env.provider != ProviderKind::Native && !present.contains(&env.provider.as_str()) {
-            errs.push(format!(
-                "environment.{p} table is required when environment.provider = \"{p}\"",
-                p = env.provider
+            errs.push(msg!(
+                "manifest.provider_table_required",
+                provider = env.provider
             ));
         }
 
         if self.workspaces.is_empty() {
-            errs.push("at least one [workspaces.<name>] is required".into());
+            errs.push(msg!("manifest.no_workspaces"));
         }
         let mut underlay_errors = false;
         for (name, ws) in &self.workspaces {
             for underlay in &ws.underlays {
                 if underlay == name {
-                    errs.push(format!("workspace `{name}` lists itself as an underlay"));
+                    errs.push(msg!("manifest.self_underlay", name = name));
                     underlay_errors = true;
                 } else if !self.workspaces.contains_key(underlay) {
-                    errs.push(format!(
-                        "workspace `{name}` references unknown underlay `{underlay}`"
+                    errs.push(msg!(
+                        "manifest.unknown_underlay",
+                        name = name,
+                        underlay = underlay
                     ));
                     underlay_errors = true;
                 }
@@ -386,19 +391,17 @@ impl Manifest {
 
         for key in self.target.keys() {
             match key.parse::<Platform>() {
-                Ok(p) if !self.project.platforms.contains(&p) => errs.push(format!(
-                    "target.{key} is declared but `{key}` is not listed in project.platforms"
-                )),
+                Ok(p) if !self.project.platforms.contains(&p) => {
+                    errs.push(msg!("manifest.target_not_listed", key = key))
+                }
                 Ok(_) => {}
-                Err(e) => errs.push(format!("target.{key}: {e}")),
+                Err(_) => errs.push(msg!("manifest.target_unknown_platform", key = key)),
             }
         }
 
         for key in self.env.keys() {
             if RESERVED_ENV.contains(&key.as_str()) {
-                errs.push(format!(
-                    "env.{key} is derived from the workspace overlay order and must not be set manually"
-                ));
+                errs.push(msg!("manifest.env_reserved", key = key));
             }
         }
 
@@ -428,8 +431,10 @@ impl Manifest {
                         *indegree.get_mut(name.as_str()).expect("known workspace") += 1;
                     }
                     None => {
-                        return Err(Error::Validation(vec![format!(
-                            "workspace `{name}` references unknown underlay `{underlay}`"
+                        return Err(Error::Validation(vec![msg!(
+                            "manifest.unknown_underlay",
+                            name = name,
+                            underlay = underlay
                         )]))
                     }
                 }
@@ -461,9 +466,9 @@ impl Manifest {
                 .filter(|(_, d)| **d > 0)
                 .map(|(n, _)| *n)
                 .collect();
-            return Err(Error::Validation(vec![format!(
-                "underlay cycle detected among workspaces: {}",
-                stuck.join(", ")
+            return Err(Error::Validation(vec![msg!(
+                "manifest.underlay_cycle",
+                workspaces = stuck.join(", ")
             )]));
         }
         Ok(order)

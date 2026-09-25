@@ -1,0 +1,346 @@
+# rospm user-facing text, English (source language). See docs/spec.md §4.2.
+# Keys are namespaced: cli.* (CLI layer), error.* / manifest.* / plan.* /
+# native.* / probe.* / init.* / draft.* / tool.* (produced by rospm-core as
+# message keys). Placeholders use %{name}. Every key must also exist in
+# zh-CN.yml (tests/i18n.rs checks this); `_test.*` keys are exempt.
+
+_test:
+  en_only: "english only"
+
+cli:
+  about: "Describe, lock and replay ROS 2 project environments"
+  long_about: "rospm wraps rosdep, vcstool, colcon, apt, pixi and docker behind one manifest (rospm.toml) and one lock file (rospm.lock).\n\nCommands that modify the system (apply, uninstall, build, export, import, deps install) always print their plan first and accept --dry-run."
+  manifest: "Path to rospm.toml (default: search upwards from the current directory)"
+  json: "Machine-readable JSON output where supported"
+  verbose: "Increase log verbosity (-v, -vv)"
+  lang: "Output language: zh | en (overrides ROSPM_LANG and the locale)"
+  help_flag: "Print help"
+  version_flag: "Print version"
+  dry_run: "Print the plan and exit"
+  init:
+    about: "Create a rospm.toml template in the current directory"
+    from_env: "Draft the manifest from this host and directory (best effort; undetected fields are marked TODO)"
+    base: "Which ROS metapackage to install: `ros-base` (bare bones, default) or `desktop` (adds RViz, demos, tutorials)"
+    force: "Overwrite an existing rospm.toml"
+    exists: "%{path} already exists (use --force to overwrite)"
+    template_invalid: "internal error: template is invalid"
+    draft_invalid: "internal error: drafted manifest is invalid"
+    created: "created %{path}"
+    created_from_env: "created %{path} from this host and directory"
+    next_template: "next: edit the [workspaces] section and create main.repos, then run `rospm check`"
+    next_review: "next: review the file, then run `rospm check`"
+    next_todos_one: "next: resolve the 1 TODO line above (also marked in the file), then run `rospm check`"
+    next_todos_many: "next: resolve the %{count} TODO lines above (also marked in the file), then run `rospm check`"
+    detected: "detected    %{text}"
+    todo: "TODO        %{text}"
+  check:
+    about: "Validate the manifest and compare it with this host (read-only)"
+    target: "Evaluate platform overrides for this target instead of the host"
+    strict: "Exit non-zero when the host does not match the manifest"
+    platform_not_listed: "platform %{platform} is not listed in project.platforms"
+    target_note: "repository availability for the target platform is checked in roadmap P5; only manifest-level overrides were applied"
+    probing_skipped: "environment probing skipped: target %{target} differs from this host (%{host})"
+    manifest_line: "manifest    %{path}"
+    project_line: "project     %{name} (ROS %{distro}, provider %{provider})"
+    platforms_line: "platforms   %{platforms}"
+    build_order_line: "build order %{order}"
+    apt_line: "apt[%{platform}]    %{packages}"
+    pip_line: "pip (recorded only) %{packages}"
+    note_line: "note        %{text}"
+    valid_line: "ok          manifest is valid"
+    env_header: "environment (%{platform}, expected vs actual)"
+    ready: "ready       host matches the manifest"
+    not_ready: "not ready   %{summary}; `rospm apply --dry-run` shows what would be installed, `rospm build --dry-run` what would be built"
+    problems_one: "1 problem"
+    problems_many: "%{count} problems"
+    undetermined: "%{count} undetermined"
+  status:
+    ok: "ok"
+    missing: "MISSING"
+    mismatch: "MISMATCH"
+    unknown: "unknown"
+    info: "info"
+  lock:
+    about: "Resolve and write rospm.lock (roadmap P2)"
+  verify:
+    about: "Compare rospm.lock with the current environment (roadmap P2)"
+  apply:
+    about: "Set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
+    locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
+    offline: "Use only bundled payloads, never the network"
+  uninstall:
+    about: "Remove the ROS installation described by the manifest; project files and workspaces are kept [modifies system]"
+    keep_source: "Leave the ROS apt source and keyring in place"
+    yes: "Do not ask for confirmation"
+    nothing_to_do: "nothing to do"
+    needs_confirmation: "refusing to uninstall without confirmation (pass --yes, or run interactively)"
+    confirm: "proceed with the plan above? [y/N] "
+    aborted: "aborted"
+  build:
+    about: "Build workspaces with colcon in overlay order [produces artifacts]"
+    workspace: "Build only this workspace (its underlays must already be built)"
+  env:
+    about: "Print a script that enters the project environment (`source <(rospm env)`)"
+    shell: "Shell syntax to emit: bash (default) | zsh"
+  shell:
+    about: "Start a subshell with the project environment loaded"
+    entering: "entering rospm shell for `%{name}` (exit to leave)"
+    start_failed: "failed to start bash"
+    exited: "shell exited with %{status}"
+  deps:
+    about: "Inspect or complete dependencies from package.xml files"
+    check: "Report missing dependencies without installing (roadmap P2)"
+    install: "Install missing dependencies through rosdep (roadmap P2) [modifies system]"
+  export:
+    about: "Produce an offline bundle (roadmap P6) [produces artifacts]"
+    target: "Target platform of the bundle"
+    output: "Where to write the bundle"
+  import:
+    about: "Verify and install an offline bundle (roadmap P6) [modifies system]"
+    bundle: "Bundle produced by `rospm export`"
+  editor:
+    about: "Generate editor configuration (roadmap P7)"
+    kind: "vscode | clion | devcontainer (default: all enabled in the manifest)"
+  doctor:
+    about: "Check that the wrapped tools are available on this machine"
+    platform: "platform      %{value}"
+    os: "os            %{value}"
+    ros_installs: "ROS installs  %{value}"
+    ros_apt_source: "ROS apt src   %{value}"
+    universe: "apt universe  %{value}"
+    locale: "locale        %{value}"
+    rosdep: "rosdep        init: %{init}  update: %{update}"
+    unknown: "unknown"
+    no_ros: "none found under /opt/ros"
+    source_not_configured: "not configured (`rospm apply` adds it)"
+    universe_not_enabled: "not enabled"
+    not_utf8: "not UTF-8 (ROS needs a UTF-8 locale)"
+    done: "done"
+    not_run: "not run"
+    not_found: "not found"
+    core_missing: "core tools missing: native provider needs %{tools}"
+  help:
+    about: "Print this message or the help of the given subcommand"
+    command: "Subcommand to describe (e.g. `deps install`)"
+    unknown: "unknown command `%{command}` (see `rospm --help`)"
+  err:
+    no_cwd: "cannot determine current directory"
+    manifest_not_found: "no %{file} found in %{dir} or any parent directory (run `rospm init`)"
+    cannot_resolve: "cannot resolve %{path}"
+    cannot_write: "cannot write %{path}"
+    unsupported_host: "this host is not a supported platform (expected linux x86_64 or aarch64)"
+    prefix: "error: %{text}"
+
+help:
+  usage: "Usage:"
+  commands: "Commands:"
+  arguments: "Arguments:"
+  options: "Options:"
+
+template:
+  ros_base_comment: "ros-base (bare bones) | desktop (adds RViz, demos)"
+
+error:
+  io: "I/O error on %{path}: %{source}"
+  manifest_parse: "failed to parse manifest %{path}: %{source}"
+  lock_parse: "failed to parse lock file %{path}: %{source}"
+  repos_parse: "failed to parse vcstool repos file %{path}: %{source}"
+  package_xml: "failed to parse %{path}: %{message}"
+  serialize: "failed to serialize %{what}: %{source}"
+  schema_version: "unsupported schema_version %{found} (this rospm supports %{supported})"
+  validation: "manifest validation failed:\n%{list}"
+  unknown_workspace: "unknown workspace `%{name}`"
+  not_implemented: "%{feature} is not implemented yet (planned for roadmap %{phase})"
+  command_failed: "command failed: %{command} (exit status %{status})"
+
+package_xml:
+  malformed: "malformed XML: %{source}"
+  root_element: "root element is <%{found}>, expected <package>"
+  missing_name: "missing <name>"
+
+manifest:
+  name_empty: "project.name must not be empty"
+  no_platforms: "project.platforms must list at least one platform"
+  provider_table_mismatch: "environment.%{name} is present but environment.provider is \"%{provider}\""
+  provider_table_required: "environment.%{provider} table is required when environment.provider = \"%{provider}\""
+  no_workspaces: "at least one [workspaces.<name>] is required"
+  self_underlay: "workspace `%{name}` lists itself as an underlay"
+  unknown_underlay: "workspace `%{name}` references unknown underlay `%{underlay}`"
+  target_not_listed: "target.%{key} is declared but `%{key}` is not listed in project.platforms"
+  target_unknown_platform: "target.%{key}: unknown platform (expected one of: linux-x86_64, linux-aarch64)"
+  env_reserved: "env.%{key} is derived from the workspace overlay order and must not be set manually"
+  underlay_cycle: "underlay cycle detected among workspaces: %{workspaces}"
+
+plan:
+  title: "plan: %{title}"
+  write_file: "write %{path} (%{bytes} bytes)"
+  write_file_sudo: "write %{path} (sudo) (%{bytes} bytes)"
+  dry_run: "dry-run: nothing executed"
+  writing: "write %{path}"
+
+native:
+  unknown_os: "unknown OS"
+  apply:
+    title: "apply `%{name}` (native, %{distro}, %{platform})"
+    locked_degraded: "--locked: snapshot repositories are not implemented yet (roadmap P2); DEGRADED to live repositories"
+    no_repo_for_ubuntu: "no ROS apt repository for Ubuntu %{ubuntu} (environment.native.ubuntu); supported: 22.04 (humble), 24.04 (jazzy, rolling)"
+    wrong_ubuntu: "manifest needs Ubuntu %{ubuntu} for ROS %{distro}, this host is %{have}; rospm does not install or upgrade Ubuntu itself"
+    os_release_unreadable: "/etc/os-release is unreadable; assuming Ubuntu %{ubuntu} (%{codename})"
+    locale_switched: "locale switched to en_US.UTF-8 system-wide; run `export LANG=en_US.UTF-8` in the current shell or log in again"
+    source_already_configured: "ROS apt source already configured in %{file}"
+    pip_recorded_only: "pip dependencies are recorded but not installed by rospm (decision #6): %{packages}"
+  uninstall:
+    title: "uninstall ROS %{distro} (native) for `%{name}`"
+    dpkg_unavailable: "dpkg-query is unavailable, cannot list the installed ROS packages"
+    nothing_installed: "no %{prefix}* packages are installed; nothing to remove"
+    removing: "removing %{count} %{prefix}* packages (listed below)"
+    tooling_kept: "python3-rosdep, python3-vcstool and python3-colcon-common-extensions are left installed (shared tooling); remove them by hand if unwanted"
+    files_may_remain: "files apt does not own may remain under %{dir}; remove the directory by hand after checking it"
+    no_source: "no ROS apt source configured; nothing to remove"
+    keep_source: "--keep-source: ROS apt source left in place"
+    source_kept_other_distros: "ROS apt source %{file} kept: other ROS installs remain under /opt/ros (%{others})"
+    source_not_ours: "ROS apt source %{file} was not written by rospm (e.g. the ros2-apt-source package); left in place"
+  build:
+    title: "build `%{name}` (%{order})"
+
+probe:
+  present: "present"
+  installed: "installed"
+  not_installed: "not installed"
+  dpkg_unavailable: "dpkg-query unavailable"
+  file_not_found: "file not found"
+  subject:
+    host: "host"
+    locale: "locale"
+    universe: "universe component"
+    ros_source: "ROS apt source"
+    colcon_defaults: "%{name}: colcon defaults"
+  platform:
+    unsupported: "unsupported"
+  os:
+    not_ubuntu: "not Ubuntu"
+    unreadable: "unreadable /etc/os-release"
+  locale:
+    not_utf8: "not UTF-8 (`rospm apply` sets en_US.UTF-8)"
+  universe:
+    enabled: "enabled"
+    not_enabled: "not enabled (`rospm apply` runs add-apt-repository universe)"
+    unreadable: "no apt source files readable"
+  ros_source:
+    not_configured: "not configured (`rospm apply` writes %{file})"
+  tool:
+    not_in_path: "not found in PATH"
+  ros:
+    none_installed: "no ROS install under /opt/ros"
+    only_others: "only: %{distros}"
+  rosdep:
+    not_initialized: "absent (run `sudo rosdep init`)"
+    not_updated: "absent (run `rosdep update`)"
+  source:
+    repos_file: "vcstool .repos file"
+    unparseable: "unparseable: %{error}"
+    not_imported: "not imported"
+    not_a_checkout: "directory exists but is not a git checkout"
+    imported_at: "imported @ %{head}"
+    origin_differs: "origin is %{url}"
+    no_origin: "git checkout without an `origin` remote"
+    imported_unverified: "imported (origin not verified: git missing)"
+    imported_other_vcs: "imported (%{kind} checkout not verified)"
+  workspace:
+    packages_from_repos: "packages from .repos"
+    local_packages: "local packages"
+    no_packages: "no package.xml found"
+    one_package: "1 package"
+    n_packages: "%{count} packages"
+    valid_package_xml: "valid package.xml"
+    expected_built: "built (install/setup.bash)"
+    built: "built"
+    not_built: "not built yet (run `rospm build`)"
+  provider:
+    probing: "environment probing"
+    not_implemented: "not implemented yet (roadmap %{phase})"
+
+tool:
+  git: "source checkout"
+  vcs: "vcstool: multi-repo import/export"
+  colcon: "workspace builds"
+  rosdep: "dependency resolution"
+  apt_get: "native provider"
+  dpkg_query: "native provider: installed package versions"
+  pixi: "pixi provider (roadmap P3)"
+  docker: "docker provider (roadmap P4)"
+
+init:
+  platforms:
+    host: "project.platforms: host is %{platform}"
+    unsupported: "project.platforms: host platform unsupported, defaulted to linux-x86_64"
+  provider:
+    pixi: "environment.provider: pixi.toml found, using the pixi provider (roadmap P3)"
+  ros_distro:
+    from_pixi: "project.ros_distro: %{distro} from pixi.toml"
+    from_env: "project.ros_distro: %{distro} from $ROS_DISTRO"
+    env_unsupported: "project.ros_distro: $ROS_DISTRO is `%{value}`, which rospm does not support (humble, jazzy, rolling)"
+    from_ament: "project.ros_distro: %{distro} from $AMENT_PREFIX_PATH"
+    only_install: "project.ros_distro: %{distro} is the only ROS install under /opt/ros"
+    none: "project.ros_distro: no $ROS_DISTRO and no supported ROS install under /opt/ros; defaulted to jazzy"
+    several: "project.ros_distro: several ROS installs found (%{distros}); source one before running `init --from-env`, or pick manually (defaulted to %{default})"
+  ubuntu:
+    unsupported_release: "environment.native.ubuntu: host runs Ubuntu %{version}, which is outside the supported matrix (22.04, 24.04)"
+    from_os_release: "environment.native.ubuntu: %{version} from /etc/os-release"
+    no_version_id: "environment.native.ubuntu: /etc/os-release has no VERSION_ID"
+    not_ubuntu: "environment.native.ubuntu: host is %{os}, not Ubuntu; native provider needs Ubuntu"
+    os_release_unreadable: "environment.native.ubuntu: /etc/os-release not readable"
+  ros_base:
+    needs_distro: "environment.native.ros_base: depends on ros_distro, left at the default"
+    dpkg_unavailable: "environment.native.ros_base: dpkg-query unavailable, cannot tell which metapackage is installed"
+    installed: "environment.native.ros_base: %{package} is installed"
+    no_metapackage: "environment.native.ros_base: /opt/ros/%{distro} exists but none of %{candidates} is installed (source install?)"
+    distro_not_installed: "environment.native.ros_base: ROS %{distro} is not installed on this host"
+    from_flag: "environment.native.ros_base: %{package} (from --base %{flavor})"
+    flag_ignored: "environment.native.ros_base: --base %{flavor} ignored because ros_distro was not detected"
+  env:
+    from_environment: "env: %{keys} from the current environment"
+  workspaces:
+    repos_unparseable: "workspaces: %{file} could not be parsed and was ignored: %{error}"
+    repos_empty: "workspaces: %{file} lists no repositories and was ignored"
+    repos_matched: "workspaces: %{file} matches %{workspace} (%{hits}/%{total} repositories imported)"
+    repos_conflict: "workspaces: %{file} also matches %{workspace} but it already uses %{existing}; a workspace has one sources file"
+    repos_assigned: "workspaces: %{file} assigned to %{workspace} (its repositories are not imported yet)"
+    invalid_package_xml: "workspaces.%{workspace}: %{file} is not a valid package.xml: %{error}"
+    path_guessed: "workspaces.%{workspace}.path: %{file} is not imported anywhere; path `%{path}` is a guess"
+    placeholder: "workspaces: no `src/` directory and no .repos file found; a placeholder workspace was written"
+  underlays:
+    from_ament: "workspaces.*.underlays: overlay order from $AMENT_PREFIX_PATH: %{order}"
+    unknown_order: "workspaces.*.underlays: several workspaces but no overlay order in $AMENT_PREFIX_PATH; declare which sits on which"
+  colcon_defaults:
+    missing: "workspaces.*.colcon.defaults: $COLCON_DEFAULTS_FILE=%{file} does not exist and was not recorded"
+    from_env: "workspaces.*.colcon.defaults: %{file} from $COLCON_DEFAULTS_FILE"
+    outside_project: "workspaces.*.colcon.defaults: $COLCON_DEFAULTS_FILE=%{file} lies outside the project and was not recorded"
+  origin:
+    found: "found %{dir}/src with %{packages}%{built}%{repos}"
+    one_package: "1 package"
+    n_packages: "%{count} packages"
+    built: ", built"
+    no_repos: ", no matching .repos"
+    repos_not_imported: "%{file} lists %{count} repositories, none imported"
+    placeholder: "placeholder"
+  dependencies:
+    rosdep_keys: "dependencies: %{count} rosdep keys referenced by package.xml (left to rosdep, listed as a comment)"
+    apt_undetectable: "dependencies.apt: extra apt packages outside package.xml cannot be detected; add them by hand"
+
+draft:
+  header:
+    drafted_by: "rospm project manifest, drafted by `rospm init --from-env`."
+    todo_lines: "Lines marked TODO could not be detected reliably and need review."
+    reference: "Field reference: docs/spec.md §2."
+  not_detected: "not detected"
+  platforms_hint: "add \"linux-aarch64\" for ARM targets"
+  ubuntu_hint: "defaults to the distro's release"
+  ros_base_hint: "or ros-<distro>-desktop"
+  sources_hint: "no .repos file matched; omit for purely local sources"
+  underlays_hint: "overlay order not detected"
+  mixins_hint: "colcon mixins are not recoverable from an environment (decision #8)"
+  apt_hint: "extra apt packages not covered by package.xml"
+  pip_hint: "recorded only, installed via rosdep (decision #6)"
+  rosdep_keys: "%{count} rosdep keys referenced by package.xml (resolved by `rosdep install`, nothing to declare):"
+  env_hint: "no ROS_* variables set in the current environment"

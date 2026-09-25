@@ -87,7 +87,7 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 |---|---|---|---|
 | P0 | 规格、决策、schema、Rust 骨架、CI | 1–2 周 | **基本完成**：决策/spec/schema/骨架/单测 ✅；外部事实 4 项全部有本地实测证据 ✅（ROS 快照签名密钥已核验、补丁版 rosdep 映射 `rclcpp` 通过、x86 上真实 ARM pixi-pack 通过）；CI 各步骤本地复现通过，仅剩 GitHub 实跑与 spec review |
 | P1 | native 提供者的描述与重放（x86_64、22.04/24.04、Humble/Jazzy） | 3–4 周 | **进行中**：`init`（含 `--from-env` 反推、`--base` 选底包）与 `check`（环境探测 + 差异报告）已完成；`apply` 从裸 Ubuntu 起步（ROS apt 源 bootstrap）与 `uninstall` 的计划已就绪；`build` / `env` / `shell` / `doctor` 骨架与 `--dry-run` 计划已就绪；缺 fish、干净虚拟机实跑 |
-| P1.5 | 输出本地化（i18n）：中文 + 英文，按系统 locale 选择；此后新字符串一律走 i18n 层 | 1 周 | 未开始（决策 #16；可与 P1 的干净虚拟机实跑并行） |
+| P1.5 | 输出本地化（i18n）：中文 + 英文，按系统 locale 选择；此后新字符串一律走 i18n 层 | 1 周 | 完成（2026-09-26，决策 #16） |
 | P2 | 锁文件与依赖补全：`lock` / `apply --locked` / `verify` / `deps` | 3 周 | 未开始（lock schema 与解析已随骨架落地） |
 | P3 | Pixi 提供者：生成 `pixi.toml`，锁定委托 `pixi.lock`，RoboStack rosdep 源 | 3 周 | 未开始（占位返回 NotImplemented） |
 | P4 | Docker 提供者：Dockerfile / compose / devcontainer，digest 锁定，buildx | 2–3 周 | 未开始（占位返回 NotImplemented） |

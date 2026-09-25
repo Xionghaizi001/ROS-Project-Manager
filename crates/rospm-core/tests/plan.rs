@@ -10,6 +10,10 @@ use rospm_core::provider::{self, Context, Shell};
 
 const FULL: &str = include_str!("fixtures/full.toml");
 
+// Plans render their notes and titles as message keys here: no renderer is
+// installed in the core tests, so `Message` shows its developer form
+// `key(arg=value)` (spec §4.2). The CLI tests cover the translated text.
+
 /// A bare host: nothing installed, locale POSIX, no ROS apt source.
 fn bare_host() -> Host {
     Host::empty()
@@ -85,11 +89,11 @@ fn native_apply_plan_follows_overlay_order_and_is_dry_run_safe() {
     assert!(deps < main, "underlay must be imported first:\n{rendered}");
     assert!(rendered.contains("sudo apt-get install -y ros-jazzy-ros-base"));
     assert!(rendered.contains("--skip-keys libopencv-dev"));
-    assert!(rendered.contains("pip dependencies are recorded"));
+    assert!(rendered.contains("native.apply.pip_recorded_only(packages=numpy>=1.26)"));
 
     let mut sink = Vec::new();
     plan.execute(true, &mut sink).unwrap();
-    assert!(String::from_utf8(sink).unwrap().contains("dry-run"));
+    assert!(String::from_utf8(sink).unwrap().contains("# plan.dry_run"));
 }
 
 #[test]
@@ -112,7 +116,7 @@ fn native_apply_bootstraps_the_ros_apt_source_on_a_bare_host() {
     let locale = pos("sudo locale-gen en_US en_US.UTF-8");
     let universe = pos("sudo add-apt-repository -y universe");
     let key = pos(&format!("-o {ROS_APT_KEYRING}"));
-    let list = pos(&format!("write {ROS_APT_LIST} (sudo)"));
+    let list = pos(&format!("plan.write_file_sudo(path={ROS_APT_LIST}, bytes="));
     let entry = pos(&format!(
         "| deb [arch=amd64 signed-by={ROS_APT_KEYRING}] http://packages.ros.org/ros2/ubuntu noble main"
     ));
@@ -143,12 +147,14 @@ fn native_apply_skips_bootstrap_when_the_host_is_ready() {
         "locale-gen",
         "add-apt-repository",
         "curl",
-        "write /etc/apt",
+        "plan.write_file_sudo(path=/etc/apt",
         "rosdep init",
     ] {
         assert!(!rendered.contains(absent), "`{absent}` in:\n{rendered}");
     }
-    assert!(rendered.contains("already configured in /etc/apt/sources.list.d/ros2.list"));
+    assert!(rendered.contains(
+        "native.apply.source_already_configured(file=/etc/apt/sources.list.d/ros2.list)"
+    ));
     assert!(rendered.contains("sudo apt-get install -y ros-jazzy-ros-base"));
 }
 
@@ -163,8 +169,10 @@ fn native_apply_refuses_the_wrong_ubuntu() {
         .plan_apply(&ctx(&m, &host))
         .unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("needs Ubuntu 24.04"), "{msg}");
-    assert!(msg.contains("Ubuntu 22.04.5 LTS"), "{msg}");
+    assert!(
+        msg == "native.apply.wrong_ubuntu(ubuntu=24.04, distro=jazzy, have=Ubuntu 22.04.5 LTS)",
+        "{msg}"
+    );
 
     host.os = Some(OsRelease::parse(
         "ID=debian\nVERSION_ID=\"12\"\nPRETTY_NAME=\"Debian 12\"\n",
@@ -199,7 +207,7 @@ fn native_uninstall_names_every_package_and_removes_the_source() {
         .unwrap();
     let rendered = plan.render();
     assert!(
-        rendered.contains("removing 2 ros-jazzy-* packages"),
+        rendered.contains("native.uninstall.removing(count=2, prefix=ros-jazzy-)"),
         "{rendered}"
     );
     assert!(
@@ -214,7 +222,7 @@ fn native_uninstall_names_every_package_and_removes_the_source() {
         "{rendered}"
     );
     assert!(
-        rendered.contains("may remain under /opt/ros/jazzy"),
+        rendered.contains("native.uninstall.files_may_remain(dir=/opt/ros/jazzy)"),
         "{rendered}"
     );
 
@@ -230,7 +238,9 @@ fn native_uninstall_names_every_package_and_removes_the_source() {
     let rendered = plan.render();
     assert!(!rendered.contains("rm -f"), "{rendered}");
     assert!(
-        rendered.contains("other ROS installs remain under /opt/ros (humble)"),
+        rendered.contains(
+            "native.uninstall.source_kept_other_distros(file=/etc/apt/sources.list.d/ros2.list, others=humble)"
+        ),
         "{rendered}"
     );
 }
@@ -250,7 +260,7 @@ fn native_uninstall_with_nothing_installed_is_a_no_op_and_needs_dpkg() {
     let err = provider::for_manifest(&m)
         .plan_uninstall(&ctx(&m, &host), false)
         .unwrap_err();
-    assert!(err.to_string().contains("dpkg-query"), "{err}");
+    assert_eq!(err.to_string(), "native.uninstall.dpkg_unavailable");
 }
 
 #[test]

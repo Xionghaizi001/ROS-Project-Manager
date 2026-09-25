@@ -1,0 +1,33 @@
+# rospm 项目清单 —— 每个字段的说明见 docs/spec.md。
+schema_version = 1
+
+[project]
+name = "@NAME@"
+ros_distro = "jazzy"                     # humble | jazzy | rolling
+platforms = ["linux-x86_64"]             # ARM 目标请加上 "linux-aarch64"
+
+[environment]
+provider = "native"                      # native | pixi | docker
+
+[environment.native]
+# ubuntu = "24.04"                       # 默认为该发行版对应的 Ubuntu 版本
+# ros_base = "ros-jazzy-ros-base"        # 或 ros-jazzy-desktop；`rospm init --base desktop` 会设置它
+
+[workspaces.main]
+path = "ws"
+sources = "main.repos"                   # vcstool .repos 文件（TODO：需要创建）
+underlays = []
+
+[workspaces.main.colcon]
+build_args = ["--symlink-install"]
+
+[dependencies]
+apt = []                                 # package.xml 未覆盖的额外 apt 包
+pip = []                                 # 仅记录，通过 rosdep 安装
+
+[dependencies.rosdep]
+enabled = true
+skip_keys = []
+
+[env]
+ROS_DOMAIN_ID = "0"

@@ -254,6 +254,12 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 - 每个键必须同时存在于两种语言，由单元测试保证；缺失键回退英文并在 `-v` 下告警，不 panic。
 - P1.5 之后新增的面向用户字符串一律走 i18n 层；review 时把裸英文字符串视为缺陷。
 
+**实现说明（P1.5 落地后，2026-09-26）**：
+- 库：`rust-i18n`，资源 `crates/rospm-cli/locales/{en,zh-CN}.yml` 编译进二进制。`rospm-core` 只产出 `Message`（`Text` 原样文本，或 `Key { key, args }`），`plan` 注释 / 标题、`check` 报告的 `subject` / `expected` / `actual`、`Error`、`init --from-env` 的说明与草稿注释全部是 `Message`；CLI 启动时通过 `rospm_core::message::set_renderer` 安装一个渲染函数，`Message` 的 `Display` / `Serialize` 由它完成，未安装时显示开发者形式 `key(arg=value)`（核心库的单测看到的就是这种形式）。
+- `LANGUAGE` 列表中只有 `zh*` / `en*` 条目算"匹配"，其它条目跳过；列表无匹配时继续按 `LC_ALL` → `LC_MESSAGES` → `LANG` 判断。`--lang` 只接受 `zh` / `en`。
+- `--help` 的章节标题（用法 / 命令 / 参数 / 选项）通过自定义 help 模板翻译，`help` 子命令由 rospm 自己实现；但 clap 自身的解析错误（如 `error: unexpected argument`、`invalid value`）与 `[OPTIONS]` / `<COMMAND>` 这类占位符仍为英文，属已知限制。
+- 英文单复数用独立键（如 `probe.workspace.one_package` / `n_packages`），未用库的复数规则。
+
 ## 5. 离线导出包格式
 
 决策 #10：`manifest + data`，校验必选，签名可选，压缩可选。

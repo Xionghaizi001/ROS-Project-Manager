@@ -65,3 +65,11 @@ jobs:
       - run: bin/rospm --manifest ${{ matrix.manifest }} build --dry-run
       - run: bin/rospm --manifest ${{ matrix.manifest }} env
       - run: bin/rospm doctor --json || true   # tools are absent here; report only
+      # i18n (P1.5): the same commands under a Chinese locale print Chinese and
+      # keep their exit codes. The runner's own locale is C, which the English
+      # steps above rely on.
+      - run: LANG=zh_CN.UTF-8 bin/rospm --help | tee /tmp/help-zh.txt && grep -q '用法:' /tmp/help-zh.txt && ! grep -q 'Print help' /tmp/help-zh.txt
+      - run: LANG=zh_CN.UTF-8 bin/rospm --manifest ${{ matrix.manifest }} check | tee /tmp/check-zh.txt && grep -q '清单有效' /tmp/check-zh.txt
+      - run: LANG=zh_CN.UTF-8 bin/rospm --manifest ${{ matrix.manifest }} apply --dry-run | tee /tmp/apply-zh.txt && grep -q '写入 /etc/apt/sources.list.d/ros2.list（sudo）' /tmp/apply-zh.txt && grep -q '未执行任何步骤' /tmp/apply-zh.txt
+      - run: "! LANG=zh_CN.UTF-8 bin/rospm check --manifest /nonexistent 2> /tmp/err-zh.txt; grep -q '^错误：' /tmp/err-zh.txt"
+      - run: LANG=C ROSPM_LANG=zh bin/rospm --manifest ${{ matrix.manifest }} check --json | grep -q '"status": "missing"'

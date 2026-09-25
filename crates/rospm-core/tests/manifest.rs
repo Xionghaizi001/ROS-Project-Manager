@@ -11,9 +11,11 @@ fn parse(text: &str) -> Result<Manifest, Error> {
     Manifest::parse(text, Path::new("test.toml"))
 }
 
+/// Validation messages in developer form (`key(arg=value, …)`): the core
+/// library never renders a language, the CLI does (spec §4.2).
 fn validation_errors(text: &str) -> Vec<String> {
     match parse(text) {
-        Err(Error::Validation(list)) => list,
+        Err(Error::Validation(list)) => list.iter().map(|m| m.developer_form()).collect(),
         other => panic!("expected validation error, got {other:?}"),
     }
 }
@@ -87,7 +89,11 @@ path = "b"
 underlays = ["a"]
 "#;
     let errs = validation_errors(text);
-    assert!(errs.iter().any(|e| e.contains("cycle")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.starts_with("manifest.underlay_cycle(")),
+        "{errs:?}"
+    );
 }
 
 #[test]
@@ -106,7 +112,8 @@ underlays = ["nope"]
 "#;
     let errs = validation_errors(text);
     assert!(
-        errs.iter().any(|e| e.contains("unknown underlay `nope`")),
+        errs.iter()
+            .any(|e| e == "manifest.unknown_underlay(name=a, underlay=nope)"),
         "{errs:?}"
     );
 }
@@ -129,12 +136,12 @@ path = "a"
     let errs = validation_errors(text);
     assert!(
         errs.iter()
-            .any(|e| e.contains("environment.native is present")),
+            .any(|e| e == "manifest.provider_table_mismatch(name=native, provider=pixi)"),
         "{errs:?}"
     );
     assert!(
         errs.iter()
-            .any(|e| e.contains("environment.pixi table is required")),
+            .any(|e| e == "manifest.provider_table_required(provider=pixi)"),
         "{errs:?}"
     );
 }
@@ -150,7 +157,8 @@ fn reserved_env_is_rejected() {
     let text = format!("{MINIMAL}\nAMENT_PREFIX_PATH = \"/x\"\n");
     let errs = validation_errors(&text);
     assert!(
-        errs.iter().any(|e| e.contains("AMENT_PREFIX_PATH")),
+        errs.iter()
+            .any(|e| e == "manifest.env_reserved(key=AMENT_PREFIX_PATH)"),
         "{errs:?}"
     );
 }
@@ -161,14 +169,15 @@ fn target_platform_must_be_declared() {
     let errs = validation_errors(&text);
     assert!(
         errs.iter()
-            .any(|e| e.contains("not listed in project.platforms")),
+            .any(|e| e == "manifest.target_not_listed(key=linux-aarch64)"),
         "{errs:?}"
     );
 
     let text = format!("{MINIMAL}\n[target.windows.exclude]\napt = [\"x\"]\n");
     let errs = validation_errors(&text);
     assert!(
-        errs.iter().any(|e| e.contains("unknown platform")),
+        errs.iter()
+            .any(|e| e == "manifest.target_unknown_platform(key=windows)"),
         "{errs:?}"
     );
 }

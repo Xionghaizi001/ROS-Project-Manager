@@ -12,18 +12,19 @@ use std::process;
 
 use serde::Serialize;
 
+use crate::message::Message;
 use crate::platform::Platform;
 
-/// Tools rospm wraps, with the purpose shown by `doctor`.
+/// Tools rospm wraps, with the message key of the purpose shown by `doctor`.
 pub const TOOLS: &[(&str, &str)] = &[
-    ("git", "source checkout"),
-    ("vcs", "vcstool: multi-repo import/export"),
-    ("colcon", "workspace builds"),
-    ("rosdep", "dependency resolution"),
-    ("apt-get", "native provider"),
-    ("dpkg-query", "native provider: installed package versions"),
-    ("pixi", "pixi provider (roadmap P3)"),
-    ("docker", "docker provider (roadmap P4)"),
+    ("git", "tool.git"),
+    ("vcs", "tool.vcs"),
+    ("colcon", "tool.colcon"),
+    ("rosdep", "tool.rosdep"),
+    ("apt-get", "tool.apt_get"),
+    ("dpkg-query", "tool.dpkg_query"),
+    ("pixi", "tool.pixi"),
+    ("docker", "tool.docker"),
 ];
 
 /// Tools the native provider cannot work without.
@@ -490,9 +491,9 @@ pub struct EnvItem {
     /// Coarse grouping: `platform`, `os`, `tool`, `ros`, `rosdep`, `apt`, `source`, `workspace`.
     pub area: &'static str,
     /// What is being compared (a package, a repo path, a workspace name).
-    pub subject: String,
-    pub expected: String,
-    pub actual: String,
+    pub subject: Message,
+    pub expected: Message,
+    pub actual: Message,
     pub status: Status,
 }
 
@@ -506,9 +507,9 @@ impl EnvReport {
     pub fn push(
         &mut self,
         area: &'static str,
-        subject: impl Into<String>,
-        expected: impl Into<String>,
-        actual: impl Into<String>,
+        subject: impl Into<Message>,
+        expected: impl Into<Message>,
+        actual: impl Into<Message>,
         status: Status,
     ) {
         self.items.push(EnvItem {
@@ -643,10 +644,17 @@ mod tests {
     #[test]
     fn report_counts() {
         let mut r = EnvReport::default();
-        r.push("os", "ubuntu", "24.04", "22.04", Status::Mismatch);
-        r.push("tool", "git", "present", "/usr/bin/git", Status::Ok);
-        r.push("apt", "x", "installed", "?", Status::Unknown);
-        r.push("workspace", "main", "-", "not built", Status::Info);
+        let t = Message::text;
+        r.push("os", t("ubuntu"), t("24.04"), t("22.04"), Status::Mismatch);
+        r.push(
+            "tool",
+            t("git"),
+            t("present"),
+            t("/usr/bin/git"),
+            Status::Ok,
+        );
+        r.push("apt", t("x"), t("installed"), t("?"), Status::Unknown);
+        r.push("workspace", t("main"), t("-"), t("not built"), Status::Info);
         assert_eq!(r.problems(), 1);
         assert_eq!(r.unknown(), 1);
         assert!(!r.ready());
