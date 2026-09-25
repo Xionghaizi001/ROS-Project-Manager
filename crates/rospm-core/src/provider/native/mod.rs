@@ -5,10 +5,18 @@
 //! to switch to snapshot repositories) before installing the base metapackage.
 //! `--locked` snapshot switching arrives in P2 and is reported as a
 //! degradation until then.
+//!
+//! P2 pieces live in submodules: [`lock`] (`rospm lock`), [`verify`]
+//! (`rospm verify`), [`deps`] (`rospm deps`).
+
+pub mod deps;
+pub mod lock;
+pub mod verify;
 
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::lock::Lock;
 use crate::manifest::{Manifest, ProviderKind};
 use crate::message::Message;
 use crate::msg;
@@ -460,6 +468,14 @@ impl Provider for Native {
             out.push_str(&format!("export {k}={}\n", shell_quote(v)));
         }
         Ok(out)
+    }
+
+    fn resolve_lock(&self, ctx: &Context) -> Result<Lock> {
+        lock::resolve(ctx)
+    }
+
+    fn verify(&self, ctx: &Context, lock: &Lock) -> Result<EnvReport> {
+        verify::verify(ctx, lock)
     }
 
     fn probe_env(&self, ctx: &Context) -> Result<EnvReport> {

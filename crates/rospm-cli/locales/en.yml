@@ -317,6 +317,7 @@ tool:
   rosdep: "dependency resolution"
   apt_get: "native provider"
   dpkg_query: "native provider: installed package versions"
+  python3: "pip versions (lock / verify, recorded only)"
   pixi: "pixi provider (roadmap P3)"
   docker: "docker provider (roadmap P4)"
 

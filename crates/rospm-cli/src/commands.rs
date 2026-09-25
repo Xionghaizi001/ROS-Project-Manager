@@ -14,6 +14,7 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use serde::Serialize;
 
 use rospm_core::introspect::{self, HostFacts};
+use rospm_core::lock::{Lock, LOCK_FILE};
 use rospm_core::manifest::{Manifest, RosFlavor, MANIFEST_FILE};
 use rospm_core::mirror::{self, Mirror};
 use rospm_core::net::{self, ProbeResult, Role, Verdict};
@@ -34,6 +35,24 @@ struct Loaded {
     path: PathBuf,
     root: PathBuf,
     manifest: Manifest,
+}
+
+impl Loaded {
+    /// `rospm.lock` next to the manifest.
+    fn lock_path(&self) -> PathBuf {
+        self.root.join(LOCK_FILE)
+    }
+
+    /// The lock file, if there is one. A present but unparseable lock is an
+    /// error: it is a project file, not a cache.
+    #[allow(dead_code)]
+    fn load_lock(&self) -> Result<Option<Lock>> {
+        let path = self.lock_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(Lock::load(&path)?))
+    }
 }
 
 fn locate(global: &Global) -> Result<PathBuf> {
@@ -322,6 +341,7 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
             root: &loaded.root,
             platform,
             locked: false,
+            lock: None,
             offline: false,
             host: &host,
             mirror: mirror::OFFICIAL,
@@ -483,12 +503,21 @@ fn print_env_report(r: &EnvReport, platform: &str) {
     }
 }
 
+// ---------------------------------------------------------------- lock
+
+/// `rospm lock [--platform <p>]`: resolve the host into `rospm.lock` (spec §3).
+pub fn lock(global: &Global, platform: Option<Platform>) -> Result<()> {
+    let _ = (global, platform);
+    not_implemented("lock", "P2")
+}
+
 // ---------------------------------------------------------------- apply / build / env / shell
 
 fn context<'a>(
     loaded: &'a Loaded,
     host: &'a Host,
     locked: bool,
+    lock: Option<&'a Lock>,
     offline: bool,
     mirror: Mirror,
 ) -> Result<Context<'a>> {
@@ -497,6 +526,7 @@ fn context<'a>(
         root: &loaded.root,
         platform: host_platform()?,
         locked,
+        lock,
         offline,
         host,
         mirror,
@@ -550,7 +580,7 @@ pub fn apply(
     } else {
         select_sources(&loaded, requested)?
     };
-    let ctx = context(&loaded, &host, locked, offline, sources)?;
+    let ctx = context(&loaded, &host, locked, None, offline, sources)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
     let mut out = std::io::stdout().lock();
     let result = plan.execute(dry_run, &mut out);
@@ -736,7 +766,7 @@ fn print_probe_table(results: &[ProbeResult]) {
 pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_uninstall(&ctx, keep_source)?;
     let mut out = std::io::stdout().lock();
     if dry_run {
@@ -770,7 +800,7 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
 pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace)?;
     let mut out = std::io::stdout().lock();
     plan.execute(dry_run, &mut out)?;
@@ -778,10 +808,24 @@ pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<
     Ok(())
 }
 
+// ---------------------------------------------------------------- deps
+
+/// `rospm deps check`: rosdep keys of every workspace versus the installed set.
+pub fn deps_check(global: &Global) -> Result<()> {
+    let _ = global;
+    not_implemented("deps check", "P2")
+}
+
+/// `rospm deps install [--dry-run]`: hand the missing keys to rosdep.
+pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
+    let _ = (global, dry_run);
+    not_implemented("deps install", "P2")
+}
+
 pub fn env(global: &Global, shell: Shell) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, shell)?;
     print!("{script}");
     Ok(())
@@ -790,7 +834,7 @@ pub fn env(global: &Global, shell: Shell) -> Result<()> {
 pub fn shell(global: &Global) -> Result<()> {
     let loaded = load(global)?;
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, false, mirror::OFFICIAL)?;
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
 
     let env_dir = loaded.root.join(".rospm");
@@ -1051,6 +1095,14 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
     } else {
         std::process::exit(1)
     }
+}
+
+// ---------------------------------------------------------------- verify
+
+/// `rospm verify`: compare `rospm.lock` with the host (spec §4, read-only).
+pub fn verify(global: &Global) -> Result<()> {
+    let _ = global;
+    not_implemented("verify", "P2")
 }
 
 #[cfg(test)]

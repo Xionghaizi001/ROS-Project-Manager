@@ -23,6 +23,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("rosdep", "tool.rosdep"),
     ("apt-get", "tool.apt_get"),
     ("dpkg-query", "tool.dpkg_query"),
+    ("python3", "tool.python3"),
     ("pixi", "tool.pixi"),
     ("docker", "tool.docker"),
 ];
@@ -584,6 +585,71 @@ impl Host {
     }
 }
 
+/// Package name of a pip requirement (`numpy>=1.26`, `foo[extra]==1`,
+/// `Bar_baz`), normalised per PEP 503: lower-case, runs of `-`/`_`/`.` → `-`.
+pub fn pip_requirement_name(requirement: &str) -> String {
+    let raw = requirement
+        .trim()
+        .split(|c: char| c.is_whitespace() || "<>=!~;[@".contains(c))
+        .next()
+        .unwrap_or("");
+    let mut out = String::with_capacity(raw.len());
+    let mut sep = false;
+    for c in raw.chars() {
+        if c == '-' || c == '_' || c == '.' {
+            sep = true;
+        } else {
+            if sep && !out.is_empty() {
+                out.push('-');
+            }
+            sep = false;
+            out.extend(c.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Parse `pip freeze` / `pip list --format=freeze` output (`name==version`
+/// lines) into normalised name → version. Editable / URL lines are skipped.
+pub fn parse_pip_freeze(stdout: &str) -> BTreeMap<String, String> {
+    stdout
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') || l.starts_with("-e ") {
+                return None;
+            }
+            let (name, version) = l.split_once("==")?;
+            Some((pip_requirement_name(name), version.trim().to_string()))
+        })
+        .collect()
+}
+
+impl Host {
+    /// `python3 -m pip list --format=freeze`: every installed distribution
+    /// with its version, or `None` when python3 / pip are unavailable.
+    /// Recorded by `lock`, compared by `verify`, never installed (decision #6).
+    pub fn pip_freeze(&self) -> Option<BTreeMap<String, String>> {
+        let python = self.tool("python3")?;
+        let out = process::Command::new(python)
+            .args([
+                "-m",
+                "pip",
+                "list",
+                "--format=freeze",
+                "--disable-pip-version-check",
+            ])
+            .stdin(process::Stdio::null())
+            .stderr(process::Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(parse_pip_freeze(&String::from_utf8_lossy(&out.stdout)))
+    }
+}
+
 /// Whether `dir` is the top level of a git checkout (a `.git` directory or
 /// worktree file).
 pub fn is_git_checkout(dir: &Path) -> bool {
@@ -768,6 +834,23 @@ mod tests {
         assert!(status["git"].installed);
         assert!(!status["nope"].installed);
         assert!(PackageDb::Unavailable.status(&["git".into()]).is_none());
+    }
+
+    #[test]
+    fn pip_names_normalise_and_freeze_parses() {
+        assert_eq!(pip_requirement_name("numpy>=1.26"), "numpy");
+        assert_eq!(
+            pip_requirement_name("Foo_Bar.baz[extra]==1.0"),
+            "foo-bar-baz"
+        );
+        assert_eq!(
+            pip_requirement_name("  ruamel.yaml ; python_version<'3'"),
+            "ruamel-yaml"
+        );
+        let f = parse_pip_freeze("numpy==1.26.4\nPyYAML==6.0.1\n-e git+https://x#egg=y\n\n");
+        assert_eq!(f["numpy"], "1.26.4");
+        assert_eq!(f["pyyaml"], "6.0.1");
+        assert_eq!(f.len(), 2);
     }
 
     #[test]

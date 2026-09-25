@@ -5,6 +5,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::error::{Error, Result};
+use crate::lock::Lock;
 use crate::manifest::{Manifest, ProviderKind};
 use crate::mirror::Mirror;
 use crate::msg;
@@ -22,6 +23,9 @@ pub struct Context<'a> {
     pub platform: Platform,
     /// `apply --locked`: honour `rospm.lock` (snapshots, pinned revisions).
     pub locked: bool,
+    /// `rospm.lock` next to the manifest, if it exists and parsed. Loaded by
+    /// the CLI for every command; `apply --locked` and `verify` require it.
+    pub lock: Option<&'a Lock>,
     /// `apply --offline`: use only bundled payloads.
     pub offline: bool,
     /// Facts about this machine, probed once per command. Plans consult it
@@ -90,6 +94,14 @@ pub trait Provider {
     /// Compare what the manifest needs with what `ctx.host` has (spec §4 `check`).
     /// Read-only: never installs, never writes.
     fn probe_env(&self, ctx: &Context) -> Result<EnvReport>;
+
+    /// Resolve what the host currently has into a lock file (spec §3,
+    /// `rospm lock`). Read-only on the system; the CLI writes the result.
+    fn resolve_lock(&self, ctx: &Context) -> Result<Lock>;
+
+    /// Compare `lock` with the host (spec §4 `verify`): source revisions,
+    /// apt versions, pip versions. Read-only.
+    fn verify(&self, ctx: &Context, lock: &Lock) -> Result<EnvReport>;
 }
 
 /// Select the provider declared in the manifest.
@@ -140,6 +152,12 @@ impl Provider for Unimplemented {
         Err(self.err())
     }
     fn env_script(&self, _ctx: &Context, _shell: Shell) -> Result<String> {
+        Err(self.err())
+    }
+    fn resolve_lock(&self, _ctx: &Context) -> Result<Lock> {
+        Err(self.err())
+    }
+    fn verify(&self, _ctx: &Context, _lock: &Lock) -> Result<EnvReport> {
         Err(self.err())
     }
     fn probe_env(&self, _ctx: &Context) -> Result<EnvReport> {

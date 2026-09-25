@@ -11,6 +11,7 @@
 //! - [`repos`] / [`package_xml`]: read-only views of the files a ROS workspace
 //!   already has (`.repos`, `package.xml`).
 //! - [`probe`]: read-only facts about the host (OS, ROS installs, dpkg, rosdep).
+//! - [`snapshot`]: snapshot repository layout and keys (`lock`, `apply --locked`).
 //! - [`mirror`] / [`net`]: package-source mirrors and the reachability probe
 //!   `apply` runs before downloading (decision #17).
 //! - [`introspect`]: `init --from-env`, a best-effort draft manifest from the
@@ -32,6 +33,7 @@ pub mod probe;
 pub mod provider;
 pub mod repos;
 pub mod scm;
+pub mod snapshot;
 
 pub use error::{Error, Result};
 pub use message::Message;

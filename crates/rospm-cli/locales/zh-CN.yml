@@ -312,6 +312,7 @@ tool:
   rosdep: "依赖解析"
   apt_get: "native 提供者"
   dpkg_query: "native 提供者：已安装包的版本"
+  python3: "pip 版本（lock / verify，仅记录）"
   pixi: "pixi 提供者（路线图 P3）"
   docker: "docker 提供者（路线图 P4）"
 

@@ -44,6 +44,7 @@ fn ctx<'a>(m: &'a Manifest, host: &'a Host) -> Context<'a> {
         root: Path::new("/proj"),
         platform: Platform::LinuxX86_64,
         locked: false,
+        lock: None,
         offline: false,
         host,
         mirror: mirror::OFFICIAL,

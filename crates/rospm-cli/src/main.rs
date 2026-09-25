@@ -251,8 +251,8 @@ fn main() -> ExitCode {
             commands::init(&global, from_env, base, force)
         }
         Cmd::Check { target, strict } => commands::check(&global, target, strict),
-        Cmd::Lock { .. } => commands::not_implemented("lock", "P2"),
-        Cmd::Verify => commands::not_implemented("verify", "P2"),
+        Cmd::Lock { platform } => commands::lock(&global, platform),
+        Cmd::Verify => commands::verify(&global),
         Cmd::Apply {
             locked,
             offline,
@@ -275,8 +275,8 @@ fn main() -> ExitCode {
         Cmd::Env { shell } => commands::env(&global, shell),
         Cmd::Shell => commands::shell(&global),
         Cmd::Deps { command } => match command {
-            DepsCmd::Check => commands::not_implemented("deps check", "P2"),
-            DepsCmd::Install { .. } => commands::not_implemented("deps install", "P2"),
+            DepsCmd::Check => commands::deps_check(&global),
+            DepsCmd::Install { dry_run } => commands::deps_install(&global, dry_run),
         },
         Cmd::Export { .. } => commands::not_implemented("export", "P6"),
         Cmd::Import { .. } => commands::not_implemented("import", "P6"),
