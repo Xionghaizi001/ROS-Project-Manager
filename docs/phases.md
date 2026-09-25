@@ -89,10 +89,24 @@
 
 ---
 
+## Phase 1.5 — 输出本地化 i18n（约 1 周）
+
+状态：**未开始**。决策 #16，规则见 spec §4.2。插在 P1 与 P2 之间：P1 的命令集已稳定，现存面向用户的字符串约 150 条（CLI 输出 43、计划注释与探测报告 68、`init --from-env` 说明 32），回填成本可控；P2 起每个阶段都会新增大量字符串，晚做只会更贵。不阻塞 P1 的干净虚拟机验收，可并行。
+
+- [ ] 选库并落基础设施：优先 `rust-i18n`（`t!` 宏，YAML 资源编译期嵌入，无运行时文件）；若后续需要复数 / 语法规则再评估 Fluent。资源放 `crates/rospm-cli/locales/{en,zh-CN}.yml`；`rospm-core` 中面向用户的文本（计划注释、探测报告、错误）改为返回消息键 + 参数，由 CLI 层渲染，核心库不依赖 locale。
+- [ ] locale 选择：`LANGUAGE` → `LC_ALL` → `LC_MESSAGES` → `LANG`；`zh*` → `zh-CN`，其余 → `en`；`ROSPM_LANG` 与 `--lang` 覆盖；在 `Cli::parse()` 之前完成，使 `--help` 也本地化。单测覆盖 `zh_CN.UTF-8` / `zh_TW` / `C` / 未设置 / `LANGUAGE=zh:en`。
+- [ ] 回填现有字符串：clap 说明、`init`（含 `detected` / `TODO` 行）、`check` 表格与总结、`doctor`、`apply` / `uninstall` 计划注释与确认提示、`Error` Display。`--json` 键名与枚举值保持英文。
+- [ ] `init` 模板按语言选文件（`templates/rospm.{en,zh-CN}.toml`），两份模板都必须通过 `Manifest::parse`。
+- [ ] 单测：两种语言键集合一致；缺键回退英文不 panic。CI 冒烟增加一轮 `LANG=zh_CN.UTF-8`，断言输出含中文且退出码不变；现有英文断言在 `LANG=C` 下继续有效。
+- [ ] `docs/spec.md` §4.2 与 README 补充语言切换说明。
+- **产出**：`LANG=zh_CN.UTF-8` 下 `--help` / `check` / `apply --dry-run` / 错误信息全部为中文，`LANG=C` 下全部为英文。此后 review 把裸英文用户字符串视为缺陷。
+
+---
+
 ## Phase 2 — 锁文件与依赖补全（约 3 周）
 
 状态：**未开始**。`rospm.lock` 的数据结构与读取（`lock.rs`）已随骨架落地；`lock` / `verify` / `deps` 命令目前返回 NotImplemented(P2)。
-前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源。
+前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源；P1.5 的 i18n 层必须先落地，本阶段新增字符串直接走该层。
 
 ### `rospm lock`
 - [x] lock v0 schema 与解析（`Lock::parse`）。

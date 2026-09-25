@@ -87,6 +87,7 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 |---|---|---|---|
 | P0 | 规格、决策、schema、Rust 骨架、CI | 1–2 周 | **基本完成**：决策/spec/schema/骨架/单测 ✅；外部事实 4 项全部有本地实测证据 ✅（ROS 快照签名密钥已核验、补丁版 rosdep 映射 `rclcpp` 通过、x86 上真实 ARM pixi-pack 通过）；CI 各步骤本地复现通过，仅剩 GitHub 实跑与 spec review |
 | P1 | native 提供者的描述与重放（x86_64、22.04/24.04、Humble/Jazzy） | 3–4 周 | **进行中**：`init`（含 `--from-env` 反推、`--base` 选底包）与 `check`（环境探测 + 差异报告）已完成；`apply` 从裸 Ubuntu 起步（ROS apt 源 bootstrap）与 `uninstall` 的计划已就绪；`build` / `env` / `shell` / `doctor` 骨架与 `--dry-run` 计划已就绪；缺 fish、干净虚拟机实跑 |
+| P1.5 | 输出本地化（i18n）：中文 + 英文，按系统 locale 选择；此后新字符串一律走 i18n 层 | 1 周 | 未开始（决策 #16；可与 P1 的干净虚拟机实跑并行） |
 | P2 | 锁文件与依赖补全：`lock` / `apply --locked` / `verify` / `deps` | 3 周 | 未开始（lock schema 与解析已随骨架落地） |
 | P3 | Pixi 提供者：生成 `pixi.toml`，锁定委托 `pixi.lock`，RoboStack rosdep 源 | 3 周 | 未开始（占位返回 NotImplemented） |
 | P4 | Docker 提供者：Dockerfile / compose / devcontainer，digest 锁定，buildx | 2–3 周 | 未开始（占位返回 NotImplemented） |
@@ -99,6 +100,7 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 
 - **P0 产出**：`rospm --help` 可运行 ✅；spec 与示例清单待 review。
 - **P1 产出**：干净 22.04 虚拟机（无 ROS、无 ROS apt 源）上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功。
+- **P1.5 产出**：`LANG=zh_CN.UTF-8` 下 `rospm --help` / `check` / `apply --dry-run` / 错误信息全部为中文，`LANG=C` 下全部为英文；两种语言键集合一致。
 - **P2 产出**：两台机器、间隔数周执行 `apply --locked`，`verify` 报告一致。
 - **P3 产出**：同一份清单切换 `provider = "pixi"` 后在无 sudo 机器上完成 apply/build。
 - **P4 产出**：`rospm apply` 产出可运行镜像，`rospm shell` 进入容器且 ROS 环境就位。
@@ -109,11 +111,12 @@ RoboStack 下 rosdep 需要用 RoboStack 自己的 rosdep yaml 源，且解析�
 ## 6. 阶段间的硬性依赖
 
 ```
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8
-                 └────────┘  (P3/P4 可并行，但都依赖 P2 的 Provider 抽象)
+P0 → P1 → P1.5 → P2 → P3 → P4 → P5 → P6 → P7 → P8
+      └───┘             └────────┘  (P3/P4 可并行，但都依赖 P2 的 Provider 抽象)
+   (P1.5 只依赖 P1 的命令集稳定，可与 P1 实机验证并行)
 ```
 
-P5 依赖 P4 的 buildx 与 P3 的 pixi.lock 多平台能力；P6 依赖 P5 的跨架构下载。
+P5 依赖 P4 的 buildx 与 P3 的 pixi.lock 多平台能力；P6 依赖 P5 的跨架构下载。P2 起的新命令必须建立在 P1.5 的 i18n 层上，所以 P1.5 必须先于 P2 开工。
 
 ## 7. 建议开工前先读的项目
 

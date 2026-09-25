@@ -214,7 +214,7 @@ version = "1.26.4"
 | `editor [vscode\|clion\|devcontainer]` | 写项目文件 / 幂等 | 生成编辑器配置 | — |
 | `doctor` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用 | — |
 
-全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）。
+全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`（P1.5 起，见 §4.2）。
 
 ### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
 
@@ -232,6 +232,27 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 - rospm 自己写 keyring + `sources.list.d`，而不是安装 `ros2-apt-source` 包：P2 `apply --locked` 要把同一文件指向 `snapshots.ros.org` 并以 `signed-by=` 引用快照密钥，两者共用一套源文件管理代码（决策 #14）。
 - `--dry-run` 会完整打印将写入的源文件内容。
 - 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动（§7）。
+
+### 4.2 输出语言（i18n，P1.5，决策 #16）
+
+**语言选择**：按 GNU gettext 的优先级读环境变量 `LANGUAGE`（冒号分隔列表，取第一个能匹配的）→ `LC_ALL` → `LC_MESSAGES` → `LANG`。值以 `zh` 开头（`zh_CN.UTF-8`、`zh_TW`、`zh_Hans` 等）→ 简体中文；其余（含未设置、`C`、`POSIX`）→ 英文。`ROSPM_LANG=zh|en` 覆盖环境 locale，`--lang` 再覆盖 `ROSPM_LANG`。语言在解析命令行参数之前确定，因此 `--help` 也随之切换。
+
+**翻译范围**（初期只有 `zh-CN` 与 `en`，`en` 为源语言）：
+
+| 翻译 | 不翻译 |
+|---|---|
+| clap 的命令 / 参数说明与 `--help` | 子命令名、参数名、`rospm.toml` / `rospm.lock` 的键与值 |
+| `check` / `doctor` / `init` 的表格文字、提示、`detected` / `TODO` 说明 | `--json` 的键名、`status` 等枚举值（`ok` / `missing` / …） |
+| 计划里的 `# 注释行`（降级告警、说明） | 计划里的 shell 命令本身与将写入的文件内容 |
+| 错误信息（`Error` 的 Display）与确认提示 | `tracing` 日志（`-v`，面向开发者）、外部工具（apt / rosdep / colcon）的原始输出 |
+| `init` 写出的清单模板注释（按语言选模板） | 文档 `docs/`（另行维护） |
+
+**实现约束**：
+- 翻译资源随二进制编译（单文件分发不变），运行时不读外部文件。
+- `--json` 中的自由文本字段（如 `actual`、`notes`）也随语言变化；需要稳定文本的消费者应看枚举字段，或设 `ROSPM_LANG=en`。CI 用英文（runner 的 locale 是 `C`）。
+- 英文单复数（`1 package` / `2 packages`）用独立键或改写句式，不依赖库的复数规则；中文无此问题。
+- 每个键必须同时存在于两种语言，由单元测试保证；缺失键回退英文并在 `-v` 下告警，不 panic。
+- P1.5 之后新增的面向用户字符串一律走 i18n 层；review 时把裸英文字符串视为缺陷。
 
 ## 5. 离线导出包格式
 

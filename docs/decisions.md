@@ -19,6 +19,7 @@
 | 13 | 实现语言 | Rust | apt 侧先 shell out，不绑定 libapt-pkg |
 | 14 | 安装 ROS（2026-09-26 补充） | **属于 native 提供者 `apply` 的范围**：配置 ROS apt 源（locale、universe、keyring、`sources.list.d/ros2.list`）→ 装底包。rospm 自己写 keyring + 源文件，不安装 `ros2-apt-source` 包 | 理由：pixi / docker 提供者天然包含安装 ROS，native 不补上则"同一份清单切换提供者"残缺，且 P1 验收（干净虚拟机）无法通过；源文件由 rospm 管理是为了 P2 快照源切换复用同一路径。不安装 / 升级 Ubuntu 本身，版本不符直接报错。见 `spec.md` §4.1 |
 | 15 | 卸载 ROS（2026-09-26 补充） | `rospm uninstall`：显式列出已装 `ros-<distro>-*` 后 `apt-get remove` + `autoremove`；rospm 写的 apt 源随之删除，但有其它发行版或源非 rospm 所写时保留；不卸 rosdep / vcstool / colcon；不动项目文件 | 第三类命令，`--dry-run` 必须；额外要求交互确认或 `--yes`。底包口味由 `init --base ros-base\|desktop` 选择，清单字段 `ros_base` 仍为自由包名 |
+| 16 | 输出语言 / i18n（2026-09-26 补充） | **P1.5 单独一小段排期**，在 P2 之前落地：初期只做简体中文 + 英文；按系统 locale 自动选择（`LANGUAGE` → `LC_ALL` → `LC_MESSAGES` → `LANG`，`zh*` → 中文，其余 → 英文），`ROSPM_LANG=zh\|en` / `--lang` 可覆盖。翻译资源编译进二进制（单文件分发不变） | 理由：用户日常读中文；越晚做，回填字符串越贵。P1.5 之后新增的所有面向用户的字符串必须走 i18n 层。机器接口不翻译：`--json` 的键名与枚举值、清单 / 锁文件 / 计划里的 shell 命令、日志。见 `spec.md` §4.2 与 `phases.md` Phase 1.5 |
 
 ## 派生原则（由上述决策推出，后续实现须遵守）
 
