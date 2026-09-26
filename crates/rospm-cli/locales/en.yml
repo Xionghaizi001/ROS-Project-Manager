@@ -235,7 +235,7 @@ lock:
   no_vcs_no_git: "neither vcs nor git is available; source revisions cannot be recorded"
   vcs_missing: "vcstool is not installed; revisions read with git instead"
   vcs_export_failed: "`vcs export --exact` failed in workspace %{workspace} (%{status}); revisions read with git instead"
-  sources_not_imported: "%{count} repositories are not imported yet (%{list}); run `rospm apply` first, a lock describes a resolved state"
+  sources_not_imported: "not imported yet (%{count}): %{list}; run `rospm apply` first, a lock describes a resolved state"
   origin_differs: "%{workspace}: src/%{name}: checkout origin is %{actual}; the .repos URL %{url} was recorded"
   dpkg_unavailable: "dpkg-query is unavailable; apt versions cannot be recorded"
   apt_missing: "not installed, not recorded (run `rospm apply`): %{packages}"
