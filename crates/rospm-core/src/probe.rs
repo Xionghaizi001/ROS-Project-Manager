@@ -51,6 +51,10 @@ pub const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/m
 /// RSA 4096, created 2019-05-30, valid until 2030-06-01). `apply` refuses a
 /// downloaded `ros.key` whose fingerprint differs.
 pub const ROS_KEY_FINGERPRINT: &str = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654";
+/// Where rospm writes the Ubuntu snapshot source entries (`apply --locked`,
+/// P2); a file of its own, never Ubuntu's own `sources.list` / `ubuntu.sources`
+/// (decision #17).
+pub const UBUNTU_SNAPSHOT_LIST: &str = "/etc/apt/sources.list.d/rospm-ubuntu-snapshot.list";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct OsRelease {
@@ -125,15 +129,43 @@ pub struct AptSources {
     /// `universe` is enabled in some source. `None` when no source file
     /// could be read (non-Debian host).
     pub universe: Option<bool>,
+    /// Base URL of a ROS snapshot (`http://snapshots.ros.org/<distro>/<date>/ubuntu`)
+    /// found in whichever file `ros2` points at, detected by the
+    /// `snapshots.ros.org` substring (`apply --locked`, P2).
+    #[serde(default)]
+    pub ros2_snapshot: Option<String>,
+    /// The signing key at [`crate::snapshot::ROS_SNAPSHOT_KEYRING`] exists.
+    #[serde(default)]
+    pub snapshot_keyring: bool,
+    /// Base URL of the Ubuntu snapshot (`https://snapshot.ubuntu.com/ubuntu/<timestamp>`)
+    /// if rospm's own [`UBUNTU_SNAPSHOT_LIST`] file exists.
+    #[serde(default)]
+    pub ubuntu_snapshot: Option<String>,
+    /// The signing key at [`crate::snapshot::UBUNTU_ARCHIVE_KEYRING`] exists
+    /// (shipped by the `ubuntu-keyring` package; usually present, but the
+    /// Ubuntu snapshot file still gets written when it is not — apt will
+    /// complain loudly, which is clearer than rospm silently refusing).
+    #[serde(default)]
+    pub ubuntu_archive_keyring: bool,
 }
 
 impl AptSources {
     pub fn probe() -> AptSources {
-        Self::probe_in(Path::new("/etc/apt"), Path::new(ROS_APT_KEYRING))
+        Self::probe_in(
+            Path::new("/etc/apt"),
+            Path::new(ROS_APT_KEYRING),
+            Path::new(crate::snapshot::ROS_SNAPSHOT_KEYRING),
+            Path::new(crate::snapshot::UBUNTU_ARCHIVE_KEYRING),
+        )
     }
 
     /// Scan `<etc_apt>/sources.list` and `<etc_apt>/sources.list.d/*`.
-    pub fn probe_in(etc_apt: &Path, keyring: &Path) -> AptSources {
+    pub fn probe_in(
+        etc_apt: &Path,
+        keyring: &Path,
+        snapshot_keyring: &Path,
+        ubuntu_archive_keyring: &Path,
+    ) -> AptSources {
         let mut files: Vec<PathBuf> = vec![etc_apt.join("sources.list")];
         if let Ok(rd) = fs::read_dir(etc_apt.join("sources.list.d")) {
             let mut extra: Vec<PathBuf> = rd
@@ -154,7 +186,12 @@ impl AptSources {
             ros2_mirror: None,
             keyring: keyring.is_file(),
             universe: None,
+            ros2_snapshot: None,
+            snapshot_keyring: snapshot_keyring.is_file(),
+            ubuntu_snapshot: None,
+            ubuntu_archive_keyring: ubuntu_archive_keyring.is_file(),
         };
+        let ubuntu_snapshot_name = Path::new(UBUNTU_SNAPSHOT_LIST).file_name();
         for file in files {
             let Ok(text) = fs::read_to_string(&file) else {
                 continue;
@@ -168,12 +205,37 @@ impl AptSources {
                     out.ros2_mirror = Some(m.name);
                 }
             }
+            if out.ros2_snapshot.is_none() {
+                if let Some(base) = extract_url_containing(&text, "snapshots.ros.org") {
+                    out.ros2_snapshot = Some(base);
+                    if out.ros2.is_none() {
+                        out.ros2 = Some(file.clone());
+                    }
+                }
+            }
+            if out.ubuntu_snapshot.is_none() && file.file_name() == ubuntu_snapshot_name {
+                out.ubuntu_snapshot = extract_url_containing(&text, "snapshot.ubuntu.com/ubuntu");
+            }
             if source_text_enables_universe(&text) {
                 out.universe = Some(true);
             }
         }
         out
     }
+}
+
+/// The first whitespace-separated token on a non-comment line that contains
+/// `needle`, e.g. the snapshot base URL in a `deb [...] <url> <suite> main`
+/// line.
+fn extract_url_containing(text: &str, needle: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| {
+            l.split_whitespace()
+                .find(|w| w.contains(needle))
+                .map(str::to_string)
+        })
 }
 
 /// Whether an apt source file (one-line or deb822) has a non-comment line
@@ -893,14 +955,80 @@ mod tests {
             "packages.ros.org/ros2\n",
         )
         .unwrap();
-        let probed = AptSources::probe_in(&dir, &dir.join("missing-keyring.gpg"));
+        let probed = AptSources::probe_in(
+            &dir,
+            &dir.join("missing-keyring.gpg"),
+            &dir.join("missing-snapshot-keyring.gpg"),
+            &dir.join("missing-ubuntu-keyring.gpg"),
+        );
         assert_eq!(probed.ros2, Some(dir.join("sources.list.d/ros2.list")));
         assert_eq!(probed.universe, Some(true));
         assert!(!probed.keyring);
+        assert_eq!(probed.ros2_snapshot, None);
+        assert!(!probed.snapshot_keyring);
+        assert_eq!(probed.ubuntu_snapshot, None);
+        assert!(!probed.ubuntu_archive_keyring);
 
-        let none = AptSources::probe_in(&dir.join("nope"), &dir);
+        let none = AptSources::probe_in(&dir.join("nope"), &dir, &dir, &dir);
         assert_eq!(none.ros2, None);
         assert_eq!(none.universe, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apt_sources_probe_detects_a_ros_snapshot_and_its_keyring() {
+        let dir = std::env::temp_dir().join(format!("rospm-apt-snap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sources.list.d")).unwrap();
+        fs::write(
+            dir.join("sources.list.d/ros2.list"),
+            "deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/jazzy/2026-09-11/ubuntu noble main\n",
+        )
+        .unwrap();
+        let keyring = dir.join("ros2-snapshots-archive-keyring.gpg");
+        fs::write(&keyring, b"").unwrap();
+        let probed = AptSources::probe_in(
+            &dir,
+            &dir.join("missing-ros-keyring.gpg"),
+            &keyring,
+            &dir.join("missing-ubuntu-keyring.gpg"),
+        );
+        assert_eq!(probed.ros2, Some(dir.join("sources.list.d/ros2.list")));
+        assert_eq!(probed.ros2_mirror, None);
+        assert_eq!(
+            probed.ros2_snapshot.as_deref(),
+            Some("http://snapshots.ros.org/jazzy/2026-09-11/ubuntu")
+        );
+        assert!(probed.snapshot_keyring);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apt_sources_probe_detects_rospms_ubuntu_snapshot_file() {
+        let dir = std::env::temp_dir().join(format!("rospm-apt-usnap-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sources.list.d")).unwrap();
+        fs::write(
+            dir.join("sources.list.d/rospm-ubuntu-snapshot.list"),
+            "deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://snapshot.ubuntu.com/ubuntu/20260911T182146Z noble main restricted universe multiverse\n",
+        )
+        .unwrap();
+        let ubuntu_keyring = dir.join("ubuntu-archive-keyring.gpg");
+        fs::write(&ubuntu_keyring, b"").unwrap();
+        let probed = AptSources::probe_in(
+            &dir,
+            &dir.join("missing"),
+            &dir.join("missing"),
+            &ubuntu_keyring,
+        );
+        assert_eq!(
+            probed.ubuntu_snapshot.as_deref(),
+            Some("https://snapshot.ubuntu.com/ubuntu/20260911T182146Z")
+        );
+        assert!(probed.ubuntu_archive_keyring);
+        let none = AptSources::probe_in(&dir.join("nope"), &dir, &dir, &dir.join("missing"));
+        assert_eq!(none.ubuntu_snapshot, None);
+        assert!(!none.ubuntu_archive_keyring);
         let _ = fs::remove_dir_all(&dir);
     }
 

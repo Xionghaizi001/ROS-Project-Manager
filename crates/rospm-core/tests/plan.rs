@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use rospm_core::manifest::Manifest;
+use rospm_core::lock::{Lock, LockedApt, LockedNative, LockedProvider, LockedSource};
+use rospm_core::manifest::{Manifest, ProviderKind};
 use rospm_core::mirror;
 use rospm_core::plan::{shell_quote, Command, Step};
 use rospm_core::platform::Platform;
 use rospm_core::probe::{
     parse_dpkg_query, AptSources, Host, LocaleState, OsRelease, PackageDb, Status, ROS_APT_KEYRING,
-    ROS_APT_LIST,
+    ROS_APT_LIST, UBUNTU_SNAPSHOT_LIST,
 };
 use rospm_core::provider::{self, Context, Shell};
 
@@ -33,6 +34,7 @@ fn ready_host() -> Host {
         ros2_mirror: Some("official"),
         keyring: true,
         universe: Some(true),
+        ..AptSources::default()
     };
     h.rosdep.initialized = true;
     h
@@ -518,4 +520,200 @@ fn native_apply_rewrites_its_own_apt_source_for_a_new_mirror_but_not_foreign_fil
         !rendered.contains("plan.write_file_sudo(path=/etc/apt"),
         "{rendered}"
     );
+}
+
+/// A minimal, valid native lock: the given ROS/Ubuntu snapshot dates,
+/// pinned apt for `LinuxX86_64` only, and one git source per workspace.
+fn locked(ros_snapshot: Option<&str>, ubuntu_snapshot: Option<&str>) -> Lock {
+    Lock {
+        schema_version: 1,
+        generated_at: "2026-09-11T00:00:00Z".into(),
+        manifest_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .into(),
+        provider: LockedProvider {
+            kind: ProviderKind::Native,
+            native: Some(LockedNative {
+                ubuntu: "24.04".into(),
+                ros_snapshot: ros_snapshot.map(str::to_string),
+                ubuntu_snapshot: ubuntu_snapshot.map(str::to_string),
+            }),
+            pixi: None,
+            docker: None,
+        },
+        sources: vec![
+            LockedSource {
+                workspace: "deps".into(),
+                name: "foo_pkg".into(),
+                kind: "git".into(),
+                url: "https://github.com/example/foo_pkg".into(),
+                rev: "abc123deadbeef".into(),
+            },
+            LockedSource {
+                workspace: "main".into(),
+                name: "bar_pkg".into(),
+                kind: "git".into(),
+                url: "https://github.com/example/bar_pkg".into(),
+                rev: "def456cafebabe".into(),
+            },
+        ],
+        apt: vec![
+            LockedApt {
+                platform: Platform::LinuxX86_64,
+                name: "ros-jazzy-ros-base".into(),
+                version: "2.4.1-1noble.20260910.194500".into(),
+                sha256: None,
+            },
+            LockedApt {
+                platform: Platform::LinuxX86_64,
+                name: "python3-rosdep".into(),
+                version: "0.24.0-1".into(),
+                sha256: None,
+            },
+            LockedApt {
+                platform: Platform::LinuxAarch64,
+                name: "libbar-arm-dev".into(),
+                version: "1.0-1".into(),
+                sha256: None,
+            },
+        ],
+        pip: vec![],
+    }
+}
+
+/// `ctx()` plus `locked: true` and a lock reference.
+fn locked_ctx<'a>(m: &'a Manifest, host: &'a Host, lock: &'a Lock) -> Context<'a> {
+    Context {
+        locked: true,
+        lock: Some(lock),
+        ..ctx(m, host)
+    }
+}
+
+#[test]
+fn native_apply_locked_pins_the_ros_and_ubuntu_snapshots_and_every_apt_and_git_source() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = bare_host();
+    let lock = locked(Some("2026-09-11"), Some("20260911T182146Z"));
+    let plan = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap();
+    let rendered = plan.render();
+
+    // ROS snapshot: rospm's own file, signed by the snapshot key (not the
+    // regular ROS key), key fetched by fingerprint from the keyserver.
+    assert!(
+        rendered.contains(
+            "plan.fetch_key(url=https://keyserver.ubuntu.com/pks/lookup?op=get&options=mr&search=0x4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA, dest=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg, fingerprint=4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA)"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!("plan.write_file_sudo(path={ROS_APT_LIST}, bytes=")),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "| deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/jazzy/2026-09-11/ubuntu noble main"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("trusted=yes"), "{rendered}");
+
+    // Ubuntu snapshot: a separate, rospm-owned file; Ubuntu's own
+    // sources.list is never mentioned.
+    assert!(
+        rendered.contains(&format!(
+            "plan.write_file_sudo(path={UBUNTU_SNAPSHOT_LIST}, bytes="
+        )),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "| deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://snapshot.ubuntu.com/ubuntu/20260911T182146Z noble-security main restricted universe multiverse"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("/etc/apt/sources.list\n"), "{rendered}");
+
+    // Every pinned apt package for this platform, exactly, none for the other.
+    assert!(
+        rendered.contains("sudo apt-get install -y --allow-downgrades ros-jazzy-ros-base=2.4.1-1noble.20260910.194500"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("python3-rosdep=0.24.0-1"), "{rendered}");
+    assert!(!rendered.contains("libbar-arm-dev"), "{rendered}");
+
+    // Git sources pinned by `checkout --detach`, no `rosdep install`.
+    assert!(
+        rendered.contains("(cd /proj/deps_ws/src/foo_pkg && git checkout --detach abc123deadbeef)"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("(cd /proj/ws/src/bar_pkg && git checkout --detach def456cafebabe)"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("rosdep install"), "{rendered}");
+    assert!(rendered.contains("sudo rosdep init"), "{rendered}");
+}
+
+#[test]
+fn native_apply_locked_degrades_to_the_live_repositories_when_the_lock_has_no_snapshot() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = bare_host();
+    let lock = locked(None, None);
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains("native.apply.locked_degraded(what=ROS apt)"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("native.apply.locked_degraded(what=Ubuntu apt)"),
+        "{rendered}"
+    );
+    // Falls back to exactly the same live-repository bootstrap as a
+    // non-locked apply (spec §3.2 degradation).
+    assert!(rendered.contains("http://packages.ros.org/ros2/ubuntu noble main"));
+    assert!(!rendered.contains("snapshots.ros.org"), "{rendered}");
+    assert!(!rendered.contains(UBUNTU_SNAPSHOT_LIST), "{rendered}");
+    // The pinned apt set still installs (the lock has no snapshot, not no apt).
+    assert!(rendered.contains("--allow-downgrades ros-jazzy-ros-base="));
+}
+
+#[test]
+fn native_apply_locked_without_a_lock_is_an_error() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = bare_host();
+    let mut c = ctx(&m, &host);
+    c.locked = true;
+    let err = provider::for_manifest(&m).plan_apply(&c).unwrap_err();
+    assert_eq!(err.to_string(), "native.apply.locked_no_lock");
+}
+
+#[test]
+fn native_apply_locked_leaves_a_foreign_ros_apt_source_alone() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = bare_host();
+    host.apt_sources.ros2 = Some(PathBuf::from("/etc/apt/sources.list.d/ros2.sources"));
+    let lock = locked(Some("2026-09-11"), Some("20260911T182146Z"));
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains(
+            "native.apply.locked_snapshot_foreign(file=/etc/apt/sources.list.d/ros2.sources)"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains(&format!("plan.write_file_sudo(path={ROS_APT_LIST}")),
+        "{rendered}"
+    );
+    // The Ubuntu snapshot and the pinned apt set are unaffected by the
+    // foreign ROS source.
+    assert!(rendered.contains(UBUNTU_SNAPSHOT_LIST));
+    assert!(rendered.contains("--allow-downgrades ros-jazzy-ros-base="));
 }
