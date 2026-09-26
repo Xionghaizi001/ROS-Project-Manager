@@ -196,11 +196,11 @@ version = "1.26.4"
 **`apply --locked` 的做法（P2）**：
 
 - 前置：`rospm.lock` 必须存在且 `manifest_sha256` 与清单原文一致，`provider.kind` 须为 native，锁文件里须有本机平台的 apt 记录且含清单的底包；任一不满足直接报错提示重新 `rospm lock`（陈旧的锁是用户错误，不是降级）。
-- ROS 源：复用 P1 的源文件管理——同一个 `/etc/apt/sources.list.d/ros2.list` 改写为 `deb [arch=<arch> signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/<distro>/<date>/ubuntu <codename> main`；keyring 先从 `keyserver.ubuntu.com` 下载、按指纹 `4B63…CBF125EA` 核验后才安装（已存在则跳过）。文件已指向同一快照则不动；文件不是 rospm 写的（如 `ros2-apt-source`）则不动并说明快照未应用。
-- Ubuntu 源：写 rospm 自己的 `/etc/apt/sources.list.d/rospm-ubuntu-snapshot.list`（`<codename>`、`<codename>-updates`、`<codename>-security` × `main restricted universe multiverse`，`signed-by=ubuntu-archive-keyring.gpg`），**不改** Ubuntu 自身的 `sources.list` / `ubuntu.sources`（决策 #17）。这个文件只是让锁定的版本可下载。
+- ROS 源：复用 P1 的源文件管理——同一个 `/etc/apt/sources.list.d/ros2.list` 改写为 `deb [arch=<arch> signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/<distro>/<date>/ubuntu <codename> main`；keyring 先从 `keyserver.ubuntu.com` 下载、按指纹 `4B63…CBF125EA` 核验，keyserver 返回的是 ASCII armor 格式，须 `gpg --dearmor` 成二进制后才安装（apt 不接受 `.gpg` 路径下的 armor 格式文件）；已存在且为二进制则跳过，armor 格式的旧文件会被重装。文件已指向同一快照则不动；文件不是 rospm 写的（如 `ros2-apt-source`）则不动并说明快照未应用。
+- Ubuntu 源：写 rospm 自己的 `/etc/apt/sources.list.d/rospm-ubuntu-snapshot.list`（`<codename>`、`<codename>-updates`、`<codename>-security` × `main restricted universe multiverse`，`signed-by=ubuntu-archive-keyring.gpg`），**不改** Ubuntu 自身的 `sources.list` / `ubuntu.sources`（决策 #17）。这个文件只是让锁定的版本可下载；写入后立即 `apt-get update`，否则锁定安装只看得到实时源索引。
 - 安装：`apt-get install -y --allow-downgrades <名>=<版本> …`，逐条列出锁文件里本机平台的记录（每条命令最多 100 个包），替代底包 / 额外 apt 两步；`rosdep init` / `update` 照常，`rosdep install` 跳过并说明（锁文件已是解析结果）。源码 `vcs import` 后逐仓库 `git checkout --detach <rev>`；非 git 源不固定并说明。
 - 降级：锁文件中快照为空，或真实运行前 GET 快照 `InRelease` 不通（10 s），该层退回实时源 / 镜像，并打印上表的 `WARN` 行与一条说明；版本仍按锁文件安装。`--dry-run` 不探测网络。禁止 `trusted=yes`、禁止关闭签名检查；密钥过期（`EXPKEYSIG`）提示从 keyserver 刷新。
-- `uninstall` 连同 `ros2.list` 一并删除快照 keyring 与 `rospm-ubuntu-snapshot.list`。
+- `uninstall` 连同 `ros2.list` 一并删除快照 keyring 与 `rospm-ubuntu-snapshot.list`；`ros2.list` 已不存在时（例如中断的 `apply --locked` 之后）也删除这两个残留，`--keep-source` 时保留。
 
 ### 3.3 `lock` 的解析规则（P2）
 

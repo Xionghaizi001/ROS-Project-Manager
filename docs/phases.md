@@ -109,7 +109,7 @@
 
 ## Phase 2 — 锁文件与依赖补全（约 3 周）
 
-状态：**代码完成，待实机验收**（2026-09-26）。`lock` / `verify` / `deps` 已在本机实跑；`apply --locked` 只做到 `--dry-run` 计划核对（本机不做真实安装），真实回放与两机一致性验收未做。
+状态：**单机实测通过，两个设计问题待解决**（2026-09-26）。`lock` / `verify` / `deps` 与 `apply --locked` 都已在本机真实执行，两轮 `apply` → `uninstall` 闭环回到基线；过程中修复 3 个缺陷。未完成：锁定版本可能不在快照中、顶层 Ubuntu 包缺依赖记录两个设计问题，间隔数周复测、第二台机器（24.04）与 CI 场景。见 [p2-locked-validation.md](p2-locked-validation.md)。
 前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源；P1.5 的 i18n 层必须先落地，本阶段新增字符串直接走该层。（两项均已满足）
 
 ### `rospm lock`
@@ -127,7 +127,18 @@
 - [x] 把 sources.list 切到 `snapshots.ros.org` 与 `snapshot.ubuntu.com`（2026-09-26，spec §3.2）：复用 P1 的 `ros2.list` 路径，`signed-by=` 换成从 keyserver 按指纹核验的快照 keyring；Ubuntu 快照写 rospm 自己的 `rospm-ubuntu-snapshot.list`（直接 URL 形式，不需要 `--snapshot`），不改 Ubuntu 自身的源。按锁定版本 `apt-get install --allow-downgrades <名>=<版本>` 安装，`git checkout --detach <rev>` 固定源码，跳过 `rosdep install`。锁文件缺失 / 与清单不一致 / 无本机平台记录 / 无底包记录都报错。
 - [x] 覆盖 updates / security 组件与 arm64（2026-09-26）：Ubuntu 快照文件含 `<codename>` / `-updates` / `-security` × 四个组件；`lock` 核对快照 `Release` 的 `Architectures` 含本机架构，实测 humble `2026-08-07` 与 jazzy `2026-09-11` 均列出 `amd64 arm64 armhf i386`。arm64 主机上的真实 `apply --locked` 未做。
 - [x] 快照不可用时按 spec §3.2 降级并明确告警（2026-09-26）：锁文件中快照为空或真实运行前 `InRelease` 探测不通时退回实时源，打印 `WARN: apt snapshot unreachable, falling back to version check`，版本仍按锁文件安装。真实运行的探测路径只有代码审查与 dry-run 覆盖（本机不做真实 `apply`）。
-- [ ] 在干净虚拟机上真实执行 `apply --locked` 一次（快照 apt 索引可用性、`--allow-downgrades` 与依赖解析是否成立、`rosdep update` 之后 `deps check` 是否一致）。
+- [x] 真实执行 `apply --locked` 一次（快照 apt 索引可用性、`--allow-downgrades` 与依赖解析是否成立、`rosdep update` 之后 `deps check` 是否一致）。
+  - [x] 时间点 1（2026-09-26，22.04 / Humble）非破坏性核验，脚本 `scripts/p2-locked-sandbox-check.sh`：真实 `lock` 发现并验签 `2026-08-07` / `20260808T004205Z`；隔离 apt 目录中两个快照的索引可下载；按快照合成的锁在空 dpkg 状态下完整解析 645 个包，`--allow-downgrades` 对 `python3-rosdep` 生效。
+  - [x] 修复：写 `rospm-ubuntu-snapshot.list` 后缺少 `apt-get update`，锁定安装原本看不到 Ubuntu 快照索引（`tests/plan.rs` 加断言）。
+  - [x] 真实闭环（2026-09-26，本机，用户同意实装）：实时 `apply` → `build` / 运行节点 → `lock` → `verify` → `uninstall`，已装包列表与基线完全一致；快照锁真实 `apply --locked` 成功（212 个包、`python3-rosdep` 降级、`git checkout --detach`），`verify` / `deps check` / `check --strict` 全部就绪，节点用锁定的 rclcpp 16.0.19 编译运行，重新 `lock` 与输入逐条一致，`uninstall` 后只剩按设计保留的工具版本差异。
+  - [x] 修复：keyserver 返回的快照密钥为 armor 格式，原样写入 `.gpg` 导致 apt 报 `NO_PUBKEY`；现在先 `gpg --dearmor`，探测识别 armor 格式的 keyring 并重装。
+  - [x] 修复：`uninstall` 在 `ros2.list` 已不存在时漏删快照 keyring 与 `rospm-ubuntu-snapshot.list`。
+  - [ ] 失败的 `apply --locked` 留下坏源后，计划起始的 `apt-get update` 使重跑失败，只能 `uninstall` 恢复。
+  - [ ] `tests/apply_locked.rs` 依赖主机 keyring 状态。
+  - [ ] 设计问题：`lock` 记录的版本可能不在所选快照里（实时 ROS 源底包构建于 2026-09-08，最新快照为 2026-08-07；Ubuntu 快照由 ROS `Release` 日期换算，晚于它的 Ubuntu 更新同样缺失）。需在 `lock` 时逐包核对快照，并调整 Ubuntu 快照时间戳的取法。
+  - [ ] 设计问题：锁文件只记录顶层 Ubuntu 包，系统库比快照新的主机上 `curl=<旧版本>` 因依赖精确版本而使整条安装失败（模拟退出 100）。
+  - [ ] 小问题：锁文件缺底包时 `verify` 仍报就绪。
+  - [ ] 时间点 2（间隔一段时间后）与 24.04 / Jazzy 用同一脚本复测；真实 `apply --locked` 在干净虚拟机上执行。
 
 ### `rospm deps check` / `rospm deps install`
 - [x] 解析 workspace 中全部 `package.xml`，与已安装集合求差（2026-09-26，spec §4 表）。依赖键分内部 / 外部 / 跳过；外部键经 `rosdep check` + `rosdep resolve` 映射到 apt 包后查 dpkg；rosdep 输出解析为纯函数并用罐装文本单测；`package.xml` 解析失败也在表中报出。本机实测（rosdep 已 update）：`rclcpp` → `ros-humble-rclcpp` 未安装 `MISSING`，`libopencv-dev` 已装给出版本。
@@ -141,10 +152,13 @@
 
 ## Phase 3 — Pixi 提供者（约 3 周）
 
-状态：**未开始**。`ProviderKind::Pixi` 目前为 `Unimplemented` 占位。
+状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库在分支 `p3-pixi-gen`。
 前置：P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
 
-- [ ] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
+- [~] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
+  - [x] 核心库 `rospm-core::pixi`（分支 `p3-pixi-gen`，2026-09-26，codex 实现、主会话 review 并补测试）：`generate` 输出 RoboStack channel、`linux-64` / `linux-aarch64` 平台、底包与构建工具、`[activation.env]`、按叠加顺序的 `build-<ws>` 任务与汇总 `build` 任务；`read_summary` 读取现有 `pixi.toml`（含 `[project]` 与表形式 channel）。未合并。
+  - [ ] 叠加：上层 workspace 的任务需要先加载下层 `install/setup`，pixi 任务 shell 不支持 `source`，方案待定。
+  - [ ] CLI 接入（`init` / `apply` 写文件、已有非 rospm 生成的 `pixi.toml` 时不覆盖）。
 - [ ] 锁定委托给 `pixi.lock`；`rospm lock` 只记录其路径与 sha256（决策 #4）。
 - [ ] rosdep 切换到 RoboStack 的 yaml 源：独立 `ROSDEP_SOURCE_PATH` / `ROS_HOME`，`--os=conda:linux`，不覆盖 native 的全局源。
 - [ ] 探测并固定具备 ROS 包 conda 映射能力的 rosdep 版本/构建；安装交给 pixi。
