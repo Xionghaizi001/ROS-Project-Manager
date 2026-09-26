@@ -676,6 +676,14 @@ pub fn apply(
     mirror: Option<Mirror>,
 ) -> Result<()> {
     let loaded = load(global)?;
+    // `--locked` requires a lock before anything else runs: missing or out
+    // of date with rospm.toml is a user error, corrected by re-running
+    // `rospm lock`, never a silent degradation (spec §3.2).
+    let lock = if locked {
+        Some(load_locked_lock(&loaded)?)
+    } else {
+        None
+    };
     let host = Host::probe();
     let requested = requested_mirror(mirror)?;
     let sources = if dry_run || offline {
@@ -692,7 +700,16 @@ pub fn apply(
     } else {
         select_sources(&loaded, requested)?
     };
-    let ctx = context(&loaded, &host, locked, None, offline, sources)?;
+    // Snapshot dates roll off the snapshot services over time (P0 finding):
+    // a real run checks the recorded snapshot is still online and, if not,
+    // degrades to the live repositories (announced, never silent) instead of
+    // failing outright. `--dry-run` never touches the network here — the
+    // printed plan already shows exactly what the lock says.
+    let lock = match lock {
+        Some(l) if !dry_run => Some(degrade_unreachable_snapshots(&loaded, l)),
+        other => other,
+    };
+    let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
     let mut out = std::io::stdout().lock();
     let result = plan.execute(dry_run, &mut out);
@@ -707,6 +724,76 @@ pub fn apply(
         Err(e) => Err(e.into()),
         Ok(()) => Ok(()),
     }
+}
+
+/// Load and validate `rospm.lock` for `apply --locked` (spec §3.2): absent or
+/// stale is corrected by re-running `rospm lock`, never guessed at.
+fn load_locked_lock(loaded: &Loaded) -> Result<Lock> {
+    let lock = loaded.load_lock()?.ok_or_else(|| {
+        anyhow!(
+            "{}",
+            msg!("cli.apply.locked_lock_missing", file = LOCK_FILE)
+        )
+    })?;
+    let manifest_text =
+        std::fs::read_to_string(&loaded.path).with_context(|| loaded.path.display().to_string())?;
+    if !lock.matches_manifest(&manifest_text) {
+        bail!("{}", msg!("cli.apply.locked_lock_stale", file = LOCK_FILE));
+    }
+    Ok(lock)
+}
+
+/// Timeout for the one-shot reachability check below: short enough that a
+/// dead snapshot does not stall `apply` for long, generous enough for a slow
+/// but working connection.
+const SNAPSHOT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Drop a locked snapshot that no longer answers, announcing it first (never
+/// silently, derived principle 4): `plan_apply`'s existing degrade-to-live
+/// path (spec §3.2) then takes over exactly as it does for a lock recorded
+/// without a snapshot at all. Real network I/O — exercised only by an actual
+/// non-dry-run `apply --locked`, which this repository's tests never run
+/// (safety constraint); covered here only up to the point tests can reach.
+fn degrade_unreachable_snapshots(loaded: &Loaded, mut lock: Lock) -> Lock {
+    let Some(codename) = ubuntu_codename(&loaded.manifest.ubuntu()) else {
+        return lock;
+    };
+    let Some(native) = lock.provider.native.as_mut() else {
+        return lock;
+    };
+    if native.ros_snapshot.is_none() && native.ubuntu_snapshot.is_none() {
+        return lock;
+    }
+    println!("{}", tr("cli.apply.checking_snapshot"));
+    let distro = loaded.manifest.project.ros_distro;
+    if let Some(date) = native.ros_snapshot.clone() {
+        let base = rospm_core::snapshot::ros_snapshot_url(distro.as_str(), &date);
+        if !probe_snapshot(&base, codename) {
+            println!("{}", tr("cli.apply.snapshot_unreachable_warn"));
+            native.ros_snapshot = None;
+        }
+    }
+    if let Some(ts) = native.ubuntu_snapshot.clone() {
+        let base = rospm_core::snapshot::ubuntu_snapshot_url(&ts);
+        if !probe_snapshot(&base, codename) {
+            println!("{}", tr("cli.apply.snapshot_unreachable_warn"));
+            native.ubuntu_snapshot = None;
+        }
+    }
+    lock
+}
+
+/// `GET <base>/dists/<codename>/InRelease` with [`SNAPSHOT_PROBE_TIMEOUT`].
+fn probe_snapshot(base: &str, codename: &str) -> bool {
+    let endpoint = net::Endpoint {
+        role: Role::RosApt,
+        source: "snapshot".into(),
+        url: rospm_core::snapshot::inrelease_url(base, codename),
+    };
+    net::probe(&[endpoint], SNAPSHOT_PROBE_TIMEOUT)
+        .into_iter()
+        .next()
+        .is_some_and(|r| r.ok())
 }
 
 /// Probe the sources `apply` is about to download from and pick one

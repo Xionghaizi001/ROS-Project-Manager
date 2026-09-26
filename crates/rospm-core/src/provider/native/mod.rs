@@ -60,6 +60,255 @@ fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<Strin
     lines
 }
 
+/// Pin the ROS apt source to a snapshot (`apply --locked`, spec §3.2).
+/// Mirrors the P1 rewrite rules: only rospm's own [`ROS_APT_LIST`] is
+/// touched — a foreign source file (e.g. `ros2-apt-source`'s `ros2.sources`)
+/// is left alone and the plan says so. `--mirror` has no effect on the apt
+/// line here: snapshots are not mirrored (rosdistro/rosdep still use it,
+/// unaffected by this function).
+fn plan_ros_snapshot_source(
+    plan: &mut Plan,
+    ctx: &Context,
+    codename: &str,
+    date: &str,
+    need_locale: bool,
+    need_universe: bool,
+) {
+    let host = ctx.host;
+    let distro = ctx.manifest.project.ros_distro;
+    let base = crate::snapshot::ros_snapshot_url(distro.as_str(), date);
+    let is_own_file = host.apt_sources.ros2.as_deref() == Some(Path::new(ROS_APT_LIST));
+    let is_foreign_file = host.apt_sources.ros2.is_some() && !is_own_file;
+    let already_current =
+        is_own_file && host.apt_sources.ros2_snapshot.as_deref() == Some(base.as_str());
+    let need_source = !is_foreign_file && !(already_current && host.apt_sources.snapshot_keyring);
+
+    if need_locale || need_universe || need_source {
+        let mut prereqs: Vec<&str> = Vec::new();
+        if need_locale {
+            prereqs.push("locales");
+        }
+        if need_universe {
+            prereqs.push("software-properties-common");
+        }
+        if need_source {
+            // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
+            prereqs.extend(["curl", "ca-certificates", "gnupg"]);
+        }
+        if !prereqs.is_empty() {
+            plan.run(
+                Command::new("apt-get")
+                    .args(["install", "-y"])
+                    .args(prereqs)
+                    .sudo(),
+            );
+        }
+    }
+    if need_locale {
+        plan.run(
+            Command::new("locale-gen")
+                .args(["en_US", "en_US.UTF-8"])
+                .sudo(),
+        );
+        // Set LANG only, never LC_ALL (it would pin every category for
+        // every user). If the file's non-UTF-8 value came from LC_ALL /
+        // LC_CTYPE, drop that variable (bare name = remove) so LANG applies.
+        let mut update = Command::new("update-locale").arg("LANG=en_US.UTF-8");
+        if let Some(var) = host.locale.system_var.filter(|v| *v != "LANG") {
+            update = update.arg(var);
+        }
+        plan.run(update.sudo());
+        let from = match (&host.locale.system_var, &host.locale.system) {
+            (Some(var), Some(value)) => format!("{var}={value}"),
+            _ if host.locale.system_file => "POSIX".to_string(),
+            _ => msg!("native.apply.locale_no_file").to_string(),
+        };
+        plan.note(msg!(
+            "native.apply.locale_switched",
+            file = DEFAULT_LOCALE_FILE,
+            from = from
+        ));
+    } else if !host.locale.process_utf8() {
+        plan.note(msg!(
+            "native.apply.shell_locale_not_utf8",
+            value = host.locale.process.as_deref().unwrap_or("POSIX"),
+            file = DEFAULT_LOCALE_FILE,
+            system = host.locale.system.as_deref().unwrap_or("POSIX")
+        ));
+    }
+    if need_universe {
+        plan.run(
+            Command::new("add-apt-repository")
+                .args(["-y", "universe"])
+                .sudo(),
+        );
+    }
+
+    if is_foreign_file {
+        let file = host.apt_sources.ros2.as_ref().unwrap();
+        plan.note(msg!(
+            "native.apply.source_foreign",
+            name = "snapshot",
+            file = file.display()
+        ));
+        plan.note(msg!(
+            "native.apply.locked_snapshot_foreign",
+            file = file.display()
+        ));
+    } else if need_source {
+        if is_own_file {
+            plan.note(msg!(
+                "native.apply.locked_snapshot_rewrite",
+                file = ROS_APT_LIST,
+                to = base
+            ));
+        }
+        if !host.apt_sources.snapshot_keyring {
+            plan.fetch_key(
+                crate::snapshot::keyserver_key_url(crate::snapshot::ROS_SNAPSHOT_KEY_FINGERPRINT),
+                crate::snapshot::ROS_SNAPSHOT_KEYRING,
+                crate::snapshot::ROS_SNAPSHOT_KEY_FINGERPRINT,
+            );
+        }
+        plan.write_file_sudo(
+            ROS_APT_LIST,
+            format!(
+                "deb [arch={} signed-by={}] {base} {codename} main\n",
+                ctx.platform.dpkg_arch(),
+                crate::snapshot::ROS_SNAPSHOT_KEYRING,
+            ),
+        );
+        plan.run(Command::new("apt-get").arg("update").sudo());
+    } else {
+        plan.note(msg!(
+            "native.apply.source_already_configured",
+            file = ROS_APT_LIST,
+            source = base
+        ));
+    }
+}
+
+/// Write rospm's own Ubuntu snapshot source file (`apply --locked`, spec
+/// §3.2): a *separate* file from Ubuntu's own `sources.list` / `ubuntu.sources`,
+/// which rospm never touches (decision #17). The snapshot only makes the
+/// pinned versions installable; [`install_pinned_apt`] installs them explicitly.
+/// `timestamp` is `None` when the lock has no Ubuntu snapshot recorded
+/// (never locked, or degraded at lock/apply time): the caller still gets a
+/// working host, just not a pinned one, and the plan says so.
+fn plan_ubuntu_snapshot_source(
+    plan: &mut Plan,
+    ctx: &Context,
+    codename: &str,
+    timestamp: Option<&str>,
+) {
+    let Some(ts) = timestamp else {
+        plan.note(msg!("native.apply.locked_degraded", what = "Ubuntu apt"));
+        return;
+    };
+    let host = ctx.host;
+    let base = crate::snapshot::ubuntu_snapshot_url(ts);
+    if host.apt_sources.ubuntu_snapshot.as_deref() == Some(base.as_str()) {
+        plan.note(msg!(
+            "native.apply.source_already_configured",
+            file = probe::UBUNTU_SNAPSHOT_LIST,
+            source = base
+        ));
+        return;
+    }
+    let arch = ctx.platform.dpkg_arch();
+    let keyring = crate::snapshot::UBUNTU_ARCHIVE_KEYRING;
+    let mut contents = String::new();
+    for suite in [
+        codename.to_string(),
+        format!("{codename}-updates"),
+        format!("{codename}-security"),
+    ] {
+        contents.push_str(&format!(
+            "deb [arch={arch} signed-by={keyring}] {base} {suite} main restricted universe multiverse\n"
+        ));
+    }
+    if !host.apt_sources.ubuntu_archive_keyring {
+        plan.note(msg!(
+            "native.apply.locked_ubuntu_keyring_missing",
+            keyring = keyring,
+            file = probe::UBUNTU_SNAPSHOT_LIST
+        ));
+    }
+    plan.note(msg!(
+        "native.apply.locked_ubuntu_snapshot_write",
+        file = probe::UBUNTU_SNAPSHOT_LIST
+    ));
+    plan.write_file_sudo(probe::UBUNTU_SNAPSHOT_LIST, contents);
+}
+
+/// Install every pinned apt package for `platform`, exactly and explicitly
+/// (`apply --locked`, spec §3.2 point 4): the lock lists the resolved
+/// versions, so this replaces both the base-package install and the extra
+/// `dependencies.apt` install of the non-locked plan. `--allow-downgrades`:
+/// a lock generated earlier may pin an older version than the latest
+/// available. Chunked so no single `apt-get install` line names more than
+/// 100 packages.
+fn install_pinned_apt(
+    plan: &mut Plan,
+    m: &Manifest,
+    lock: &Lock,
+    platform: crate::platform::Platform,
+) -> Result<()> {
+    let entries: Vec<&crate::lock::LockedApt> =
+        lock.apt.iter().filter(|a| a.platform == platform).collect();
+    if entries.is_empty() {
+        return Err(Error::Host(msg!(
+            "native.apply.locked_no_apt_for_platform",
+            platform = platform
+        )));
+    }
+    let base_package = m.ros_base_package();
+    if !entries.iter().any(|a| a.name == base_package) {
+        return Err(Error::Host(msg!(
+            "native.apply.locked_base_missing",
+            package = base_package
+        )));
+    }
+    let specs: Vec<String> = entries
+        .iter()
+        .map(|a| format!("{}={}", a.name, a.version))
+        .collect();
+    for chunk in specs.chunks(100) {
+        plan.run(
+            Command::new("apt-get")
+                .args(["install", "-y", "--allow-downgrades"])
+                .args(chunk.iter().cloned())
+                .sudo(),
+        );
+    }
+    Ok(())
+}
+
+/// Pin every git [`crate::lock::LockedSource`] of `workspace` to its
+/// recorded revision after `vcs import` has fetched the branch (`apply
+/// --locked`, spec §3.2 point 4). Non-git sources are not pinned — vcstool's
+/// other VCS backends have no equivalent of a detached-HEAD checkout, and
+/// rospm records them for `verify` only (roadmap).
+fn pin_git_sources(plan: &mut Plan, ws_path: &Path, lock: &Lock, workspace: &str) {
+    for src in lock.sources.iter().filter(|s| s.workspace == workspace) {
+        if src.kind == "git" {
+            let repo = ws_path.join("src").join(&src.name);
+            plan.run(
+                Command::new("git")
+                    .args(["checkout", "--detach", src.rev.as_str()])
+                    .cwd(repo),
+            );
+        } else {
+            plan.note(msg!(
+                "native.apply.locked_non_git_source_not_pinned",
+                workspace = workspace,
+                name = src.name.as_str(),
+                kind = src.kind.as_str()
+            ));
+        }
+    }
+}
+
 impl Provider for Native {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Native
@@ -76,9 +325,32 @@ impl Provider for Native {
             platform = ctx.platform
         ));
 
-        if ctx.locked {
-            plan.note(msg!("native.apply.locked_degraded"));
+        // `--locked` requires a lock (checked again here, defensively — the
+        // CLI already refuses before building the context): a missing or
+        // mismatched lock is a user error, never a silent degradation
+        // (spec §3.2).
+        if ctx.locked && ctx.lock.is_none() {
+            return Err(Error::Host(msg!("native.apply.locked_no_lock")));
         }
+        let locked_native: Option<(&Lock, &crate::lock::LockedNative)> = match ctx.lock {
+            Some(lock) if ctx.locked => {
+                if lock.provider.kind != ProviderKind::Native {
+                    return Err(Error::Host(msg!(
+                        "native.apply.locked_provider_mismatch",
+                        lock_kind = lock.provider.kind
+                    )));
+                }
+                let native = lock.provider.native.as_ref().ok_or_else(|| {
+                    Error::Host(msg!(
+                        "native.apply.locked_provider_mismatch",
+                        lock_kind = lock.provider.kind
+                    ))
+                })?;
+                Some((lock, native))
+            }
+            _ => None,
+        };
+
         if ctx.offline {
             return Err(Error::NotImplemented {
                 feature: "apply --offline",
@@ -116,8 +388,11 @@ impl Provider for Native {
         }
 
         // 1. Bootstrap the ROS apt source (official install guide, minus the
-        // steps this host already satisfies). URLs come from the chosen
-        // source set (decision #17); the key is verified either way.
+        // steps this host already satisfies), or — under `--locked` — pin it
+        // to the recorded snapshot (spec §3.2). URLs come from the chosen
+        // source set (decision #17), except for a snapshot, which has no
+        // mirrors and ignores `--mirror` for the apt line (rosdistro/rosdep
+        // below still use it).
         let mirror = ctx.mirror;
         if !mirror.is_official() {
             plan.note(msg!(
@@ -125,127 +400,161 @@ impl Provider for Native {
                 name = mirror.name,
                 label = mirror.label
             ));
+            if locked_native.is_some() {
+                plan.note(msg!(
+                    "native.apply.locked_mirror_ignored",
+                    name = mirror.name
+                ));
+            }
         }
         // Only the system default (/etc/default/locale) is ever touched; the
         // caller's own `LANG=C` is not a reason to rewrite it.
         let need_locale = host.locale.needs_fix();
         let need_universe = host.apt_sources.universe != Some(true);
-        // Rewrite rospm's own source file when a different source set was
-        // chosen; a file written by something else (ros2-apt-source) is left alone.
-        let rewrite_source = host
-            .apt_sources
-            .ros2
-            .as_deref()
-            .is_some_and(|f| f == Path::new(ROS_APT_LIST))
-            && host.apt_sources.ros2_mirror != Some(mirror.name);
-        let need_source = host.apt_sources.ros2.is_none() || rewrite_source;
         plan.run(Command::new("apt-get").arg("update").sudo());
-        if need_locale || need_universe || need_source {
-            let mut prereqs: Vec<&str> = Vec::new();
+
+        let ros_snapshot_date = locked_native.and_then(|(_, n)| n.ros_snapshot.as_deref());
+        if let Some(date) = ros_snapshot_date {
+            plan_ros_snapshot_source(&mut plan, ctx, codename, date, need_locale, need_universe);
+        } else {
+            if locked_native.is_some() {
+                plan.note(msg!("native.apply.locked_degraded", what = "ROS apt"));
+            }
+            // Rewrite rospm's own source file when a different source set was
+            // chosen; a file written by something else (ros2-apt-source) is left alone.
+            let rewrite_source = host
+                .apt_sources
+                .ros2
+                .as_deref()
+                .is_some_and(|f| f == Path::new(ROS_APT_LIST))
+                && host.apt_sources.ros2_mirror != Some(mirror.name);
+            let need_source = host.apt_sources.ros2.is_none() || rewrite_source;
+            if need_locale || need_universe || need_source {
+                let mut prereqs: Vec<&str> = Vec::new();
+                if need_locale {
+                    prereqs.push("locales");
+                }
+                if need_universe {
+                    prereqs.push("software-properties-common");
+                }
+                if need_source {
+                    // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
+                    prereqs.extend(["curl", "ca-certificates", "gnupg"]);
+                }
+                plan.run(
+                    Command::new("apt-get")
+                        .args(["install", "-y"])
+                        .args(prereqs)
+                        .sudo(),
+                );
+            }
             if need_locale {
-                prereqs.push("locales");
+                plan.run(
+                    Command::new("locale-gen")
+                        .args(["en_US", "en_US.UTF-8"])
+                        .sudo(),
+                );
+                // Set LANG only, never LC_ALL (it would pin every category for
+                // every user). If the file's non-UTF-8 value came from LC_ALL /
+                // LC_CTYPE, drop that variable (bare name = remove) so LANG applies.
+                let mut update = Command::new("update-locale").arg("LANG=en_US.UTF-8");
+                if let Some(var) = host.locale.system_var.filter(|v| *v != "LANG") {
+                    update = update.arg(var);
+                }
+                plan.run(update.sudo());
+                let from = match (&host.locale.system_var, &host.locale.system) {
+                    (Some(var), Some(value)) => format!("{var}={value}"),
+                    _ if host.locale.system_file => "POSIX".to_string(),
+                    _ => msg!("native.apply.locale_no_file").to_string(),
+                };
+                plan.note(msg!(
+                    "native.apply.locale_switched",
+                    file = DEFAULT_LOCALE_FILE,
+                    from = from
+                ));
+            } else if !host.locale.process_utf8() {
+                plan.note(msg!(
+                    "native.apply.shell_locale_not_utf8",
+                    value = host.locale.process.as_deref().unwrap_or("POSIX"),
+                    file = DEFAULT_LOCALE_FILE,
+                    system = host.locale.system.as_deref().unwrap_or("POSIX")
+                ));
             }
             if need_universe {
-                prereqs.push("software-properties-common");
+                plan.run(
+                    Command::new("add-apt-repository")
+                        .args(["-y", "universe"])
+                        .sudo(),
+                );
             }
             if need_source {
-                // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
-                prereqs.extend(["curl", "ca-certificates", "gnupg"]);
+                if rewrite_source {
+                    plan.note(msg!(
+                        "native.apply.source_rewrite",
+                        file = ROS_APT_LIST,
+                        from = host.apt_sources.ros2_mirror.unwrap_or("unknown"),
+                        to = mirror.name
+                    ));
+                }
+                plan.fetch_key(mirror.ros_key_url(), ROS_APT_KEYRING, ROS_KEY_FINGERPRINT);
+                plan.write_file_sudo(
+                    ROS_APT_LIST,
+                    format!(
+                        "deb [arch={} signed-by={ROS_APT_KEYRING}] {} {codename} main\n",
+                        ctx.platform.dpkg_arch(),
+                        mirror.ros_apt
+                    ),
+                );
+                plan.run(Command::new("apt-get").arg("update").sudo());
+            } else if let Some(file) = &host.apt_sources.ros2 {
+                plan.note(msg!(
+                    "native.apply.source_already_configured",
+                    file = file.display(),
+                    source = host.apt_sources.ros2_mirror.unwrap_or("unknown")
+                ));
+                if host.apt_sources.ros2_mirror != Some(mirror.name) {
+                    plan.note(msg!(
+                        "native.apply.source_foreign",
+                        name = mirror.name,
+                        file = file.display()
+                    ));
+                }
             }
+        }
+
+        // 1b. Ubuntu snapshot: a separate, rospm-owned file (`--locked`
+        // only; never touches Ubuntu's own `sources.list` / `ubuntu.sources`,
+        // decision #17). It only makes the pinned versions installable; step 2
+        // below installs them explicitly.
+        if let Some((_, native)) = locked_native {
+            plan_ubuntu_snapshot_source(
+                &mut plan,
+                ctx,
+                codename,
+                native.ubuntu_snapshot.as_deref(),
+            );
+        }
+
+        // 2. ROS base + tooling, or — under `--locked` — every pinned apt
+        // package for this platform, installed explicitly and exactly.
+        if let Some((lock, _)) = locked_native {
+            install_pinned_apt(&mut plan, m, lock, ctx.platform)?;
+        } else {
             plan.run(
                 Command::new("apt-get")
                     .args(["install", "-y"])
-                    .args(prereqs)
+                    .arg(m.ros_base_package())
+                    .args([
+                        "python3-rosdep",
+                        "python3-vcstool",
+                        "python3-colcon-common-extensions",
+                    ])
                     .sudo(),
             );
-        }
-        if need_locale {
-            plan.run(
-                Command::new("locale-gen")
-                    .args(["en_US", "en_US.UTF-8"])
-                    .sudo(),
-            );
-            // Set LANG only, never LC_ALL (it would pin every category for
-            // every user). If the file's non-UTF-8 value came from LC_ALL /
-            // LC_CTYPE, drop that variable (bare name = remove) so LANG applies.
-            let mut update = Command::new("update-locale").arg("LANG=en_US.UTF-8");
-            if let Some(var) = host.locale.system_var.filter(|v| *v != "LANG") {
-                update = update.arg(var);
-            }
-            plan.run(update.sudo());
-            let from = match (&host.locale.system_var, &host.locale.system) {
-                (Some(var), Some(value)) => format!("{var}={value}"),
-                _ if host.locale.system_file => "POSIX".to_string(),
-                _ => msg!("native.apply.locale_no_file").to_string(),
-            };
-            plan.note(msg!(
-                "native.apply.locale_switched",
-                file = DEFAULT_LOCALE_FILE,
-                from = from
-            ));
-        } else if !host.locale.process_utf8() {
-            plan.note(msg!(
-                "native.apply.shell_locale_not_utf8",
-                value = host.locale.process.as_deref().unwrap_or("POSIX"),
-                file = DEFAULT_LOCALE_FILE,
-                system = host.locale.system.as_deref().unwrap_or("POSIX")
-            ));
-        }
-        if need_universe {
-            plan.run(
-                Command::new("add-apt-repository")
-                    .args(["-y", "universe"])
-                    .sudo(),
-            );
-        }
-        if need_source {
-            if rewrite_source {
-                plan.note(msg!(
-                    "native.apply.source_rewrite",
-                    file = ROS_APT_LIST,
-                    from = host.apt_sources.ros2_mirror.unwrap_or("unknown"),
-                    to = mirror.name
-                ));
-            }
-            plan.fetch_key(mirror.ros_key_url(), ROS_APT_KEYRING, ROS_KEY_FINGERPRINT);
-            plan.write_file_sudo(
-                ROS_APT_LIST,
-                format!(
-                    "deb [arch={} signed-by={ROS_APT_KEYRING}] {} {codename} main\n",
-                    ctx.platform.dpkg_arch(),
-                    mirror.ros_apt
-                ),
-            );
-            plan.run(Command::new("apt-get").arg("update").sudo());
-        } else if let Some(file) = &host.apt_sources.ros2 {
-            plan.note(msg!(
-                "native.apply.source_already_configured",
-                file = file.display(),
-                source = host.apt_sources.ros2_mirror.unwrap_or("unknown")
-            ));
-            if host.apt_sources.ros2_mirror != Some(mirror.name) {
-                plan.note(msg!(
-                    "native.apply.source_foreign",
-                    name = mirror.name,
-                    file = file.display()
-                ));
-            }
         }
 
-        // 2. ROS base + tooling.
-        plan.run(
-            Command::new("apt-get")
-                .args(["install", "-y"])
-                .arg(m.ros_base_package())
-                .args([
-                    "python3-rosdep",
-                    "python3-vcstool",
-                    "python3-colcon-common-extensions",
-                ])
-                .sudo(),
-        );
-
-        // 3. Sources, in overlay order.
+        // 3. Sources, in overlay order; `--locked` pins every git source to
+        // its recorded revision after `vcs import` fetches the branch.
         let order = m.build_order()?;
         let scm = Vcstool;
         for name in &order {
@@ -259,9 +568,16 @@ impl Provider for Native {
             if let Some(sources) = &ws.sources {
                 plan.run(scm.import(&ws_path, &ctx.root.join(sources)));
             }
+            if let Some((lock, _)) = locked_native {
+                pin_git_sources(&mut plan, &ws_path, lock, name);
+            }
         }
 
-        // 4. rosdep, per workspace, in overlay order.
+        // 4. rosdep, per workspace, in overlay order. Under `--locked` the
+        // lock already lists the resolved apt packages, so `rosdep install`
+        // (which resolves from package.xml again and could disagree with the
+        // lock) is skipped; `init`/`update` still run so the tooling keeps
+        // working afterwards.
         if m.dependencies.rosdep.enabled {
             if mirror.mirrors_rosdistro() {
                 // `rosdep init` would write GitHub URLs; write the same file
@@ -286,32 +602,39 @@ impl Provider for Native {
                 update = update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url());
             }
             plan.run(update);
-            for name in &order {
-                let ws = &m.workspaces[name];
-                let ws_path = ctx.root.join(&ws.path);
-                let mut cmd = Command::new("rosdep")
-                    .args(["install", "--from-paths", "src", "--ignore-src", "-y"])
-                    .arg("--rosdistro")
-                    .arg(distro.as_str())
-                    .cwd(&ws_path);
-                if !m.dependencies.rosdep.skip_keys.is_empty() {
-                    cmd = cmd
-                        .arg("--skip-keys")
-                        .arg(m.dependencies.rosdep.skip_keys.join(" "));
+            if locked_native.is_some() {
+                plan.note(msg!("native.apply.locked_rosdep_skipped"));
+            } else {
+                for name in &order {
+                    let ws = &m.workspaces[name];
+                    let ws_path = ctx.root.join(&ws.path);
+                    let mut cmd = Command::new("rosdep")
+                        .args(["install", "--from-paths", "src", "--ignore-src", "-y"])
+                        .arg("--rosdistro")
+                        .arg(distro.as_str())
+                        .cwd(&ws_path);
+                    if !m.dependencies.rosdep.skip_keys.is_empty() {
+                        cmd = cmd
+                            .arg("--skip-keys")
+                            .arg(m.dependencies.rosdep.skip_keys.join(" "));
+                    }
+                    plan.run(cmd);
                 }
-                plan.run(cmd);
             }
         }
 
-        // 5. Extra apt packages after platform overrides.
-        let apt = m.effective_apt(ctx.platform);
-        if !apt.is_empty() {
-            plan.run(
-                Command::new("apt-get")
-                    .args(["install", "-y"])
-                    .args(apt)
-                    .sudo(),
-            );
+        // 5. Extra apt packages after platform overrides — already installed
+        // as part of the pinned set in step 2 under `--locked`.
+        if locked_native.is_none() {
+            let apt = m.effective_apt(ctx.platform);
+            if !apt.is_empty() {
+                plan.run(
+                    Command::new("apt-get")
+                        .args(["install", "-y"])
+                        .args(apt)
+                        .sudo(),
+                );
+            }
         }
 
         // 6. pip is recorded only (decision #6).

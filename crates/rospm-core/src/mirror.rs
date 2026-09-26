@@ -238,6 +238,14 @@ mod tests {
     }
 
     #[test]
+    fn a_ros_snapshot_line_is_not_mistaken_for_the_official_repository() {
+        // `snapshots.ros.org` (P2) must not be matched by `packages.ros.org/ros2`:
+        // snapshots have no mirrors, so `apply --locked` never treats one as OFFICIAL.
+        let snapshot_line = "deb [arch=amd64 signed-by=/k.gpg] http://snapshots.ros.org/jazzy/2026-09-11/ubuntu noble main\n";
+        assert_eq!(mirror_for_apt_source(snapshot_line), None);
+    }
+
+    #[test]
     fn names_parse_and_round_trip() {
         for name in NAMES {
             assert_eq!(name.parse::<Mirror>().unwrap().name, *name);
