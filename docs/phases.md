@@ -109,24 +109,24 @@
 
 ## Phase 2 — 锁文件与依赖补全（约 3 周）
 
-状态：**未开始**。`rospm.lock` 的数据结构与读取（`lock.rs`）已随骨架落地；`lock` / `verify` / `deps` 命令目前返回 NotImplemented(P2)。
-前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源；P1.5 的 i18n 层必须先落地，本阶段新增字符串直接走该层。
+状态：**进行中**（2026-09-26）。`lock` / `verify` 已实现并在本机实跑（真实快照发现与签名验证）；`apply --locked` / `deps` 见下。
+前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源；P1.5 的 i18n 层必须先落地，本阶段新增字符串直接走该层。（两项均已满足）
 
 ### `rospm lock`
 - [x] lock v0 schema 与解析（`Lock::parse`）。
-- [ ] 源码层：`vcs export --exact` → commit SHA。
-- [ ] apt 层：按平台记录已安装版本 + ROS / Ubuntu 快照日期。快照日期必须**发现**真实存在的日期并验证 suite、架构、签名，不能把请求日期直接拼进 URL。
-- [ ] pip 层：`pip freeze` 结果只记录供 `verify` 对比（决策 #6）。
-- [ ] 记录清单哈希；同一输入产生同一输出（幂等）。
-- [ ] 锁文件读写往返测试。
+- [x] 源码层：`vcs export --exact` → commit SHA（2026-09-26）。按叠加顺序对每个 workspace 导出一次，与 `.repos` 声明逐一对应；`url` 取 `.repos` 写法，新增可选字段 `version` 记录请求的分支 / 标签；vcs 缺失或导出失败退回 `git rev-parse HEAD`；声明了但未导入的仓库直接报错（锁描述的是已解析状态）。
+- [x] apt 层：按平台记录已安装版本 + ROS / Ubuntu 快照日期（2026-09-26，spec §3.3）。记录全部已装 `ros-<distro>-*` + 底包 + 平台覆盖后的额外包 + 三个工具包，`.deb` sha256 尽力取自 `apt-cache show`；快照日期**发现**自 `snapshots.ros.org/<distro>/` 索引（最新三个日期依次试），核对 `Release` 的 `Suite` / `Architectures`，用 keyserver 取得并按指纹核验的密钥 `gpgv` 验签 `Release.gpg`；Ubuntu 快照时间戳由 ROS `Release` 的 `Date:` 换算，`InRelease` 须 200 并用 ubuntu-archive-keyring 验签。任一失败留空并输出 DEGRADED 说明；`ROSPM_NO_NETWORK=1` 跳过。主机 Ubuntu 与清单不符、`--platform` 非本机、dpkg 不可用均报错。本机实测：humble/jammy 发现 `2026-08-07`（Ubuntu `20260808T004205Z`），jazzy/noble 发现 `2026-09-11`（Ubuntu `20260911T182146Z`），两者签名均验证通过。
+- [x] pip 层：`pip list --format=freeze` 结果只记录清单点名的包供 `verify` 对比（决策 #6）；pip 不可用只说明。
+- [x] 记录清单哈希；同一输入产生同一输出（幂等）：内容不变则不重写、`generated_at` 保持并输出 `unchanged`；已有锁文件中其它平台的 apt 记录原样保留。
+- [x] 锁文件读写往返测试（`tests/lock.rs`：合成主机 + 真实本地 git 仓库 + 罐装快照服务器；CLI 测试用 `ROSPM_NO_NETWORK=1`；`#[ignore]` 的真实网络测试本机通过）。
+
+### `rospm verify`
+- [x] 对比锁文件与当前环境（2026-09-26，spec §3.4）：清单哈希与提供者、Ubuntu 版本、每条 git 源码的 HEAD 与 origin、本机平台的 apt 版本（其它平台合并为一行 info）、pip 版本；快照日期作 info 展示；一致退出 0，否则 1；清单哈希不一致提示重新 `lock`。本机实测：`lock` 后 `verify` 全部 ok；上游多提交一次并 pull 后 `verify` 对该仓库报 `MISMATCH`（给出两个短 SHA）退出 1。
 
 ### `rospm apply --locked`
 - [ ] 把 sources.list 切到 `snapshots.ros.org` 与 `snapshot.ubuntu.com`（22.04 用 `--snapshot` 或直接 URL，保留 keyring 签名验证）。复用 P1 bootstrap 的源文件管理（同一 `ros2.list` 路径、`signed-by=` 换成快照 keyring），不另起一套。
 - [ ] 覆盖 updates / security 组件与 arm64（P0 只冒烟了 jammy/main/amd64）。
 - [ ] 快照不可用时按 spec §3.2 / ROADMAP §2.1 降级并明确告警。
-
-### `rospm verify`
-- [ ] 对比锁文件与当前环境：源码 SHA、apt 版本、pip 版本；清单哈希不一致提示重新 `lock`。
 
 ### `rospm deps check` / `rospm deps install`
 - [ ] 解析 workspace 中全部 `package.xml`，与已安装集合求差。

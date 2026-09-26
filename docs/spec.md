@@ -193,6 +193,35 @@ version = "1.26.4"
 | docker | digest | 无 | — |
 | pip | 无 | 始终仅记录 | — |
 
+### 3.3 `lock` 的解析规则（P2）
+
+`rospm lock` 只读地解析**本机**，写出 `rospm.lock`；它描述的是已经 `apply` 过的状态，不是意图。
+
+| 层 | 来源 | 未满足时 |
+|---|---|---|
+| 源码 | 按叠加顺序对每个带 `sources` 的 workspace 运行 `vcs export --exact src`，与 `.repos` 中声明的仓库逐一对应：`rev` 取导出的提交 SHA，`url` 取 `.repos` 里的写法（检出的 origin 不同只加说明），`version` 记录 `.repos` 请求的分支 / 标签供人阅读。vcs 缺失或导出失败时对 git 仓库退回 `git rev-parse HEAD` 并说明 | 任一声明的仓库未导入 → 报错列出（先 `rospm apply`）；vcs 与 git 都没有 → 报错 |
+| apt | 本机 dpkg：全部已安装的 `ros-<distro>-*`、底包、平台覆盖后的额外 apt 包、`python3-rosdep` / `python3-vcstool` / `python3-colcon-common-extensions`，按名字排序；`.deb` 的 sha256 尽力从 `apt-cache show <名>=<版本>` 取，取不到留空 | 底包 / 额外包 / 工具未安装 → 不记录并说明；`dpkg-query` 不可用 → 报错；主机 Ubuntu 与清单不符 → 报错（与 `apply` 同一规则，否则记录的版本对不上快照） |
+| 快照 | ROS：GET `snapshots.ros.org/<distro>/` 目录索引，取最新的日期，读其 `dists/<codename>/Release` 核对 `Suite` / `Architectures` 含本机架构，再用 keyserver 取得并按指纹 `4B63…CBF125EA` 核验的密钥 `gpgv` 验证 `Release.gpg`；最新的三个日期依次尝试。Ubuntu：把 ROS 快照 `Release` 的 `Date:` 换算成 `YYYYMMDDTHHMMSSZ`，GET `snapshot.ubuntu.com/ubuntu/<ts>/dists/<codename>/InRelease` 须 200，并用 `/usr/share/keyrings/ubuntu-archive-keyring.gpg` 验签（无该文件则跳过并说明）。gpg / gpgv 缺失时记录日期但说明"签名未检查"；签名**失败**则不记录该日期 | 任一层失败 → 该字段为空 + `DEGRADED` 说明（`apply --locked` 用实时源）；`ROSPM_NO_NETWORK=1` 跳过整层并说明 |
+| pip | `python3 -m pip list --format=freeze`，只记录 `[dependencies].pip` 里点名的包（PEP 503 规范化名字） | pip 不可用或包未装 → 不记录并说明（决策 #6） |
+
+- 只能解析本机平台：`--platform` 与本机不同直接报错（P5 起查仓库索引）。已有锁文件中**其它平台**的 apt 记录原样保留，本平台的记录整体替换，因此一份锁文件可由多台机器各自 `lock` 累积。
+- 幂等：解析结果与现有文件除 `generated_at` 外完全一致时不重写文件、`generated_at` 保持，输出 `unchanged`。apt 按（平台，名字）排序，源码按叠加顺序与 `.repos` 顺序。
+- `manifest_sha256` 是 `--manifest` 所指文件的原文哈希。
+
+### 3.4 `verify` 的对比规则（P2）
+
+只读。输出与 `check` 相同的期望 vs 实际表：
+
+| 区域 | 对比 | 状态 |
+|---|---|---|
+| manifest | 清单原文哈希 vs `manifest_sha256`；`environment.provider` vs `provider.kind` | 不一致 → `MISMATCH`（提示重新 `rospm lock`） |
+| os | `provider.native.ubuntu` vs `/etc/os-release`；两个快照日期只作 `info` 展示（是否已切到快照源由 `apply --locked` 负责） | 不同 → `MISMATCH`，不可读 → `unknown` |
+| source | 每条 git 记录：目录不存在 → `MISSING`；不是 git 检出 → `MISMATCH`；`HEAD` ≠ `rev` → `MISMATCH`（同时给出两个短 SHA）；origin 与 `url` 宽松比较不同 → 额外一行 `MISMATCH`；非 git 类型 → `info` 未核对；锁文件里的 workspace 不在清单 → `MISMATCH` | git 缺失 → `unknown` |
+| apt / ros | 只核对本机平台的记录：未安装 → `MISSING`，版本不同 → `MISMATCH`；其它平台的记录合并成一行 `info`；底包一行归 `ros` 区域 | `dpkg-query` 不可用 → 每包 `unknown` |
+| pip | 与 `pip list --format=freeze` 对比：未装 → `MISSING`，版本不同 → `MISMATCH` | pip 不可用 → `unknown` |
+
+退出码：全部一致（无 `MISSING` / `MISMATCH` / `unknown`）为 0，否则 1（供 CI 用）。`--json` 形如 `{ ok, manifest, lock, generated_at, manifest_matches, ros_snapshot, ubuntu_snapshot, environment: { probed, ready, problems, unknown, items } }`。
+
 ## 4. CLI 动词表
 
 命令名 `rospm`。分级依据决策 #2。
@@ -201,8 +230,8 @@ version = "1.26.4"
 |---|---|---|---|
 | `init [--from-env] [--base ros-base\|desktop]` | 写项目文件 / 幂等 | 生成清单模板；`--from-env` 尽力探测（决策 #3）；`--base` 选底包元包（默认 `ros-base`，`desktop` 含 RViz / demos），写入 `environment.native.ros_base`；已存在不覆盖，需 `--force` | — |
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；默认只报告（退出码 0），`--strict` 在主机未就绪时退出 1；`--target` 与主机不同则跳过探测，P5 起查目标架构包可用性 | — |
-| `lock [--platform <p>]` | 写项目文件 / 幂等 | 生成 `rospm.lock`；同一输入产生同一输出 | — |
-| `verify` | 只读 | 对比锁文件与当前环境，报告漂移；清单哈希不一致则提示重新 `lock` | — |
+| `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
+| `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
 | `apply [--locked] [--offline] [--mirror <name>]` | 修改系统 | 先测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 切换快照源；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
