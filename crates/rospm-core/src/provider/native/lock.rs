@@ -57,6 +57,27 @@ pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
         }
     }
 
+    // The apt layer is this host's dpkg state: it only describes the manifest's
+    // Ubuntu release if the host runs it (same rule as `apply`).
+    let ubuntu = m.ubuntu();
+    match host.ubuntu_matches(&ubuntu) {
+        Some(true) => {}
+        Some(false) => {
+            let have = host
+                .os
+                .as_ref()
+                .and_then(|os| os.pretty_name.clone())
+                .unwrap_or_else(|| msg!("native.unknown_os").to_string());
+            return Err(Error::Host(msg!(
+                "native.apply.wrong_ubuntu",
+                ubuntu = ubuntu,
+                distro = m.project.ros_distro,
+                have = have
+            )));
+        }
+        None => notes.push(msg!("lock.os_release_unreadable", ubuntu = ubuntu)),
+    }
+
     let sources = resolve_sources(ctx, &mut notes)?;
     let apt = resolve_apt(ctx, &mut notes)?;
     let pip = resolve_pip(host, &m.dependencies.pip, &mut notes);

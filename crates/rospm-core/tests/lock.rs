@@ -128,6 +128,7 @@ fn lock_records_sources_apt_and_degrades_without_network() {
     assert_eq!(native.ubuntu_snapshot, None);
     let keys: Vec<_> = res.notes.iter().filter_map(|n| n.key_name()).collect();
     assert!(keys.contains(&"lock.network_skipped"), "{keys:?}");
+    assert!(keys.contains(&"lock.os_release_unreadable"), "{keys:?}");
     assert!(keys.contains(&"lock.apt_missing"), "{keys:?}"); // tooling not installed
     assert!(keys.contains(&"lock.pip_unavailable"), "{keys:?}"); // no python3 tool in the synthetic host
     assert!(l.pip.is_empty());
@@ -160,6 +161,15 @@ fn lock_refuses_unimported_sources_and_foreign_platforms() {
     assert!(err.contains("lock.foreign_platform"), "{err}");
 
     let mut h = synthetic_host();
+    h.os = Some(rospm_core::probe::OsRelease::parse(
+        "ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n",
+    ));
+    let err = provider::for_manifest(&m)
+        .resolve_lock(&ctx(&m, &root, &h), None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("native.apply.wrong_ubuntu"), "{err}");
+    h.os = None;
     h.packages = PackageDb::Unavailable;
     let (root2, _) = project("nodpkg", true);
     let err = provider::for_manifest(&m)

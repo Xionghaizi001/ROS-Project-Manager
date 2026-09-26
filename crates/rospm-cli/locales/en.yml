@@ -221,6 +221,7 @@ plan:
   key_fingerprint_mismatch: "key downloaded from %{url} has fingerprint %{found} but rospm expects %{expected}; not installed to %{dest}"
 
 lock:
+  os_release_unreadable: "/etc/os-release is unreadable; assuming this host runs Ubuntu %{ubuntu} as the manifest says"
   foreign_platform: "cannot resolve %{platform} on this %{host} host; run `rospm lock` on such a machine, its entries are merged into the same file (roadmap P5 adds repository queries)"
   no_vcs_no_git: "neither vcs nor git is available; source revisions cannot be recorded"
   vcs_missing: "vcstool is not installed; revisions read with git instead"

@@ -216,6 +216,7 @@ plan:
   key_fingerprint_mismatch: "从 %{url} 下载的密钥指纹为 %{found}，rospm 期望 %{expected}；未安装到 %{dest}"
 
 lock:
+  os_release_unreadable: "/etc/os-release 不可读；按清单假定本机为 Ubuntu %{ubuntu}"
   foreign_platform: "本机是 %{host}，无法解析 %{platform}；请在那种机器上运行 `rospm lock`，其记录会合并进同一个文件（路线图 P5 加入仓库索引查询）"
   no_vcs_no_git: "vcs 与 git 都不可用，无法记录源码提交"
   vcs_missing: "未安装 vcstool，改用 git 读取提交"
