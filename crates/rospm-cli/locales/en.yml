@@ -7,6 +7,9 @@
 _test:
   en_only: "english only"
 
+pixi:
+  parse: "could not parse pixi.toml: %{source}"
+
 cli:
   about: "Describe, lock and replay ROS 2 project environments"
   long_about: "rospm wraps rosdep, vcstool, colcon, apt, pixi and docker behind one manifest (rospm.toml) and one lock file (rospm.lock).\n\nCommands that modify the system (apply, uninstall, build, export, import, deps install) always print their plan first and accept --dry-run."

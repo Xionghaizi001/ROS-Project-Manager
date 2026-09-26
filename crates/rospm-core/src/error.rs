@@ -21,6 +21,10 @@ pub enum Error {
         source: Box<toml::de::Error>,
     },
 
+    PixiParse {
+        source: Box<toml::de::Error>,
+    },
+
     ReposParse {
         path: PathBuf,
         source: Box<serde_yaml::Error>,
@@ -81,6 +85,7 @@ impl Error {
             Error::LockParse { path, source } => {
                 msg!("error.lock_parse", path = path.display(), source = source)
             }
+            Error::PixiParse { source } => msg!("pixi.parse", source = source),
             Error::ReposParse { path, source } => {
                 msg!("error.repos_parse", path = path.display(), source = source)
             }
@@ -123,6 +128,7 @@ impl std::error::Error for Error {
             Error::ManifestParse { source, .. } | Error::LockParse { source, .. } => {
                 Some(source.as_ref())
             }
+            Error::PixiParse { source } => Some(source.as_ref()),
             Error::ReposParse { source, .. } => Some(source.as_ref()),
             Error::Serialize { source, .. } => Some(source.as_ref()),
             _ => None,

@@ -27,6 +27,7 @@ pub mod message;
 pub mod mirror;
 pub mod net;
 pub mod package_xml;
+pub mod pixi;
 pub mod plan;
 pub mod platform;
 pub mod probe;

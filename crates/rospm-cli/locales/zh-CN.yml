@@ -2,6 +2,9 @@
 # 不翻译：子命令名、参数名、清单键值、--json 的键名与枚举值、计划里的 shell 命令。
 # 占位符写法为 %{name}。
 
+pixi:
+  parse: "无法解析 pixi.toml：%{source}"
+
 cli:
   about: "描述、锁定并重放 ROS 2 项目环境"
   long_about: "rospm 用一份清单（rospm.toml）和一份锁文件（rospm.lock）封装 rosdep、vcstool、colcon、apt、pixi 与 docker。\n\n会修改系统的命令（apply、uninstall、build、export、import、deps install）总是先打印计划，并支持 --dry-run。"
