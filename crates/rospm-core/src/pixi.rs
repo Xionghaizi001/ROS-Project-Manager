@@ -192,6 +192,68 @@ A_VAR = "one"
     }
 
     #[test]
+    fn tasks_follow_build_order_and_env_keeps_manifest_order() {
+        let text = generate(&manifest()).unwrap();
+        let v: Value = text.parse().unwrap();
+        assert!(text.starts_with(GENERATED_MARKER));
+        assert_eq!(
+            v["workspace"]["platforms"],
+            Value::Array(vec!["linux-64".into(), "linux-aarch64".into()])
+        );
+        assert_eq!(
+            v["workspace"]["channels"],
+            Value::Array(vec!["robostack-jazzy".into(), "conda-forge".into()])
+        );
+        let tasks = &v["tasks"];
+        assert_eq!(
+            tasks["build-base"]["cmd"].as_str(),
+            Some("colcon build --event-handlers 'console direct+'")
+        );
+        assert_eq!(tasks["build-base"]["cwd"].as_str(), Some("base ws"));
+        assert_eq!(tasks["build-main"]["cwd"].as_str(), Some("src"));
+        assert_eq!(
+            tasks["build"]["depends-on"],
+            Value::Array(vec!["build-base".into(), "build-main".into()])
+        );
+        // `[activation.env]` in manifest order, not sorted.
+        assert!(text.find("Z_VAR").unwrap() < text.find("A_VAR").unwrap());
+        assert_eq!(v["activation"]["env"]["A_VAR"].as_str(), Some("one"));
+    }
+
+    #[test]
+    fn manifest_without_env_still_parses() {
+        let m = Manifest::parse(
+            r#"
+schema_version = 1
+[project]
+name = "q\"x"
+ros_distro = "humble"
+platforms = ["linux-x86_64"]
+[environment]
+provider = "pixi"
+[environment.pixi]
+[workspaces.main]
+path = "ws"
+"#,
+            std::path::Path::new("inline.toml"),
+        )
+        .unwrap();
+        let text = generate(&m).unwrap();
+        let s = read_summary(&text).unwrap();
+        assert_eq!(s.name.as_deref(), Some("q\"x"));
+        assert_eq!(s.platforms, vec!["linux-64"]);
+        assert_eq!(s.ros_distro.as_deref(), Some("humble"));
+    }
+
+    #[test]
+    fn read_summary_rejects_invalid_toml() {
+        assert!(matches!(
+            read_summary("[workspace"),
+            Err(Error::PixiParse { .. })
+        ));
+    }
+
+    #[test]
     fn hand_written_project_and_tables() {
         let s = read_summary(
             r#"[project]
