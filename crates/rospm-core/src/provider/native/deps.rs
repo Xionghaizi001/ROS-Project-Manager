@@ -194,7 +194,7 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
     let skipped: BTreeSet<String> = external_candidate.intersection(&skip).cloned().collect();
     let external: BTreeSet<String> = external_candidate.difference(&skip).cloned().collect();
 
-    let environment = if !m.dependencies.rosdep.enabled {
+    let mut environment = if !m.dependencies.rosdep.enabled {
         let mut r = EnvReport::default();
         r.push(
             "deps",
@@ -226,6 +226,18 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
     } else {
         probe_rosdep(ctx, &order, &external, &skip)
     };
+    // A package.xml that does not parse contributes no keys: say so, like `check`.
+    for (name, pkgs) in &scans {
+        for (file, err) in &pkgs.errors {
+            environment.push(
+                "workspace",
+                format!("{name}: {}", file.display()),
+                msg!("probe.workspace.valid_package_xml"),
+                err.clone(),
+                Status::Mismatch,
+            );
+        }
+    }
 
     Ok(DepsReport {
         workspaces,

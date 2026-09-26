@@ -237,7 +237,7 @@ version = "1.26.4"
 | `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |
 | `shell` | 启动子进程 | 在已 source 的子 shell 中工作 | — |
-| `deps check` / `deps install` | 只读 / 修改系统 | 解析全部 `package.xml`，与已安装集合求差；`install` 交给 rosdep 执行 | install 必须 |
+| `deps check` / `deps install` | 只读 / 修改系统 | `check`：解析全部 workspace 的 `package.xml`，把依赖键分为内部（项目内某个包提供）、外部（交给 rosdep）、跳过（`skip_keys`）；外部键经 `rosdep check` / `rosdep resolve` 映射到 apt 包并查 dpkg，输出期望 vs 实际表（未装 `MISSING`、rosdep 无法解析或未安装 rosdep 为 `unknown`），`package.xml` 解析失败为 `MISMATCH`；始终退出 0；`--json` 为 `{ ok, workspaces[], internal[], external[], skipped[], environment }`。`install`：与 `apply` 的 rosdep 步骤同一命令（未 `rosdep update` 时先 update，按叠加顺序逐 workspace `rosdep install`，`--skip-keys`，`ROSPM_MIRROR` 生效），但不做 `rosdep init`（提示先 `rospm apply`）、不测速 | install 必须 |
 | `export [--target <p>] [-o <path>]` | 产出产物 | 生成离线包，见 §5 | 必须 |
 | `import <bundle>` | 修改系统 | 校验并解包，然后等价于 `apply --locked --offline` | 必须 |
 | `editor [vscode\|clion\|devcontainer]` | 写项目文件 / 幂等 | 生成编辑器配置 | — |
