@@ -193,6 +193,15 @@ version = "1.26.4"
 | docker | digest | 无 | — |
 | pip | 无 | 始终仅记录 | — |
 
+**`apply --locked` 的做法（P2）**：
+
+- 前置：`rospm.lock` 必须存在且 `manifest_sha256` 与清单原文一致，`provider.kind` 须为 native，锁文件里须有本机平台的 apt 记录且含清单的底包；任一不满足直接报错提示重新 `rospm lock`（陈旧的锁是用户错误，不是降级）。
+- ROS 源：复用 P1 的源文件管理——同一个 `/etc/apt/sources.list.d/ros2.list` 改写为 `deb [arch=<arch> signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/<distro>/<date>/ubuntu <codename> main`；keyring 先从 `keyserver.ubuntu.com` 下载、按指纹 `4B63…CBF125EA` 核验后才安装（已存在则跳过）。文件已指向同一快照则不动；文件不是 rospm 写的（如 `ros2-apt-source`）则不动并说明快照未应用。
+- Ubuntu 源：写 rospm 自己的 `/etc/apt/sources.list.d/rospm-ubuntu-snapshot.list`（`<codename>`、`<codename>-updates`、`<codename>-security` × `main restricted universe multiverse`，`signed-by=ubuntu-archive-keyring.gpg`），**不改** Ubuntu 自身的 `sources.list` / `ubuntu.sources`（决策 #17）。这个文件只是让锁定的版本可下载。
+- 安装：`apt-get install -y --allow-downgrades <名>=<版本> …`，逐条列出锁文件里本机平台的记录（每条命令最多 100 个包），替代底包 / 额外 apt 两步；`rosdep init` / `update` 照常，`rosdep install` 跳过并说明（锁文件已是解析结果）。源码 `vcs import` 后逐仓库 `git checkout --detach <rev>`；非 git 源不固定并说明。
+- 降级：锁文件中快照为空，或真实运行前 GET 快照 `InRelease` 不通（10 s），该层退回实时源 / 镜像，并打印上表的 `WARN` 行与一条说明；版本仍按锁文件安装。`--dry-run` 不探测网络。禁止 `trusted=yes`、禁止关闭签名检查；密钥过期（`EXPKEYSIG`）提示从 keyserver 刷新。
+- `uninstall` 连同 `ros2.list` 一并删除快照 keyring 与 `rospm-ubuntu-snapshot.list`。
+
 ### 3.3 `lock` 的解析规则（P2）
 
 `rospm lock` 只读地解析**本机**，写出 `rospm.lock`；它描述的是已经 `apply` 过的状态，不是意图。
@@ -232,7 +241,7 @@ version = "1.26.4"
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；默认只报告（退出码 0），`--strict` 在主机未就绪时退出 1；`--target` 与主机不同则跳过探测，P5 起查目标架构包可用性 | — |
 | `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
 | `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
-| `apply [--locked] [--offline] [--mirror <name>]` | 修改系统 | 先测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 切换快照源；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集 | 必须 |
+| `apply [--locked] [--offline] [--mirror <name>]` | 修改系统 | 先测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |
