@@ -120,8 +120,17 @@ cli:
     exited: "shell exited with %{status}"
   deps:
     about: "Inspect or complete dependencies from package.xml files"
-    check: "Report missing dependencies without installing (roadmap P2)"
-    install: "Install missing dependencies through rosdep (roadmap P2) [modifies system]"
+    check: "Report missing dependencies without installing"
+    install: "Install missing dependencies through rosdep [modifies system]"
+    workspace_line: "workspace   %{name}    packages=%{packages}  keys=%{keys}"
+    internal_line: "internal    %{keys}"
+    external_line: "external    %{keys}"
+    skipped_line: "skipped     %{keys}"
+    none: "(none)"
+    env_header: "environment (deps, expected vs actual)"
+    env_empty: "(nothing to check)"
+    ready: "ready        all external dependencies are installed"
+    not_ready: "not ready    %{summary}; `rospm deps install --dry-run` shows what would be installed"
   export:
     about: "Produce an offline bundle (roadmap P6) [produces artifacts]"
     target: "Target platform of the bundle"
@@ -387,6 +396,21 @@ tool:
   python3: "pip versions (lock / verify, recorded only)"
   pixi: "pixi provider (roadmap P3)"
   docker: "docker provider (roadmap P4)"
+
+deps:
+  plan:
+    title: "deps install `%{name}` (%{distro})"
+    rosdep_disabled: "dependencies.rosdep.enabled = false; nothing to install"
+    rosdep_not_initialized: "rosdep has not been initialized on this host; run `rospm apply` first (it bootstraps rosdep), or `sudo rosdep init` yourself"
+  report:
+    rosdep_required: "resolved via rosdep"
+    rosdep_disabled: "disabled (dependencies.rosdep.enabled = false)"
+    rosdep_not_found: "rosdep is not installed"
+    rosdep_key: "rosdep key"
+    not_probed: "not probed: rosdep is not installed"
+    unresolved: "rosdep could not resolve this key"
+    unresolved_reason: "rosdep could not resolve this key: %{reason}"
+    no_apt_package: "resolved, but not to an apt package"
 
 init:
   platforms:

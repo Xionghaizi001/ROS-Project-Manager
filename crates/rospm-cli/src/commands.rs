@@ -922,16 +922,149 @@ pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<
 
 // ---------------------------------------------------------------- deps
 
+#[derive(Serialize)]
+struct DepsCheckReport {
+    ok: bool,
+    workspaces: Vec<rospm_core::provider::native::deps::WorkspaceDeps>,
+    internal: Vec<String>,
+    external: Vec<String>,
+    skipped: Vec<String>,
+    environment: EnvSummary,
+}
+
+fn join_or_none<'a>(keys: impl IntoIterator<Item = &'a String>) -> String {
+    let joined = keys.into_iter().cloned().collect::<Vec<_>>().join(", ");
+    if joined.is_empty() {
+        tr("cli.deps.none")
+    } else {
+        joined
+    }
+}
+
+fn print_deps_environment(r: &EnvReport) {
+    println!("{}", tr("cli.deps.env_header"));
+    if r.items.is_empty() {
+        println!("{}", tr("cli.deps.env_empty"));
+        return;
+    }
+    let subjects: Vec<String> = r.items.iter().map(|i| i.subject.to_string()).collect();
+    let width = subjects
+        .iter()
+        .map(|s| i18n::display_width(s))
+        .max()
+        .unwrap_or(0)
+        .min(48);
+    for (item, subject) in r.items.iter().zip(&subjects) {
+        let mark = match item.status {
+            Status::Ok => tr("cli.status.ok"),
+            Status::Missing => tr("cli.status.missing"),
+            Status::Mismatch => tr("cli.status.mismatch"),
+            Status::Unknown => tr("cli.status.unknown"),
+            Status::Info => tr("cli.status.info"),
+        };
+        println!(
+            "  {} {:<8} {}  {}  |  {}",
+            i18n::pad(&mark, 8),
+            item.area,
+            i18n::pad(subject, width),
+            item.expected,
+            item.actual
+        );
+    }
+    let problems = r.problems();
+    let unknown = r.unknown();
+    if r.ready() {
+        println!("{}", tr("cli.deps.ready"));
+    } else {
+        let mut parts = Vec::new();
+        if problems == 1 {
+            parts.push(tr("cli.check.problems_one"));
+        } else if problems > 1 {
+            parts.push(msg!("cli.check.problems_many", count = problems).to_string());
+        }
+        if unknown > 0 {
+            parts.push(msg!("cli.check.undetermined", count = unknown).to_string());
+        }
+        println!("{}", msg!("cli.deps.not_ready", summary = parts.join(", ")));
+    }
+}
+
 /// `rospm deps check`: rosdep keys of every workspace versus the installed set.
 pub fn deps_check(global: &Global) -> Result<()> {
-    let _ = global;
-    not_implemented("deps check", "P2")
+    let loaded = load(global)?;
+    let host = Host::probe();
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
+    let report = provider::for_manifest(&loaded.manifest).probe_deps(&ctx)?;
+
+    if global.json {
+        let out = DepsCheckReport {
+            ok: true,
+            workspaces: report.workspaces,
+            internal: report.internal.into_iter().collect(),
+            external: report.external.into_iter().collect(),
+            skipped: report.skipped.into_iter().collect(),
+            environment: EnvSummary {
+                probed: true,
+                ready: report.environment.ready(),
+                problems: report.environment.problems(),
+                unknown: report.environment.unknown(),
+                items: report.environment.items,
+            },
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    for ws in &report.workspaces {
+        println!(
+            "{}",
+            msg!(
+                "cli.deps.workspace_line",
+                name = ws.name,
+                packages = ws.packages,
+                keys = ws.keys
+            )
+        );
+    }
+    println!(
+        "{}",
+        msg!(
+            "cli.deps.internal_line",
+            keys = join_or_none(&report.internal)
+        )
+    );
+    println!(
+        "{}",
+        msg!(
+            "cli.deps.external_line",
+            keys = join_or_none(&report.external)
+        )
+    );
+    if !report.skipped.is_empty() {
+        println!(
+            "{}",
+            msg!(
+                "cli.deps.skipped_line",
+                keys = join_or_none(&report.skipped)
+            )
+        );
+    }
+    println!();
+    print_deps_environment(&report.environment);
+    Ok(())
 }
 
 /// `rospm deps install [--dry-run]`: hand the missing keys to rosdep.
 pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
-    let _ = (global, dry_run);
-    not_implemented("deps install", "P2")
+    let loaded = load(global)?;
+    let host = Host::probe();
+    let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
+    let ctx = context(&loaded, &host, false, None, false, mirror)?;
+    let plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
+    let mut out = std::io::stdout().lock();
+    plan.execute(dry_run, &mut out)?;
+    out.flush()?;
+    Ok(())
 }
 
 pub fn env(global: &Global, shell: Shell) -> Result<()> {

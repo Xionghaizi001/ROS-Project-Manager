@@ -965,4 +965,12 @@ impl Provider for Native {
 
         Ok(r)
     }
+
+    fn probe_deps(&self, ctx: &Context) -> Result<deps::DepsReport> {
+        deps::probe(ctx)
+    }
+
+    fn plan_deps_install(&self, ctx: &Context) -> Result<Plan> {
+        deps::plan_install(ctx)
+    }
 }
