@@ -12,6 +12,7 @@ use crate::msg;
 use crate::plan::Plan;
 use crate::platform::Platform;
 use crate::probe::{EnvReport, Host, Status};
+use crate::provider::native::deps::DepsReport;
 
 pub mod native;
 
@@ -102,6 +103,14 @@ pub trait Provider {
     /// Compare `lock` with the host (spec §4 `verify`): source revisions,
     /// apt versions, pip versions. Read-only.
     fn verify(&self, ctx: &Context, lock: &Lock) -> Result<EnvReport>;
+
+    /// Compare every workspace's `package.xml` dependency keys with what is
+    /// already resolved/installed (spec §4 `deps check`). Read-only.
+    fn probe_deps(&self, ctx: &Context) -> Result<DepsReport>;
+
+    /// Build a plan that hands the missing dependency keys to rosdep (spec §4
+    /// `deps install`).
+    fn plan_deps_install(&self, ctx: &Context) -> Result<Plan>;
 }
 
 /// Select the provider declared in the manifest.
@@ -172,5 +181,11 @@ impl Provider for Unimplemented {
             Status::Info,
         );
         Ok(report)
+    }
+    fn probe_deps(&self, _ctx: &Context) -> Result<DepsReport> {
+        Err(self.err())
+    }
+    fn plan_deps_install(&self, _ctx: &Context) -> Result<Plan> {
+        Err(self.err())
     }
 }

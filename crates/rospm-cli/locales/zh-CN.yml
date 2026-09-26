@@ -103,8 +103,17 @@ cli:
     exited: "shell 退出：%{status}"
   deps:
     about: "根据 package.xml 检查或补全依赖"
-    check: "只报告缺失的依赖，不安装（路线图 P2）"
-    install: "通过 rosdep 安装缺失的依赖（路线图 P2）[修改系统]"
+    check: "只报告缺失的依赖，不安装"
+    install: "通过 rosdep 安装缺失的依赖 [修改系统]"
+    workspace_line: "workspace   %{name}    包=%{packages}  键=%{keys}"
+    internal_line: "内部        %{keys}"
+    external_line: "外部        %{keys}"
+    skipped_line: "已跳过      %{keys}"
+    none: "（无）"
+    env_header: "环境（依赖，期望 vs 实际）"
+    env_empty: "（无需检查）"
+    ready: "就绪        全部外部依赖已安装"
+    not_ready: "未就绪      %{summary}；`rospm deps install --dry-run` 会显示将要安装的内容"
   export:
     about: "生成离线包（路线图 P6）[产出产物]"
     target: "离线包的目标平台"
@@ -315,6 +324,21 @@ tool:
   python3: "pip 版本（lock / verify，仅记录）"
   pixi: "pixi 提供者（路线图 P3）"
   docker: "docker 提供者（路线图 P4）"
+
+deps:
+  plan:
+    title: "为 `%{name}` 安装依赖（%{distro}）"
+    rosdep_disabled: "dependencies.rosdep.enabled = false；无需安装"
+    rosdep_not_initialized: "本机尚未初始化 rosdep；请先运行 `rospm apply`（会自动引导 rosdep），或自行执行 `sudo rosdep init`"
+  report:
+    rosdep_required: "由 rosdep 解析"
+    rosdep_disabled: "已禁用（dependencies.rosdep.enabled = false）"
+    rosdep_not_found: "未安装 rosdep"
+    rosdep_key: "rosdep 键"
+    not_probed: "未探测：未安装 rosdep"
+    unresolved: "rosdep 无法解析该键"
+    unresolved_reason: "rosdep 无法解析该键：%{reason}"
+    no_apt_package: "已解析，但不是 apt 包"
 
 init:
   platforms:
