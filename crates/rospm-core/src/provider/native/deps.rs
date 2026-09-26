@@ -204,7 +204,7 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
             Status::Info,
         );
         r
-    } else if which::which("rosdep").is_err() {
+    } else if !ctx.host.has_tool("rosdep") {
         let mut r = EnvReport::default();
         r.push(
             "tool",
@@ -251,6 +251,12 @@ fn probe_rosdep(
 ) -> EnvReport {
     let mut r = EnvReport::default();
     let distro = ctx.manifest.project.ros_distro.as_str();
+    // Through the probed Host, like every other tool (tests substitute one).
+    let rosdep = ctx
+        .host
+        .tool("rosdep")
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| "rosdep".into());
 
     // `rosdep check`, per workspace: run for its side information (which
     // keys rosdep flat-out fails to resolve) independently of whether the
@@ -263,7 +269,7 @@ fn probe_rosdep(
         if !ws_path.join("src").is_dir() {
             continue;
         }
-        let mut cmd = OsCommand::new("rosdep");
+        let mut cmd = OsCommand::new(&rosdep);
         cmd.args([
             "check",
             "--from-paths",
@@ -298,7 +304,7 @@ fn probe_rosdep(
             continue;
         }
 
-        let mut cmd = OsCommand::new("rosdep");
+        let mut cmd = OsCommand::new(&rosdep);
         cmd.args(["resolve", key.as_str(), "--rosdistro", distro]);
         let Some(output) = run(cmd) else {
             r.push(
