@@ -66,6 +66,13 @@ jobs:
       - run: bin/rospm --manifest ${{ matrix.manifest }} build --dry-run
       - run: bin/rospm --manifest ${{ matrix.manifest }} env
       - run: bin/rospm doctor --json || true   # tools are absent here; report only
+      # P2: deps / lock / verify on a bare container. Sources are not imported,
+      # so `lock` must refuse (a lock describes a resolved state) and `verify`
+      # must ask for one; neither may touch the network or the system.
+      - run: bin/rospm --manifest ${{ matrix.manifest }} deps check --json | grep -q '"external"'
+      - run: bin/rospm --manifest ${{ matrix.manifest }} deps install --dry-run | grep -q 'dry-run: nothing executed'
+      - run: "! ROSPM_NO_NETWORK=1 bin/rospm --manifest ${{ matrix.manifest }} lock 2> /tmp/lock.txt; grep -q 'not imported' /tmp/lock.txt"
+      - run: "! bin/rospm --manifest ${{ matrix.manifest }} verify 2> /tmp/verify.txt; grep -q 'rospm lock' /tmp/verify.txt"
       # i18n (P1.5): the same commands under a Chinese locale print Chinese and
       # keep their exit codes. The runner's own locale is C, which the English
       # steps above rely on.
