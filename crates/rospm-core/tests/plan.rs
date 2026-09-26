@@ -547,6 +547,7 @@ fn locked(ros_snapshot: Option<&str>, ubuntu_snapshot: Option<&str>) -> Lock {
                 kind: "git".into(),
                 url: "https://github.com/example/foo_pkg".into(),
                 rev: "abc123deadbeef".into(),
+                version: None,
             },
             LockedSource {
                 workspace: "main".into(),
@@ -554,6 +555,7 @@ fn locked(ros_snapshot: Option<&str>, ubuntu_snapshot: Option<&str>) -> Lock {
                 kind: "git".into(),
                 url: "https://github.com/example/bar_pkg".into(),
                 rev: "def456cafebabe".into(),
+                version: None,
             },
         ],
         apt: vec![

@@ -106,6 +106,7 @@ fn write_lock(
             kind: "git".into(),
             url: "https://github.com/example/demo_pkg.git".into(),
             rev: "cafef00ddeadbeefcafef00ddeadbeefcafef00d".into(),
+            version: None,
         }],
         apt: vec![LockedApt {
             platform: Platform::LinuxX86_64,

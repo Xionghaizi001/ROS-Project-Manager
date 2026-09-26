@@ -45,7 +45,13 @@ fn installed(names: &[&str]) -> PackageDb {
 /// (overlay, depends on `a` and `libopencv-dev`, the latter in
 /// `dependencies.rosdep.skip_keys`).
 fn project() -> tempdir::TempProject {
-    let root = std::env::temp_dir().join(format!("rospm-core-deps-{}", std::process::id()));
+    // Unique per call: the tests in this binary run in parallel.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "rospm-core-deps-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("deps_ws/src/a")).unwrap();
     fs::write(
