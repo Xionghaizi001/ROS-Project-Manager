@@ -722,6 +722,14 @@ impl Provider for Native {
                 if host.apt_sources.keyring {
                     rm = rm.arg(ROS_APT_KEYRING);
                 }
+                // `apply --locked` leftovers: the snapshot keyring and rospm's
+                // own Ubuntu snapshot file (never Ubuntu's own sources).
+                if host.apt_sources.snapshot_keyring {
+                    rm = rm.arg(crate::snapshot::ROS_SNAPSHOT_KEYRING);
+                }
+                if host.apt_sources.ubuntu_snapshot.is_some() {
+                    rm = rm.arg(probe::UBUNTU_SNAPSHOT_LIST);
+                }
                 plan.run(rm);
                 plan.run(Command::new("apt-get").arg("update").sudo());
             }
