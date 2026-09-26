@@ -137,6 +137,11 @@ pub struct AptSources {
     /// The signing key at [`crate::snapshot::ROS_SNAPSHOT_KEYRING`] exists.
     #[serde(default)]
     pub snapshot_keyring: bool,
+    /// That file is ASCII-armoured, which apt rejects at a `*.gpg` path
+    /// (written by rospm before the 2026-09-26 fix): `apply` reinstalls it,
+    /// `uninstall` still removes it.
+    #[serde(default)]
+    pub snapshot_keyring_armored: bool,
     /// Base URL of the Ubuntu snapshot (`https://snapshot.ubuntu.com/ubuntu/<timestamp>`)
     /// if rospm's own [`UBUNTU_SNAPSHOT_LIST`] file exists.
     #[serde(default)]
@@ -147,6 +152,12 @@ pub struct AptSources {
     /// complain loudly, which is clearer than rospm silently refusing).
     #[serde(default)]
     pub ubuntu_archive_keyring: bool,
+}
+
+/// The file exists and is ASCII-armoured: unusable for apt at a `*.gpg`
+/// path (NO_PUBKEY), so `apply` must reinstall it.
+fn is_armored_file(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|bytes| crate::plan::is_ascii_armored(&bytes))
 }
 
 impl AptSources {
@@ -188,6 +199,7 @@ impl AptSources {
             universe: None,
             ros2_snapshot: None,
             snapshot_keyring: snapshot_keyring.is_file(),
+            snapshot_keyring_armored: is_armored_file(snapshot_keyring),
             ubuntu_snapshot: None,
             ubuntu_archive_keyring: ubuntu_archive_keyring.is_file(),
         };
@@ -986,7 +998,7 @@ mod tests {
         )
         .unwrap();
         let keyring = dir.join("ros2-snapshots-archive-keyring.gpg");
-        fs::write(&keyring, b"").unwrap();
+        fs::write(&keyring, [0x99u8, 0x02, 0x0d, 0x04]).unwrap();
         let probed = AptSources::probe_in(
             &dir,
             &dir.join("missing-ros-keyring.gpg"),
@@ -1000,6 +1012,18 @@ mod tests {
             Some("http://snapshots.ros.org/jazzy/2026-09-11/ubuntu")
         );
         assert!(probed.snapshot_keyring);
+        // An armoured file at a `*.gpg` path is unusable for apt (NO_PUBKEY):
+        // still present (uninstall removes it) but flagged for reinstall.
+        fs::write(&keyring, "-----BEGIN PGP PUBLIC KEY BLOCK-----\n").unwrap();
+        let armoured = AptSources::probe_in(
+            &dir,
+            &dir.join("missing-ros-keyring.gpg"),
+            &keyring,
+            &dir.join("missing-ubuntu-keyring.gpg"),
+        );
+        assert!(armoured.snapshot_keyring);
+        assert!(armoured.snapshot_keyring_armored);
+        assert!(!probed.snapshot_keyring_armored);
         let _ = fs::remove_dir_all(&dir);
     }
 

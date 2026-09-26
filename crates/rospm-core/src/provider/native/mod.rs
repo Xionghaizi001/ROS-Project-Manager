@@ -81,7 +81,9 @@ fn plan_ros_snapshot_source(
     let is_foreign_file = host.apt_sources.ros2.is_some() && !is_own_file;
     let already_current =
         is_own_file && host.apt_sources.ros2_snapshot.as_deref() == Some(base.as_str());
-    let need_source = !is_foreign_file && !(already_current && host.apt_sources.snapshot_keyring);
+    let keyring_ok =
+        host.apt_sources.snapshot_keyring && !host.apt_sources.snapshot_keyring_armored;
+    let need_source = !is_foreign_file && !(already_current && keyring_ok);
 
     if need_locale || need_universe || need_source {
         let mut prereqs: Vec<&str> = Vec::new();
@@ -163,7 +165,7 @@ fn plan_ros_snapshot_source(
                 to = base
             ));
         }
-        if !host.apt_sources.snapshot_keyring {
+        if !keyring_ok {
             plan.fetch_key(
                 crate::snapshot::keyserver_key_url(crate::snapshot::ROS_SNAPSHOT_KEY_FINGERPRINT),
                 crate::snapshot::ROS_SNAPSHOT_KEYRING,
@@ -239,6 +241,10 @@ fn plan_ubuntu_snapshot_source(
         file = probe::UBUNTU_SNAPSHOT_LIST
     ));
     plan.write_file_sudo(probe::UBUNTU_SNAPSHOT_LIST, contents);
+    // Without this the pinned install below only sees the indexes fetched
+    // before the file existed, i.e. the live archive, which no longer carries
+    // older `-updates` / `-security` versions (found in the 2026-09-26 run).
+    plan.run(Command::new("apt-get").arg("update").sudo());
 }
 
 /// Install every pinned apt package for `platform`, exactly and explicitly
@@ -700,8 +706,30 @@ impl Provider for Native {
             .filter(|d| d.as_str() != distro.as_str())
             .collect();
         match (&host.apt_sources.ros2, keep_source) {
-            (None, _) => {
+            (None, keep) => {
                 plan.note(msg!("native.uninstall.no_source"));
+                // Leftovers of an interrupted `apply --locked` (only rospm
+                // writes these two paths): without this they outlive every
+                // later uninstall, since the branch below needs `ros2.list`.
+                if !keep {
+                    let mut rm = Command::new("rm").arg("-f").sudo();
+                    let mut any = false;
+                    if host.apt_sources.snapshot_keyring {
+                        rm = rm.arg(crate::snapshot::ROS_SNAPSHOT_KEYRING);
+                        any = true;
+                    }
+                    let ubuntu_list = host.apt_sources.ubuntu_snapshot.is_some();
+                    if ubuntu_list {
+                        rm = rm.arg(probe::UBUNTU_SNAPSHOT_LIST);
+                        any = true;
+                    }
+                    if any {
+                        plan.run(rm);
+                    }
+                    if ubuntu_list {
+                        plan.run(Command::new("apt-get").arg("update").sudo());
+                    }
+                }
             }
             (Some(_), true) => {
                 plan.note(msg!("native.uninstall.keep_source"));

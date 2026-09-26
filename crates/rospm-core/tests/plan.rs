@@ -636,6 +636,20 @@ fn native_apply_locked_pins_the_ros_and_ubuntu_snapshots_and_every_apt_and_git_s
         "{rendered}"
     );
     assert!(!rendered.contains("/etc/apt/sources.list\n"), "{rendered}");
+    // The snapshot file only takes effect after an `apt-get update` that runs
+    // before the first pinned install.
+    let ubuntu_write = rendered
+        .find(&format!(
+            "plan.write_file_sudo(path={UBUNTU_SNAPSHOT_LIST}, bytes="
+        ))
+        .unwrap();
+    let pinned_install = rendered
+        .find("apt-get install -y --allow-downgrades")
+        .unwrap();
+    assert!(
+        rendered[ubuntu_write..pinned_install].contains("sudo apt-get update"),
+        "{rendered}"
+    );
 
     // Every pinned apt package for this platform, exactly, none for the other.
     assert!(
@@ -718,4 +732,64 @@ fn native_apply_locked_leaves_a_foreign_ros_apt_source_alone() {
     // foreign ROS source.
     assert!(rendered.contains(UBUNTU_SNAPSHOT_LIST));
     assert!(rendered.contains("--allow-downgrades ros-jazzy-ros-base="));
+}
+
+#[test]
+fn native_apply_locked_reinstalls_an_armored_snapshot_keyring() {
+    // Pinned to the same snapshot already; only the keyring differs.
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = bare_host();
+    host.apt_sources.ros2 = Some(PathBuf::from(ROS_APT_LIST));
+    host.apt_sources.ros2_snapshot =
+        Some("http://snapshots.ros.org/jazzy/2026-09-11/ubuntu".to_string());
+    host.apt_sources.snapshot_keyring = true;
+    let lock = locked(Some("2026-09-11"), Some("20260911T182146Z"));
+    let plan_for = |host: &Host| {
+        provider::for_manifest(&m)
+            .plan_apply(&locked_ctx(&m, host, &lock))
+            .unwrap()
+            .render()
+    };
+
+    let binary = plan_for(&host);
+    assert!(!binary.contains("plan.fetch_key("), "{binary}");
+
+    // Written armoured by rospm before the 2026-09-26 fix: apt reports
+    // NO_PUBKEY, so it must be fetched (and dearmoured) again.
+    host.apt_sources.snapshot_keyring_armored = true;
+    let armored = plan_for(&host);
+    assert!(
+        armored.contains("dest=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg"),
+        "{armored}"
+    );
+}
+
+#[test]
+fn native_uninstall_removes_orphaned_snapshot_leftovers_without_a_ros_source() {
+    // An interrupted `apply --locked` + an earlier uninstall: `ros2.list` is
+    // gone but the snapshot keyring and the Ubuntu snapshot file remain.
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = ready_host();
+    host.packages = installed(&["python3-rosdep"]);
+    host.apt_sources.ros2 = None;
+    host.apt_sources.snapshot_keyring = true;
+    host.apt_sources.ubuntu_snapshot =
+        Some("https://snapshot.ubuntu.com/ubuntu/20260911T182146Z".to_string());
+    let rendered = provider::for_manifest(&m)
+        .plan_uninstall(&ctx(&m, &host), false)
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains(&format!(
+            "sudo rm -f /usr/share/keyrings/ros2-snapshots-archive-keyring.gpg {UBUNTU_SNAPSHOT_LIST}"
+        )),
+        "{rendered}"
+    );
+    assert!(rendered.contains("sudo apt-get update"), "{rendered}");
+
+    // `--keep-source` keeps them.
+    let kept = provider::for_manifest(&m)
+        .plan_uninstall(&ctx(&m, &host), true)
+        .unwrap();
+    assert_eq!(kept.action_count(), 0, "{}", kept.render());
 }

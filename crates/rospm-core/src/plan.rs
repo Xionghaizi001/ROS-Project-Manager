@@ -465,9 +465,36 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         )));
     }
 
+    // apt's `signed-by=` only accepts ASCII-armoured keys in files named
+    // `*.asc`; our keyrings are `*.gpg`, so armoured downloads (the
+    // keyserver's snapshot key; `ros.key` is already binary) are converted.
+    // Found in the 2026-09-26 real `apply --locked` run: NO_PUBKEY.
+    let bytes = std::fs::read(&tmp).map_err(|e| Error::io(tmp.clone(), e))?;
+    let binary = tmp.with_extension("bin");
+    let _cleanup_binary = RemoveOnDrop(binary.clone());
+    let to_install = if is_ascii_armored(&bytes) {
+        let out = process::Command::new("gpg")
+            .args(["--batch", "--yes", "--dearmor", "--output"])
+            .arg(&binary)
+            .arg(&tmp)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| Error::io("gpg", e))?;
+        if !out.status.success() {
+            return Err(Error::Host(msg!(
+                "plan.key_unreadable",
+                url = url,
+                error = String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        &binary
+    } else {
+        &tmp
+    };
+
     let install = Command::new("install")
         .args(["-D", "-m", "0644", "-o", "root", "-g", "root"])
-        .arg(tmp.to_string_lossy())
+        .arg(to_install.to_string_lossy())
         .arg(dest.to_string_lossy())
         .sudo();
     let status = install
@@ -481,6 +508,16 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// Whether `bytes` is an ASCII-armoured OpenPGP block rather than a binary
+/// keyring (apt only reads binary keyrings from `*.gpg` files).
+pub fn is_ascii_armored(bytes: &[u8]) -> bool {
+    let start = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(bytes.len());
+    bytes[start..].starts_with(b"-----BEGIN PGP")
 }
 
 /// Primary-key fingerprints (`fpr:` records that follow a `pub:` record) from
@@ -566,7 +603,7 @@ pub fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_key, fingerprints};
+    use super::{fetch_key, fingerprints, is_ascii_armored};
 
     const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";
     const ROS_KEY_FINGERPRINT: &str = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654";
@@ -619,6 +656,35 @@ mod tests {
         .to_string();
         assert!(err.contains("curl"), "{err}");
         assert!(!dest.exists());
+    }
+
+    /// Needs network, `gpg` and password-less sudo: the keyserver serves the
+    /// snapshot key armoured; what lands in the keyring must be binary.
+    #[test]
+    #[ignore]
+    fn fetch_key_dearmors_the_keyserver_snapshot_key() {
+        let dest = std::env::temp_dir().join(format!("rospm-test-snap-{}.gpg", std::process::id()));
+        let fp = crate::snapshot::ROS_SNAPSHOT_KEY_FINGERPRINT;
+        fetch_key(&crate::snapshot::keyserver_key_url(fp), &dest, fp).unwrap();
+        let bytes = std::fs::read(&dest).unwrap();
+        let _ = std::process::Command::new("sudo")
+            .args(["rm", "-f"])
+            .arg(&dest)
+            .status();
+        assert!(bytes.len() > 100);
+        assert!(!is_ascii_armored(&bytes));
+    }
+
+    #[test]
+    fn is_ascii_armored_detects_armour_only() {
+        assert!(is_ascii_armored(
+            b"-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: x\n"
+        ));
+        assert!(is_ascii_armored(
+            b"\n  -----BEGIN PGP PUBLIC KEY BLOCK-----\n"
+        ));
+        assert!(!is_ascii_armored(&[0x99, 0x02, 0x0d, 0x04]));
+        assert!(!is_ascii_armored(b""));
     }
 
     #[test]
