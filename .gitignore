@@ -6,3 +6,4 @@
 
 # example projects: sources are fetched, not committed
 /examples/*/ws/
+.claude/worktrees/

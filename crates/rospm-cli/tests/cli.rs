@@ -405,7 +405,7 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
         "{stderr}"
     );
     let out = rospm_zh()
-        .args(["--manifest", "/nonexistent", "--json", "lock"])
+        .args(["--manifest", "/nonexistent", "--json", "export"])
         .output()
         .unwrap();
     assert!(!out.status.success());

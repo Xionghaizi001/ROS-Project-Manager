@@ -5,13 +5,14 @@ use std::path::Path;
 use std::str::FromStr;
 
 use crate::error::{Error, Result};
-use crate::lock::Lock;
+use crate::lock::{Lock, Resolution};
 use crate::manifest::{Manifest, ProviderKind};
 use crate::mirror::Mirror;
 use crate::msg;
 use crate::plan::Plan;
 use crate::platform::Platform;
 use crate::probe::{EnvReport, Host, Status};
+use crate::snapshot::Fetch;
 
 pub mod native;
 
@@ -97,7 +98,9 @@ pub trait Provider {
 
     /// Resolve what the host currently has into a lock file (spec §3,
     /// `rospm lock`). Read-only on the system; the CLI writes the result.
-    fn resolve_lock(&self, ctx: &Context) -> Result<Lock>;
+    /// `fetch` is how snapshot repositories are discovered; `None` means
+    /// offline, which is a recorded degradation, not an error.
+    fn resolve_lock(&self, ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution>;
 
     /// Compare `lock` with the host (spec §4 `verify`): source revisions,
     /// apt versions, pip versions. Read-only.
@@ -154,7 +157,7 @@ impl Provider for Unimplemented {
     fn env_script(&self, _ctx: &Context, _shell: Shell) -> Result<String> {
         Err(self.err())
     }
-    fn resolve_lock(&self, _ctx: &Context) -> Result<Lock> {
+    fn resolve_lock(&self, _ctx: &Context, _fetch: Option<&dyn Fetch>) -> Result<Resolution> {
         Err(self.err())
     }
     fn verify(&self, _ctx: &Context, _lock: &Lock) -> Result<EnvReport> {

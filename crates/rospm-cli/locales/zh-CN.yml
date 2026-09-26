@@ -56,7 +56,14 @@ cli:
     unknown: "未知"
     info: "提示"
   lock:
-    about: "解析并写入 rospm.lock（路线图 P2）"
+    about: "把本机状态解析写入 rospm.lock：源码提交、apt 版本、pip 版本、快照日期（写项目文件；ROSPM_NO_NETWORK=1 跳过快照探测）"
+    note_line: "说明        %{text}"
+    summary: "已锁定      %{platform}：%{sources} 个源码仓库、%{apt} 个 apt 包、%{pip} 个 pip 包"
+    other_platforms_kept: "已保留      上一版锁文件中其它平台的 %{count} 条 apt 记录"
+    snapshots: "快照        ROS %{ros}，Ubuntu %{ubuntu}"
+    live: "实时源（未记录，已降级）"
+    written: "已写入      %{path}"
+    unchanged: "未变化      %{path} 已描述当前状态"
   verify:
     about: "对比 rospm.lock 与当前环境（路线图 P2）"
   apply:
@@ -148,6 +155,7 @@ cli:
     manifest_not_found: "在 %{dir} 及其上级目录中均未找到 %{file}（请运行 `rospm init`）"
     cannot_resolve: "无法解析路径 %{path}"
     cannot_write: "无法写入 %{path}"
+    cannot_read: "无法读取 %{path}"
     unsupported_host: "本机不是受支持的平台（需要 linux x86_64 或 aarch64）"
     prefix: "错误：%{text}"
 
@@ -201,6 +209,39 @@ plan:
   fetching_key: "下载 %{url} -> %{dest}（核验指纹 %{fingerprint}）"
   key_unreadable: "gpg 无法读取从 %{url} 下载的密钥：%{error}"
   key_fingerprint_mismatch: "从 %{url} 下载的密钥指纹为 %{found}，rospm 期望 %{expected}；未安装到 %{dest}"
+
+lock:
+  foreign_platform: "本机是 %{host}，无法解析 %{platform}；请在那种机器上运行 `rospm lock`，其记录会合并进同一个文件（路线图 P5 加入仓库索引查询）"
+  no_vcs_no_git: "vcs 与 git 都不可用，无法记录源码提交"
+  vcs_missing: "未安装 vcstool，改用 git 读取提交"
+  vcs_export_failed: "workspace %{workspace} 中 `vcs export --exact` 失败（%{status}），改用 git 读取提交"
+  sources_not_imported: "%{count} 个仓库尚未导入（%{list}）；请先 `rospm apply`，锁文件描述的是已解析的状态"
+  origin_differs: "%{workspace}: src/%{name}：检出的 origin 是 %{actual}，记录的是 .repos 中的 %{url}"
+  dpkg_unavailable: "dpkg-query 不可用，无法记录 apt 版本"
+  apt_missing: "未安装、未记录（请 `rospm apply`）：%{packages}"
+  apt_cache_unavailable: "apt-cache 不可用，未记录 .deb 的 sha256"
+  pip_unavailable: "pip 不可用（python3 -m pip），未记录 pip 版本"
+  pip_missing: "pip 包未安装、未记录：%{packages}"
+  network_skipped: "已跳过快照探测（ROSPM_NO_NETWORK）；已降级：未记录快照日期，`apply --locked` 将使用实时源"
+  ros_snapshot_failed: "未记录 ROS 快照，已降级为实时源：%{error}"
+  ros_snapshot_recorded: "ROS 快照 %{date}（%{base}），签名%{signature}"
+  ubuntu_snapshot_failed: "未记录 Ubuntu 快照，已降级为实时源：%{error}"
+  ubuntu_snapshot_recorded: "Ubuntu 快照 %{timestamp}，签名%{signature}"
+
+snapshot:
+  http_status: "%{url}：HTTP %{status}"
+  index_empty: "%{distro} 没有列出任何快照日期"
+  no_usable_date: "%{distro} 没有可用的快照日期"
+  release_mismatch: "%{url} 不提供 %{codename}/%{arch}（Suite: %{suite}，Architectures: %{architectures}）"
+  release_date_unparseable: "无法理解 Release 的 `Date:` 头：%{date}"
+  keyserver_failed: "%{url}：HTTP %{status}（keyserver 上取不到快照签名密钥）"
+  key_fingerprint_mismatch: "从 %{url} 取得的密钥指纹为 %{found}，预期 %{expected}；未使用"
+  sig_failed: "%{url} 的签名验证失败：%{error}"
+  sig_expired: "快照签名密钥已过期；它曾被延期，请从 keyserver.ubuntu.com 刷新（见 docs/p0-external-validation.md §1.1）"
+  sig_no_gpg: "未检查（未安装 gpg / gpgv）"
+  sig_no_keyring: "未检查（没有 %{keyring}）"
+  sig_verified: "已验证"
+  sig_skipped: "已跳过：%{reason}"
 
 net:
   ok: "可达    %{millis} ms  %{bytes}%{rate}"

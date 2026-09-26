@@ -7,7 +7,20 @@
 //!   `Release` is signed by a *different* key than `packages.ros.org`
 //!   ([`ROS_SNAPSHOT_KEY_FINGERPRINT`]), distributed via `keyserver.ubuntu.com`.
 //! - Ubuntu: `https://snapshot.ubuntu.com/ubuntu/<YYYYMMDDTHHMMSSZ>`, signed by
-//!   the regular Ubuntu archive keyring.
+//!   the regular Ubuntu archive keyring. Any timestamp resolves to the newest
+//!   snapshot at or before it.
+//!
+//! Network access goes through the [`Fetch`] trait so discovery is testable
+//! with canned responses; [`Http`] is the real implementation.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::process;
+use std::time::Duration;
+
+use crate::message::Message;
+use crate::msg;
+use crate::plan::fingerprints;
 
 /// Root of the ROS snapshot service (no trailing slash).
 pub const ROS_SNAPSHOT_ROOT: &str = "http://snapshots.ros.org";
@@ -26,6 +39,9 @@ pub const ROS_SNAPSHOT_KEYRING: &str = "/usr/share/keyrings/ros2-snapshots-archi
 /// The keyserver the ROS wiki names for the snapshot key; `keys.openpgp.org`
 /// does not carry it.
 pub const KEYSERVER: &str = "keyserver.ubuntu.com";
+
+/// Per-request timeout for discovery.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// HTTP URL that returns the ASCII-armored public key for `fingerprint` from
 /// [`KEYSERVER`] (HKP over HTTPS); usable with the plan's `FetchKey` step.
@@ -53,6 +69,463 @@ pub fn inrelease_url(base: &str, codename: &str) -> String {
     format!("{base}/dists/{codename}/InRelease")
 }
 
+/// `dists/<codename>/Release` under `base`.
+pub fn release_url(base: &str, codename: &str) -> String {
+    format!("{base}/dists/{codename}/Release")
+}
+
+// ---------------------------------------------------------------- fetching
+
+/// A GET that returns the status code and body. Implemented by [`Http`] and
+/// by canned maps in tests.
+pub trait Fetch {
+    fn get(&self, url: &str) -> Result<(u16, Vec<u8>), Message>;
+}
+
+/// ureq-backed [`Fetch`] with a per-request timeout.
+pub struct Http {
+    pub timeout: Duration,
+}
+
+impl Default for Http {
+    fn default() -> Self {
+        Http {
+            timeout: DEFAULT_TIMEOUT,
+        }
+    }
+}
+
+impl Fetch for Http {
+    fn get(&self, url: &str) -> Result<(u16, Vec<u8>), Message> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(self.timeout))
+            .http_status_as_error(false)
+            .max_redirects(5)
+            .user_agent(concat!("rospm/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .into();
+        let mut resp = agent
+            .get(url)
+            .call()
+            .map_err(|e| net_error(&e, self.timeout))?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .body_mut()
+            .read_to_vec()
+            .map_err(|e| net_error(&e, self.timeout))?;
+        Ok((status, body))
+    }
+}
+
+fn net_error(e: &ureq::Error, timeout: Duration) -> Message {
+    match e {
+        ureq::Error::Timeout(_) => msg!("net.timeout", secs = timeout.as_secs()),
+        ureq::Error::Io(io) => Message::text(format!("{}", io.kind()).replace('_', " ")),
+        other => {
+            let s = other.to_string();
+            Message::text(s.split(": ").next().unwrap_or(&s).to_string())
+        }
+    }
+}
+
+/// Canned responses keyed by URL; anything else is a 404. For tests.
+#[derive(Default)]
+pub struct Canned(pub BTreeMap<String, (u16, Vec<u8>)>);
+
+impl Canned {
+    pub fn with(mut self, url: impl Into<String>, status: u16, body: impl AsRef<[u8]>) -> Self {
+        self.0.insert(url.into(), (status, body.as_ref().to_vec()));
+        self
+    }
+}
+
+impl Fetch for Canned {
+    fn get(&self, url: &str) -> Result<(u16, Vec<u8>), Message> {
+        Ok(self.0.get(url).cloned().unwrap_or((404, Vec::new())))
+    }
+}
+
+fn get_text(fetch: &dyn Fetch, url: &str) -> Result<String, Message> {
+    let (status, body) = fetch.get(url)?;
+    if !(200..300).contains(&status) {
+        return Err(msg!("snapshot.http_status", url = url, status = status));
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
+// ---------------------------------------------------------------- parsing
+
+/// Snapshot dates (`YYYY-MM-DD`) linked from a directory index, ascending.
+pub fn parse_index_dates(html: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = html;
+    while let Some(i) = rest.find("href=\"") {
+        rest = &rest[i + 6..];
+        let Some(end) = rest.find('"') else { break };
+        let href = rest[..end].trim_end_matches('/');
+        let href = href.rsplit('/').next().unwrap_or(href);
+        if is_date(href) && !out.iter().any(|d| d == href) {
+            out.push(href.to_string());
+        }
+        rest = &rest[end..];
+    }
+    out.sort();
+    out
+}
+
+fn is_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+}
+
+/// The fields of an apt `Release` / `InRelease` file rospm cares about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Release {
+    pub suite: Option<String>,
+    pub codename: Option<String>,
+    pub architectures: Vec<String>,
+    pub components: Vec<String>,
+    /// `Date:` header verbatim (`Fri, 11 Sep 2026 18:21:46 UTC`).
+    pub date: Option<String>,
+}
+
+pub fn parse_release(text: &str) -> Release {
+    let mut r = Release::default();
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let v = v.trim();
+        match k.trim() {
+            "Suite" => r.suite = Some(v.to_string()),
+            "Codename" => r.codename = Some(v.to_string()),
+            "Architectures" => r.architectures = v.split_whitespace().map(String::from).collect(),
+            "Components" => r.components = v.split_whitespace().map(String::from).collect(),
+            "Date" => r.date = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    r
+}
+
+/// `Fri, 11 Sep 2026 18:21:46 UTC` → `20260911T182146Z`, the timestamp form
+/// `snapshot.ubuntu.com` takes. `None` when the header is not in that shape.
+pub fn ubuntu_timestamp_from_date(date: &str) -> Option<String> {
+    let parts: Vec<&str> = date
+        .split(',')
+        .nth(1)
+        .unwrap_or(date)
+        .split_whitespace()
+        .collect();
+    // [day, month, year, hh:mm:ss, zone]
+    if parts.len() < 4 {
+        return None;
+    }
+    let day: u32 = parts[0].parse().ok()?;
+    let month = match parts[1] {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: u32 = parts[2].parse().ok()?;
+    let mut hms = parts[3].split(':');
+    let h: u32 = hms.next()?.parse().ok()?;
+    let m: u32 = hms.next()?.parse().ok()?;
+    let s: u32 = hms.next()?.parse().ok()?;
+    if !matches!(
+        parts.get(4).copied(),
+        None | Some("UTC") | Some("GMT") | Some("+0000")
+    ) {
+        return None;
+    }
+    Some(format!("{year:04}{month:02}{day:02}T{h:02}{m:02}{s:02}Z"))
+}
+
+// ---------------------------------------------------------------- discovery
+
+/// Outcome of a signature check that does not stop discovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signature {
+    Verified,
+    /// Could not be checked here (tool or keyring missing); the reason.
+    Skipped(Message),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RosSnapshot {
+    /// `YYYY-MM-DD` as listed by the index.
+    pub date: String,
+    pub base: String,
+    pub release: Release,
+    pub signature: Signature,
+}
+
+/// Newest ROS snapshot of `distro` whose `Release` serves `codename` for
+/// `arch`, with its signature verified against the keyserver copy of
+/// [`ROS_SNAPSHOT_KEY_FINGERPRINT`]. A snapshot whose signature *fails* is
+/// rejected (the next older date is tried); one that cannot be checked
+/// because gpg is missing is accepted with [`Signature::Skipped`].
+pub fn discover_ros(
+    fetch: &dyn Fetch,
+    distro: &str,
+    codename: &str,
+    arch: &str,
+) -> Result<RosSnapshot, Message> {
+    let index = get_text(fetch, &ros_snapshot_index_url(distro))?;
+    let dates = parse_index_dates(&index);
+    if dates.is_empty() {
+        return Err(msg!("snapshot.index_empty", distro = distro));
+    }
+    // The error reported is the newest date's: that is the one a fresh lock wanted.
+    let mut first_err: Option<Message> = None;
+    // Only the newest few: an old snapshot is not what a fresh lock should pin.
+    for date in dates.iter().rev().take(3) {
+        let base = ros_snapshot_url(distro, date);
+        let release_text = match get_text(fetch, &release_url(&base, codename)) {
+            Ok(t) => t,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                continue;
+            }
+        };
+        let release = parse_release(&release_text);
+        let suite_ok = release.suite.as_deref() == Some(codename)
+            || release.codename.as_deref() == Some(codename);
+        if !suite_ok || !release.architectures.iter().any(|a| a == arch) {
+            first_err.get_or_insert(msg!(
+                "snapshot.release_mismatch",
+                url = release_url(&base, codename),
+                codename = codename,
+                arch = arch,
+                suite = release.suite.clone().unwrap_or_default(),
+                architectures = release.architectures.join(" ")
+            ));
+            continue;
+        }
+        let signature = match verify_ros_signature(fetch, &base, codename, &release_text) {
+            Ok(sig) => sig,
+            Err(e) => {
+                first_err.get_or_insert(e);
+                continue;
+            }
+        };
+        return Ok(RosSnapshot {
+            date: date.clone(),
+            base,
+            release,
+            signature,
+        });
+    }
+    Err(first_err.unwrap_or_else(|| msg!("snapshot.no_usable_date", distro = distro)))
+}
+
+/// Verify `Release.gpg` of one ROS snapshot with a keyring built from the
+/// keyserver's copy of the snapshot key (fingerprint checked before use).
+fn verify_ros_signature(
+    fetch: &dyn Fetch,
+    base: &str,
+    codename: &str,
+    release_text: &str,
+) -> Result<Signature, Message> {
+    let (Some(gpg), Some(gpgv)) = (which::which("gpg").ok(), which::which("gpgv").ok()) else {
+        return Ok(Signature::Skipped(msg!("snapshot.sig_no_gpg")));
+    };
+    let sig_url = format!("{}.gpg", release_url(base, codename));
+    let (status, sig) = fetch.get(&sig_url)?;
+    if !(200..300).contains(&status) {
+        return Err(msg!("snapshot.http_status", url = sig_url, status = status));
+    }
+    let key_url = keyserver_key_url(ROS_SNAPSHOT_KEY_FINGERPRINT);
+    let (status, key) = fetch.get(&key_url)?;
+    if !(200..300).contains(&status) {
+        return Err(msg!(
+            "snapshot.keyserver_failed",
+            url = key_url,
+            status = status
+        ));
+    }
+    let dir = TempDir::new("rospm-snapshot")?;
+    let key_file = dir.path().join("key.asc");
+    let keyring = dir.path().join("keyring.gpg");
+    let release_file = dir.path().join("Release");
+    let sig_file = dir.path().join("Release.gpg");
+    for (p, bytes) in [
+        (&key_file, key.as_slice()),
+        (&release_file, release_text.as_bytes()),
+        (&sig_file, sig.as_slice()),
+    ] {
+        std::fs::write(p, bytes).map_err(|e| Message::text(format!("{}: {e}", p.display())))?;
+    }
+    // Fingerprint of what the keyserver returned, before trusting it.
+    let shown = process::Command::new(&gpg)
+        .args([
+            "--batch",
+            "--no-default-keyring",
+            "--with-colons",
+            "--with-fingerprint",
+            "--show-keys",
+        ])
+        .arg(&key_file)
+        .stdin(process::Stdio::null())
+        .output()
+        .map_err(|e| Message::text(format!("gpg: {e}")))?;
+    let found = fingerprints(&String::from_utf8_lossy(&shown.stdout));
+    if !found
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(ROS_SNAPSHOT_KEY_FINGERPRINT))
+    {
+        return Err(msg!(
+            "snapshot.key_fingerprint_mismatch",
+            url = key_url,
+            found = if found.is_empty() {
+                "<none>".to_string()
+            } else {
+                found.join(", ")
+            },
+            expected = ROS_SNAPSHOT_KEY_FINGERPRINT
+        ));
+    }
+    let imported = process::Command::new(&gpg)
+        .args(["--batch", "--no-default-keyring", "--keyring"])
+        .arg(&keyring)
+        .arg("--import")
+        .arg(&key_file)
+        .stdin(process::Stdio::null())
+        .output()
+        .map_err(|e| Message::text(format!("gpg: {e}")))?;
+    if !imported.status.success() {
+        return Err(Message::text(format!(
+            "gpg --import: {}",
+            String::from_utf8_lossy(&imported.stderr).trim()
+        )));
+    }
+    let verified = process::Command::new(&gpgv)
+        .arg("--keyring")
+        .arg(&keyring)
+        .arg(&sig_file)
+        .arg(&release_file)
+        .stdin(process::Stdio::null())
+        .output()
+        .map_err(|e| Message::text(format!("gpgv: {e}")))?;
+    if verified.status.success() {
+        Ok(Signature::Verified)
+    } else {
+        let stderr = String::from_utf8_lossy(&verified.stderr);
+        let hint = if stderr.contains("EXPKEYSIG") || stderr.contains("expired") {
+            msg!("snapshot.sig_expired")
+        } else {
+            Message::text(stderr.trim().to_string())
+        };
+        Err(msg!("snapshot.sig_failed", url = sig_url, error = hint))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UbuntuSnapshot {
+    /// `YYYYMMDDTHHMMSSZ` as accepted by `snapshot.ubuntu.com`.
+    pub timestamp: String,
+    pub base: String,
+    pub signature: Signature,
+}
+
+/// Confirm that `snapshot.ubuntu.com` serves `codename` at `timestamp`
+/// (InRelease answers 200) and verify its signature with the host's Ubuntu
+/// archive keyring when `keyring` exists.
+pub fn discover_ubuntu(
+    fetch: &dyn Fetch,
+    codename: &str,
+    timestamp: &str,
+    keyring: &Path,
+) -> Result<UbuntuSnapshot, Message> {
+    let base = ubuntu_snapshot_url(timestamp);
+    let url = inrelease_url(&base, codename);
+    let text = get_text(fetch, &url)?;
+    let release = parse_release(&text);
+    if release.suite.as_deref() != Some(codename) && release.codename.as_deref() != Some(codename) {
+        return Err(msg!(
+            "snapshot.release_mismatch",
+            url = url,
+            codename = codename,
+            arch = "",
+            suite = release.suite.clone().unwrap_or_default(),
+            architectures = release.architectures.join(" ")
+        ));
+    }
+    let signature = match which::which("gpgv").ok() {
+        Some(gpgv) if keyring.is_file() => {
+            let dir = TempDir::new("rospm-ubuntu-snapshot")?;
+            let inrelease = dir.path().join("InRelease");
+            std::fs::write(&inrelease, text.as_bytes())
+                .map_err(|e| Message::text(format!("{}: {e}", inrelease.display())))?;
+            let out = process::Command::new(gpgv)
+                .arg("--keyring")
+                .arg(keyring)
+                .arg(&inrelease)
+                .stdin(process::Stdio::null())
+                .output()
+                .map_err(|e| Message::text(format!("gpgv: {e}")))?;
+            if out.status.success() {
+                Signature::Verified
+            } else {
+                return Err(msg!(
+                    "snapshot.sig_failed",
+                    url = url,
+                    error = String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
+        Some(_) => Signature::Skipped(msg!("snapshot.sig_no_keyring", keyring = keyring.display())),
+        None => Signature::Skipped(msg!("snapshot.sig_no_gpg")),
+    };
+    Ok(UbuntuSnapshot {
+        timestamp: timestamp.to_string(),
+        base,
+        signature,
+    })
+}
+
+/// A directory under the system temp dir, removed on drop.
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(prefix: &str) -> Result<TempDir, Message> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}",
+            process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| Message::text(format!("{}: {e}", dir.display())))?;
+        Ok(TempDir(dir))
+    }
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +546,117 @@ mod tests {
         );
         assert!(keyserver_key_url(ROS_SNAPSHOT_KEY_FINGERPRINT)
             .ends_with("search=0x4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA"));
+    }
+
+    #[test]
+    fn index_dates_are_extracted_and_sorted() {
+        let html = r#"<html><body><h1>Index of /jazzy/</h1><hr><pre><a href="../">../</a>
+<a href="2026-09-11/">2026-09-11/</a>   11-Sep-2026 18:21    -
+<a href="2024-05-23/">2024-05-23/</a>   23-May-2024 10:00    -
+<a href="2025-01-15/">2025-01-15/</a>   15-Jan-2025 10:00    -
+<a href="latest/">latest/</a>
+</pre></body></html>"#;
+        assert_eq!(
+            parse_index_dates(html),
+            vec!["2024-05-23", "2025-01-15", "2026-09-11"]
+        );
+        assert!(parse_index_dates("<html>nothing</html>").is_empty());
+    }
+
+    #[test]
+    fn release_parses_and_date_becomes_an_ubuntu_timestamp() {
+        let r = parse_release(
+            "Origin: ROS\nLabel: jazzy/2026-09-11/ubuntu noble\nSuite: noble\nCodename: noble\nDate: Fri, 11 Sep 2026 18:21:46 UTC\nArchitectures: amd64 arm64 armhf i386\nComponents: main\n",
+        );
+        assert_eq!(r.suite.as_deref(), Some("noble"));
+        assert_eq!(r.architectures, vec!["amd64", "arm64", "armhf", "i386"]);
+        assert_eq!(
+            ubuntu_timestamp_from_date(r.date.as_deref().unwrap()).as_deref(),
+            Some("20260911T182146Z")
+        );
+        assert_eq!(ubuntu_timestamp_from_date("garbage"), None);
+        assert_eq!(
+            ubuntu_timestamp_from_date("Sat, 1 Mar 2025 00:00:00 UTC").as_deref(),
+            Some("20250301T000000Z")
+        );
+    }
+
+    fn release_text(suite: &str, arches: &str, date: &str) -> String {
+        format!("Suite: {suite}\nCodename: {suite}\nDate: {date}\nArchitectures: {arches}\nComponents: main\n")
+    }
+
+    #[test]
+    fn discovery_picks_the_newest_date_that_serves_the_codename_and_arch() {
+        let index = "<a href=\"2026-09-11/\">x</a><a href=\"2026-08-01/\">y</a><a href=\"2026-07-01/\">z</a>";
+        // Newest lacks arm64, the middle one is fine. No gpg in the canned
+        // world: the signature step is exercised separately (needs the network).
+        let fetch = Canned::default()
+            .with(ros_snapshot_index_url("jazzy"), 200, index)
+            .with(
+                release_url(&ros_snapshot_url("jazzy", "2026-09-11"), "noble"),
+                200,
+                release_text("noble", "amd64", "Fri, 11 Sep 2026 18:21:46 UTC"),
+            )
+            .with(
+                release_url(&ros_snapshot_url("jazzy", "2026-08-01"), "noble"),
+                200,
+                release_text("noble", "amd64 arm64", "Sat, 1 Aug 2026 00:00:00 UTC"),
+            );
+        match discover_ros(&fetch, "jazzy", "noble", "arm64") {
+            Ok(s) => {
+                assert_eq!(s.date, "2026-08-01");
+                assert!(matches!(
+                    s.signature,
+                    Signature::Verified | Signature::Skipped(_)
+                ));
+            }
+            // With gpg installed the canned world has no Release.gpg: the
+            // signature fetch of 2026-08-01 fails and discovery must not pick
+            // an unverified date. The error reported is the newest date's.
+            Err(e) => assert_eq!(e.key_name(), Some("snapshot.release_mismatch"), "{e}"),
+        }
+        // Every listed date lacks the architecture: the mismatch is reported.
+        let none = discover_ros(&fetch, "jazzy", "noble", "riscv64").unwrap_err();
+        assert_eq!(none.key_name(), Some("snapshot.release_mismatch"));
+        // No Release for that codename at all.
+        let none = discover_ros(&fetch, "jazzy", "jammy", "amd64").unwrap_err();
+        assert_eq!(none.key_name(), Some("snapshot.http_status"));
+        let empty = Canned::default().with(ros_snapshot_index_url("rolling"), 404, "");
+        let e = discover_ros(&empty, "rolling", "noble", "amd64").unwrap_err();
+        assert_eq!(e.key_name(), Some("snapshot.http_status"));
+    }
+
+    #[test]
+    fn ubuntu_discovery_requires_a_matching_inrelease() {
+        let ts = "20260911T182146Z";
+        let fetch = Canned::default().with(
+            inrelease_url(&ubuntu_snapshot_url(ts), "noble"),
+            200,
+            release_text("noble", "amd64 arm64", "Fri, 11 Sep 2026 18:21:46 UTC"),
+        );
+        let s =
+            discover_ubuntu(&fetch, "noble", ts, Path::new("/nonexistent/keyring.gpg")).unwrap();
+        assert_eq!(s.timestamp, ts);
+        assert!(matches!(s.signature, Signature::Skipped(_)));
+        let e = discover_ubuntu(&fetch, "jammy", ts, Path::new("/nonexistent")).unwrap_err();
+        assert_eq!(e.key_name(), Some("snapshot.http_status"));
+    }
+
+    /// Needs the network, gpg and gpgv: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_ros_snapshot_is_discovered_and_signed() {
+        let s = discover_ros(&Http::default(), "jazzy", "noble", "amd64").unwrap();
+        assert!(is_date(&s.date), "{}", s.date);
+        assert_eq!(s.signature, Signature::Verified);
+        let ts = ubuntu_timestamp_from_date(s.release.date.as_deref().unwrap()).unwrap();
+        let u = discover_ubuntu(
+            &Http::default(),
+            "noble",
+            &ts,
+            Path::new(UBUNTU_ARCHIVE_KEYRING),
+        )
+        .unwrap();
+        assert_eq!(u.timestamp, ts);
     }
 }

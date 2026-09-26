@@ -61,7 +61,14 @@ cli:
     unknown: "unknown"
     info: "info"
   lock:
-    about: "Resolve and write rospm.lock (roadmap P2)"
+    about: "Resolve this host into rospm.lock: source revisions, apt versions, pip versions, snapshot dates (writes the project file; ROSPM_NO_NETWORK=1 skips snapshot discovery)"
+    note_line: "note        %{text}"
+    summary: "locked      %{platform}: %{sources} sources, %{apt} apt packages, %{pip} pip packages"
+    other_platforms_kept: "kept        %{count} apt entries for other platforms from the previous lock"
+    snapshots: "snapshots   ROS %{ros}, Ubuntu %{ubuntu}"
+    live: "live (none, DEGRADED)"
+    written: "written     %{path}"
+    unchanged: "unchanged   %{path} already describes this state"
   verify:
     about: "Compare rospm.lock with the current environment (roadmap P2)"
   apply:
@@ -153,6 +160,7 @@ cli:
     manifest_not_found: "no %{file} found in %{dir} or any parent directory (run `rospm init`)"
     cannot_resolve: "cannot resolve %{path}"
     cannot_write: "cannot write %{path}"
+    cannot_read: "cannot read %{path}"
     unsupported_host: "this host is not a supported platform (expected linux x86_64 or aarch64)"
     prefix: "error: %{text}"
 
@@ -206,6 +214,39 @@ plan:
   fetching_key: "fetch %{url} -> %{dest} (verify fingerprint %{fingerprint})"
   key_unreadable: "gpg could not read the key downloaded from %{url}: %{error}"
   key_fingerprint_mismatch: "key downloaded from %{url} has fingerprint %{found} but rospm expects %{expected}; not installed to %{dest}"
+
+lock:
+  foreign_platform: "cannot resolve %{platform} on this %{host} host; run `rospm lock` on such a machine, its entries are merged into the same file (roadmap P5 adds repository queries)"
+  no_vcs_no_git: "neither vcs nor git is available; source revisions cannot be recorded"
+  vcs_missing: "vcstool is not installed; revisions read with git instead"
+  vcs_export_failed: "`vcs export --exact` failed in workspace %{workspace} (%{status}); revisions read with git instead"
+  sources_not_imported: "%{count} repositories are not imported yet (%{list}); run `rospm apply` first, a lock describes a resolved state"
+  origin_differs: "%{workspace}: src/%{name}: checkout origin is %{actual}; the .repos URL %{url} was recorded"
+  dpkg_unavailable: "dpkg-query is unavailable; apt versions cannot be recorded"
+  apt_missing: "not installed, not recorded (run `rospm apply`): %{packages}"
+  apt_cache_unavailable: "apt-cache is unavailable; .deb sha256 not recorded"
+  pip_unavailable: "pip is unavailable (python3 -m pip); pip versions not recorded"
+  pip_missing: "pip packages not installed, not recorded: %{packages}"
+  network_skipped: "snapshot discovery skipped (ROSPM_NO_NETWORK); DEGRADED: no snapshot dates recorded, `apply --locked` will use the live repository"
+  ros_snapshot_failed: "ROS snapshot not recorded, DEGRADED to the live repository: %{error}"
+  ros_snapshot_recorded: "ROS snapshot %{date} (%{base}), signature %{signature}"
+  ubuntu_snapshot_failed: "Ubuntu snapshot not recorded, DEGRADED to the live repository: %{error}"
+  ubuntu_snapshot_recorded: "Ubuntu snapshot %{timestamp}, signature %{signature}"
+
+snapshot:
+  http_status: "%{url}: HTTP %{status}"
+  index_empty: "no snapshot dates listed for %{distro}"
+  no_usable_date: "no usable snapshot date for %{distro}"
+  release_mismatch: "%{url} does not serve %{codename}/%{arch} (Suite: %{suite}, Architectures: %{architectures})"
+  release_date_unparseable: "Release `Date:` header not understood: %{date}"
+  keyserver_failed: "%{url}: HTTP %{status} (snapshot signing key not available from the keyserver)"
+  key_fingerprint_mismatch: "key from %{url} has fingerprint %{found}, expected %{expected}; not used"
+  sig_failed: "signature of %{url} did not verify: %{error}"
+  sig_expired: "the snapshot signing key has expired; it has been extended before, refresh it from keyserver.ubuntu.com (see docs/p0-external-validation.md §1.1)"
+  sig_no_gpg: "not checked (gpg / gpgv not installed)"
+  sig_no_keyring: "not checked (%{keyring} not present)"
+  sig_verified: "verified"
+  sig_skipped: "skipped: %{reason}"
 
 net:
   ok: "ok      %{millis} ms  %{bytes}%{rate}"

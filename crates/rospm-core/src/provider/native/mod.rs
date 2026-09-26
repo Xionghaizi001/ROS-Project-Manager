@@ -16,7 +16,7 @@ pub mod verify;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::lock::Lock;
+use crate::lock::{Lock, Resolution};
 use crate::manifest::{Manifest, ProviderKind};
 use crate::message::Message;
 use crate::msg;
@@ -30,6 +30,7 @@ use crate::probe::{
 use crate::provider::{Context, Provider, Shell};
 use crate::repos::{same_git_url, ReposFile};
 use crate::scm::{Scm, Vcstool};
+use crate::snapshot::Fetch;
 
 pub struct Native;
 
@@ -470,8 +471,8 @@ impl Provider for Native {
         Ok(out)
     }
 
-    fn resolve_lock(&self, ctx: &Context) -> Result<Lock> {
-        lock::resolve(ctx)
+    fn resolve_lock(&self, ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
+        lock::resolve(ctx, fetch)
     }
 
     fn verify(&self, ctx: &Context, lock: &Lock) -> Result<EnvReport> {
