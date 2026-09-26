@@ -65,7 +65,12 @@ cli:
     written: "已写入      %{path}"
     unchanged: "未变化      %{path} 已描述当前状态"
   verify:
-    about: "对比 rospm.lock 与当前环境（路线图 P2）"
+    about: "对比 rospm.lock 与当前环境（只读）"
+    no_lock: "未找到 %{file}；请先运行 `rospm lock`"
+    manifest_ok: "与锁文件一致"
+    manifest_changed: "清单自锁定以来已变化（请运行 `rospm lock`）"
+    manifest_line: "清单        %{path}"
+    lock_line: "锁文件      %{path}"
   apply:
     about: "配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
     locked: "遵循 rospm.lock（快照仓库、固定版本）"
@@ -248,6 +253,26 @@ net:
   failed: "失败    %{error}"
   timeout: "%{secs} 秒内无响应"
   http_status: "HTTP %{status}"
+
+verify:
+  provider:
+    subject: "提供者"
+  snapshot:
+    ros_subject: "ROS 快照"
+    ubuntu_subject: "Ubuntu 快照"
+    degraded: "实时仓库（降级）"
+  source:
+    workspace_missing: "workspace `%{workspace}` 不在清单中"
+    not_verified_other: "未核对（%{kind}）"
+    git_unavailable: "未找到 git，无法核对版本"
+    head_unknown: "无法读取 HEAD"
+    matches: "@ %{head}"
+    rev_mismatch: "@ %{head}（锁定为 %{expected}）"
+  apt:
+    other_platform: "%{count} 条 %{platform} 的记录未在本机核对"
+    none_for_host: "锁文件中没有 %{platform} 的 apt 记录"
+  pip:
+    unavailable: "未找到 pip，无法核对已安装版本"
 
 native:
   unknown_os: "未知操作系统"
