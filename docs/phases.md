@@ -152,11 +152,11 @@
 
 ## Phase 3 — Pixi 提供者（约 3 周）
 
-状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库在分支 `p3-pixi-gen`。
+状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库（`rospm-core::pixi`）已合并，尚未接入 CLI。
 前置：P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
 
 - [~] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
-  - [x] 核心库 `rospm-core::pixi`（分支 `p3-pixi-gen`，2026-09-26，codex 实现、主会话 review 并补测试）：`generate` 输出 RoboStack channel、`linux-64` / `linux-aarch64` 平台、底包与构建工具、`[activation.env]`、按叠加顺序的 `build-<ws>` 任务与汇总 `build` 任务；`read_summary` 读取现有 `pixi.toml`（含 `[project]` 与表形式 channel）。未合并。
+  - [x] 核心库 `rospm-core::pixi`（2026-09-26，codex 实现、主会话 review 并补测试）：`generate` 输出 RoboStack channel、`linux-64` / `linux-aarch64` 平台、底包与构建工具、`[activation.env]`、按叠加顺序的 `build-<ws>` 任务与汇总 `build` 任务；`read_summary` 读取现有 `pixi.toml`（含 `[project]` 与表形式 channel）。2026-09-26 已合并到 main。
   - [ ] 叠加：上层 workspace 的任务需要先加载下层 `install/setup`，pixi 任务 shell 不支持 `source`，方案待定。
   - [ ] CLI 接入（`init` / `apply` 写文件、已有非 rospm 生成的 `pixi.toml` 时不覆盖）。
 - [ ] 锁定委托给 `pixi.lock`；`rospm lock` 只记录其路径与 sha256（决策 #4）。
