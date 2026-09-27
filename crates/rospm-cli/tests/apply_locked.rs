@@ -183,11 +183,19 @@ fn apply_locked_dry_run_plans_the_pinned_snapshot_and_never_touches_the_network(
     assert!(out.status.success(), "stdout:\n{stdout}\nstderr:\n{stderr}");
 
     // The ROS apt source is pinned to the snapshot, signed by the snapshot
-    // key (fetched by fingerprint), not the regular ROS key.
-    assert!(
-        stdout.contains("4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA"),
-        "{stdout}"
-    );
+    // key (fetched by fingerprint), not the regular ROS key. The plan reads
+    // the real /etc/apt and keyrings: a host that already has a usable
+    // snapshot keyring skips the download, so only assert it when it must
+    // happen. The core tests (`tests/plan.rs`) cover both cases on fake hosts.
+    let keyring = Path::new("/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg");
+    let keyring_usable = fs::read(keyring).is_ok_and(|b| !rospm_core::plan::is_ascii_armored(&b));
+    if !keyring_usable {
+        assert!(
+            stdout.contains("4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA"),
+            "{stdout}"
+        );
+    }
+    // Written or already configured, the snapshot URL shows up either way.
     assert!(
         stdout.contains(&format!("snapshots.ros.org/{distro}/2026-09-11/ubuntu")),
         "{stdout}"
