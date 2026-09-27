@@ -200,6 +200,7 @@ version = "1.26.4"
 - Ubuntu 源：写 rospm 自己的 `/etc/apt/sources.list.d/rospm-ubuntu-snapshot.list`（`<codename>`、`<codename>-updates`、`<codename>-security` × `main restricted universe multiverse`，`signed-by=ubuntu-archive-keyring.gpg`），**不改** Ubuntu 自身的 `sources.list` / `ubuntu.sources`（决策 #17）。这个文件只是让锁定的版本可下载；写入后立即 `apt-get update`，否则锁定安装只看得到实时源索引。
 - 安装：`apt-get install -y --allow-downgrades <名>=<版本> …`，逐条列出锁文件里本机平台的记录（每条命令最多 100 个包），替代底包 / 额外 apt 两步；`rosdep init` / `update` 照常，`rosdep install` 跳过并说明（锁文件已是解析结果）。源码 `vcs import` 后逐仓库 `git checkout --detach <rev>`；非 git 源不固定并说明。
 - 降级：锁文件中快照为空，或真实运行前 GET 快照 `InRelease` 不通（10 s），该层退回实时源 / 镜像，并打印上表的 `WARN` 行与一条说明；版本仍按锁文件安装。`--dry-run` 不探测网络。禁止 `trusted=yes`、禁止关闭签名检查；密钥过期（`EXPKEYSIG`）提示从 keyserver 刷新。
+- 计划起始的 `apt-get update` 之前，先 `rm -f` 本次会重写的 rospm 自有源文件（`ros2.list` 需要改指向或 keyring 需要重装、`rospm-ubuntu-snapshot.list` 时间戳不同）：上次失败的 `apply --locked` 可能留下不可用的源，否则起始 update 就失败、修复步骤轮不到执行。不是 rospm 写的文件与无需重写的文件不动。
 - `uninstall` 连同 `ros2.list` 一并删除快照 keyring 与 `rospm-ubuntu-snapshot.list`；`ros2.list` 已不存在时（例如中断的 `apply --locked` 之后）也删除这两个残留，`--keep-source` 时保留。
 
 ### 3.3 `lock` 的解析规则（P2）

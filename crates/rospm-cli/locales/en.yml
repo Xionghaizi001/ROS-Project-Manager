@@ -316,6 +316,7 @@ native:
     locked_no_lock: "no rospm.lock; run `rospm lock` first"
     locked_provider_mismatch: "rospm.lock was generated for the %{lock_kind} provider, not native; run `rospm lock` again after switching environment.provider"
     locked_mirror_ignored: "--mirror %{name} has no effect on the ROS apt source under --locked: snapshots are not mirrored (rosdistro and rosdep still use %{name})"
+    stale_sources_removed: "removing %{files} first: rewritten below anyway, and a copy left broken by an earlier failed run would make the initial apt-get update fail"
     locked_snapshot_rewrite: "%{file}: pinning the ROS apt source to the locked snapshot (%{to})"
     locked_snapshot_foreign: "the locked ROS snapshot was not applied to %{file}: it was not written by rospm; edit it by hand if it should point at the snapshot"
     locked_ubuntu_snapshot_write: "%{file}: pinning the Ubuntu apt source to the locked snapshot"

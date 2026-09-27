@@ -311,6 +311,7 @@ native:
     locked_no_lock: "缺少 rospm.lock；请先运行 `rospm lock`"
     locked_provider_mismatch: "rospm.lock 是为 %{lock_kind} provider 生成的，而不是 native；切换 environment.provider 后请重新运行 `rospm lock`"
     locked_mirror_ignored: "--mirror %{name} 对 --locked 下的 ROS apt 源无效：快照没有镜像（rosdistro 与 rosdep 仍使用 %{name}）"
+    stale_sources_removed: "先删除 %{files}：下面会重新写入，而之前失败的运行可能留下损坏的版本，使起始的 apt-get update 失败"
     locked_snapshot_rewrite: "%{file}：将 ROS apt 源固定为所锁定的快照（%{to}）"
     locked_snapshot_foreign: "所锁定的 ROS 快照未应用到 %{file}：该文件不是 rospm 写入的；如需指向快照请手动编辑"
     locked_ubuntu_snapshot_write: "%{file}：将 Ubuntu apt 源固定为所锁定的快照"

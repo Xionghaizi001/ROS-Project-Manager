@@ -793,3 +793,60 @@ fn native_uninstall_removes_orphaned_snapshot_leftovers_without_a_ros_source() {
         .unwrap();
     assert_eq!(kept.action_count(), 0, "{}", kept.render());
 }
+
+#[test]
+fn native_apply_locked_removes_its_own_broken_sources_before_the_first_update() {
+    // Left by a failed `apply --locked` (2026-09-26): rospm's `ros2.list`
+    // points at the snapshot but the keyring is armoured, and the Ubuntu
+    // snapshot file is from an older lock. Both would make the initial
+    // `apt-get update` fail before the steps that repair them.
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = bare_host();
+    host.apt_sources.ros2 = Some(PathBuf::from(ROS_APT_LIST));
+    host.apt_sources.ros2_snapshot =
+        Some("http://snapshots.ros.org/jazzy/2026-09-11/ubuntu".to_string());
+    host.apt_sources.snapshot_keyring = true;
+    host.apt_sources.snapshot_keyring_armored = true;
+    host.apt_sources.ubuntu_snapshot =
+        Some("https://snapshot.ubuntu.com/ubuntu/20260801T000000Z".to_string());
+    let lock = locked(Some("2026-09-11"), Some("20260911T182146Z"));
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    let rm = rendered
+        .find(&format!("sudo rm -f {ROS_APT_LIST} {UBUNTU_SNAPSHOT_LIST}"))
+        .unwrap_or_else(|| panic!("{rendered}"));
+    let first_update = rendered.find("sudo apt-get update").unwrap();
+    assert!(rm < first_update, "{rendered}");
+    // Both are written again afterwards.
+    assert!(
+        rendered[first_update..].contains(&format!("plan.write_file_sudo(path={ROS_APT_LIST}, ")),
+        "{rendered}"
+    );
+    assert!(
+        rendered[first_update..].contains(&format!(
+            "plan.write_file_sudo(path={UBUNTU_SNAPSHOT_LIST}, "
+        )),
+        "{rendered}"
+    );
+
+    // A healthy, current setup is left alone.
+    host.apt_sources.snapshot_keyring_armored = false;
+    host.apt_sources.ubuntu_snapshot =
+        Some("https://snapshot.ubuntu.com/ubuntu/20260911T182146Z".to_string());
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    assert!(!rendered.contains("sudo rm -f"), "{rendered}");
+
+    // A foreign ROS source file is never removed.
+    host.apt_sources.ros2 = Some(PathBuf::from("/etc/apt/sources.list.d/ros2.sources"));
+    host.apt_sources.snapshot_keyring_armored = true;
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    assert!(!rendered.contains("sudo rm -f"), "{rendered}");
+}

@@ -60,6 +60,50 @@ fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<Strin
     lines
 }
 
+/// Whether the snapshot `ros2.list` must be (re)written: it is rospm's own
+/// file (or absent) and does not already point at `base` with a usable keyring.
+/// Returns `(is_own_file, is_foreign_file, need_source)`.
+fn ros_snapshot_source_state(ctx: &Context, base: &str) -> (bool, bool, bool) {
+    let sources = &ctx.host.apt_sources;
+    let is_own_file = sources.ros2.as_deref() == Some(Path::new(ROS_APT_LIST));
+    let is_foreign_file = sources.ros2.is_some() && !is_own_file;
+    let already_current = is_own_file && sources.ros2_snapshot.as_deref() == Some(base);
+    let keyring_ok = sources.snapshot_keyring && !sources.snapshot_keyring_armored;
+    let need_source = !is_foreign_file && !(already_current && keyring_ok);
+    (is_own_file, is_foreign_file, need_source)
+}
+
+/// rospm-owned apt source files that `plan_apply` is about to rewrite, and
+/// so can be removed before the initial `apt-get update` without losing
+/// anything. Foreign files and files that stay as they are never qualify.
+fn stale_own_sources(ctx: &Context, locked: Option<&crate::lock::LockedNative>) -> Vec<String> {
+    let host = ctx.host;
+    let mut out = Vec::new();
+    let own_ros = host.apt_sources.ros2.as_deref() == Some(Path::new(ROS_APT_LIST));
+    let ros_date = locked.and_then(|n| n.ros_snapshot.as_deref());
+    let rewrite_ros = match ros_date {
+        Some(date) => {
+            let base =
+                crate::snapshot::ros_snapshot_url(ctx.manifest.project.ros_distro.as_str(), date);
+            let (is_own, _, need_source) = ros_snapshot_source_state(ctx, &base);
+            is_own && need_source
+        }
+        None => own_ros && host.apt_sources.ros2_mirror != Some(ctx.mirror.name),
+    };
+    if rewrite_ros {
+        out.push(ROS_APT_LIST.to_string());
+    }
+    if let (Some(current), Some(ts)) = (
+        host.apt_sources.ubuntu_snapshot.as_deref(),
+        locked.and_then(|n| n.ubuntu_snapshot.as_deref()),
+    ) {
+        if current != crate::snapshot::ubuntu_snapshot_url(ts) {
+            out.push(probe::UBUNTU_SNAPSHOT_LIST.to_string());
+        }
+    }
+    out
+}
+
 /// Pin the ROS apt source to a snapshot (`apply --locked`, spec §3.2).
 /// Mirrors the P1 rewrite rules: only rospm's own [`ROS_APT_LIST`] is
 /// touched — a foreign source file (e.g. `ros2-apt-source`'s `ros2.sources`)
@@ -77,13 +121,9 @@ fn plan_ros_snapshot_source(
     let host = ctx.host;
     let distro = ctx.manifest.project.ros_distro;
     let base = crate::snapshot::ros_snapshot_url(distro.as_str(), date);
-    let is_own_file = host.apt_sources.ros2.as_deref() == Some(Path::new(ROS_APT_LIST));
-    let is_foreign_file = host.apt_sources.ros2.is_some() && !is_own_file;
-    let already_current =
-        is_own_file && host.apt_sources.ros2_snapshot.as_deref() == Some(base.as_str());
+    let (is_own_file, is_foreign_file, need_source) = ros_snapshot_source_state(ctx, &base);
     let keyring_ok =
         host.apt_sources.snapshot_keyring && !host.apt_sources.snapshot_keyring_armored;
-    let need_source = !is_foreign_file && !(already_current && keyring_ok);
 
     if need_locale || need_universe || need_source {
         let mut prereqs: Vec<&str> = Vec::new();
@@ -417,6 +457,18 @@ impl Provider for Native {
         // caller's own `LANG=C` is not a reason to rewrite it.
         let need_locale = host.locale.needs_fix();
         let need_universe = host.apt_sources.universe != Some(true);
+        // A run that failed half-way can leave rospm's own source files
+        // unusable (2026-09-26: an armoured snapshot keyring); the initial
+        // `apt-get update` would then fail before the steps that repair them.
+        // Files the plan rewrites below anyway are removed first.
+        let stale = stale_own_sources(ctx, locked_native.map(|(_, n)| n));
+        if !stale.is_empty() {
+            plan.note(msg!(
+                "native.apply.stale_sources_removed",
+                files = stale.join(" ")
+            ));
+            plan.run(Command::new("rm").arg("-f").args(stale).sudo());
+        }
         plan.run(Command::new("apt-get").arg("update").sudo());
 
         let ros_snapshot_date = locked_native.and_then(|(_, n)| n.ros_snapshot.as_deref());
