@@ -273,6 +273,22 @@ pub fn verify(ctx: &Context, lock: &Lock) -> Result<EnvReport> {
                             msg!("probe.not_installed"),
                             Status::Missing,
                         );
+                    } else if st.version.as_deref().is_some_and(|have| {
+                        !super::lock::pinned_exactly(m, &entry.name)
+                            && crate::debver::compare(have, &entry.version)
+                                == std::cmp::Ordering::Greater
+                    }) {
+                        // `apply --locked` keeps a newer Ubuntu package (spec §3.2).
+                        r.push(
+                            area,
+                            entry.name.clone(),
+                            entry.version.clone(),
+                            msg!(
+                                "verify.apt.newer_kept",
+                                version = st.version.clone().unwrap_or_default()
+                            ),
+                            Status::Info,
+                        );
                     } else if st.version.as_deref() != Some(entry.version.as_str()) {
                         r.push(
                             area,

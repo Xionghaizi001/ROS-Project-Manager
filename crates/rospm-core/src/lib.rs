@@ -19,6 +19,7 @@
 //! - [`message`]: locale-independent user-facing text. The library emits
 //!   message keys + arguments; the CLI renders them (spec §4.2).
 
+pub mod debver;
 pub mod error;
 pub mod introspect;
 pub mod lock;

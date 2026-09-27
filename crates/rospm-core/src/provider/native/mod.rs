@@ -293,9 +293,11 @@ fn plan_ubuntu_snapshot_source(
 /// `dependencies.apt` install of the non-locked plan. `--allow-downgrades`:
 /// a lock generated earlier may pin an older version than the latest
 /// available. Chunked so no single `apt-get install` line names more than
-/// 100 packages.
+/// 100 packages. Ubuntu packages installed at a newer version are kept
+/// (see [`lock::pinned_exactly`]).
 fn install_pinned_apt(
     plan: &mut Plan,
+    host: &crate::probe::Host,
     m: &Manifest,
     lock: &Lock,
     platform: crate::platform::Platform,
@@ -315,10 +317,33 @@ fn install_pinned_apt(
             package = base_package
         )));
     }
-    let specs: Vec<String> = entries
-        .iter()
-        .map(|a| format!("{}={}", a.name, a.version))
-        .collect();
+    // An Ubuntu package the host already has at a newer version is kept:
+    // pinning it back would need its exact libraries too, which the lock does
+    // not record, and apt fails the whole command (2026-09-26: `curl`).
+    let names: Vec<String> = entries.iter().map(|a| a.name.clone()).collect();
+    let installed = host.packages.status(&names).unwrap_or_default();
+    let mut kept: Vec<String> = Vec::new();
+    let mut specs: Vec<String> = Vec::new();
+    for a in &entries {
+        let newer = installed
+            .get(&a.name)
+            .filter(|st| st.installed)
+            .and_then(|st| st.version.as_deref())
+            .filter(|have| crate::debver::compare(have, &a.version) == std::cmp::Ordering::Greater);
+        match newer {
+            Some(have) if !self::lock::pinned_exactly(m, &a.name) => {
+                kept.push(format!("{} {have} > {}", a.name, a.version));
+            }
+            _ => specs.push(format!("{}={}", a.name, a.version)),
+        }
+    }
+    if !kept.is_empty() {
+        plan.note(msg!(
+            "native.apply.locked_kept_newer",
+            count = kept.len(),
+            packages = kept.join(", ")
+        ));
+    }
     for chunk in specs.chunks(100) {
         plan.run(
             Command::new("apt-get")
@@ -596,7 +621,7 @@ impl Provider for Native {
         // 2. ROS base + tooling, or — under `--locked` — every pinned apt
         // package for this platform, installed explicitly and exactly.
         if let Some((lock, _)) = locked_native {
-            install_pinned_apt(&mut plan, m, lock, ctx.platform)?;
+            install_pinned_apt(&mut plan, host, m, lock, ctx.platform)?;
         } else {
             plan.run(
                 Command::new("apt-get")

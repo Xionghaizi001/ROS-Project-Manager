@@ -420,3 +420,74 @@ version = "0.26.0-1"
         "verify.apt.base_not_locked(platform=linux-x86_64)"
     );
 }
+
+#[test]
+fn a_newer_ubuntu_package_is_info_but_a_newer_ros_package_is_a_mismatch() {
+    // `apply --locked` keeps newer Ubuntu packages (spec §3.2), so verify
+    // must not fail on them; the ROS layer stays exact.
+    let root = tmp("newer");
+    let lock_text = r#"
+schema_version = 1
+generated_at = "2026-01-01T00:00:00Z"
+manifest_sha256 = "sha256:deadbeef"
+
+[provider]
+kind = "native"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "ros-jazzy-ros-base"
+version = "1.2.3"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "curl"
+version = "7.81.0-1ubuntu1.25"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "libssl3"
+version = "3.0.2-0ubuntu1.10"
+"#;
+    let lock = Lock::parse(lock_text, Path::new("rospm.lock")).unwrap();
+    let m = manifest();
+    let mut host = Host::empty();
+    host.packages = installed(&[
+        ("ros-jazzy-ros-base", "1.2.3"),
+        ("curl", "7.81.0-1ubuntu1.29"),
+        ("libssl3", "3.0.2-0ubuntu1.10"),
+    ]);
+    let report = provider::for_manifest(&m)
+        .verify(&ctx(&m, &root, &host, &lock), &lock)
+        .unwrap();
+    assert!(report.ready(), "{report:#?}");
+    let curl = report
+        .items
+        .iter()
+        .find(|i| i.subject.to_string() == "curl")
+        .unwrap();
+    assert_eq!(curl.status, Status::Info);
+    assert_eq!(
+        curl.actual.to_string(),
+        "verify.apt.newer_kept(version=7.81.0-1ubuntu1.29)"
+    );
+
+    // Older than locked is still a mismatch, and so is a newer ROS package.
+    host.packages = installed(&[
+        ("ros-jazzy-ros-base", "1.2.4"),
+        ("curl", "7.81.0-1ubuntu1.20"),
+        ("libssl3", "3.0.2-0ubuntu1.10"),
+    ]);
+    let report = provider::for_manifest(&m)
+        .verify(&ctx(&m, &root, &host, &lock), &lock)
+        .unwrap();
+    assert!(!report.ready());
+    for name in ["ros-jazzy-ros-base", "curl"] {
+        let row = report
+            .items
+            .iter()
+            .find(|i| i.subject.to_string() == name)
+            .unwrap();
+        assert_eq!(row.status, Status::Mismatch, "{name}: {report:#?}");
+    }
+}

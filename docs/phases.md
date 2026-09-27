@@ -109,7 +109,7 @@
 
 ## Phase 2 — 锁文件与依赖补全（约 3 周）
 
-状态：**单机实测通过，两个设计问题待解决**（2026-09-26）。`lock` / `verify` / `deps` 与 `apply --locked` 都已在本机真实执行，两轮 `apply` → `uninstall` 闭环回到基线；过程中修复 3 个缺陷。未完成：锁定版本可能不在快照中、顶层 Ubuntu 包缺依赖记录两个设计问题，间隔数周复测、第二台机器（24.04）与 CI 场景。见 [p2-locked-validation.md](p2-locked-validation.md)。
+状态：**单机实测通过，已知缺陷与设计问题已修复**（2026-09-27）。`lock` / `verify` / `deps` 与 `apply --locked` 都已在本机真实执行，两轮 `apply` → `uninstall` 闭环回到基线；过程中修复 3 个缺陷；2026-09-27 又修复坏源阻塞重跑、测试依赖主机 keyring、`verify` 漏报缺底包，并解决锁定版本不在快照中、顶层 Ubuntu 包精确固定两个设计问题。未完成：间隔数周复测、第二台机器（24.04）、干净虚拟机上用新规则真实 `apply --locked`、CI 场景。见 [p2-locked-validation.md](p2-locked-validation.md)。
 前置：P0 的"ROS 快照签名密钥"核验必须先完成，否则 `apply --locked` 无法可信地切换源；P1.5 的 i18n 层必须先落地，本阶段新增字符串直接走该层。（两项均已满足）
 
 ### `rospm lock`
@@ -135,8 +135,8 @@
   - [x] 修复：`uninstall` 在 `ros2.list` 已不存在时漏删快照 keyring 与 `rospm-ubuntu-snapshot.list`。
   - [x] 修复（2026-09-27）：失败的 `apply --locked` 留下坏源后，计划起始的 `apt-get update` 使重跑失败，只能 `uninstall` 恢复。现在起始 update 之前先删除本次会重写的 rospm 自有源文件（`ros2.list`、`rospm-ubuntu-snapshot.list`），外来文件与无需重写的文件不动；`tests/plan.rs` 用"armor keyring + 旧 Ubuntu 快照"的残留状态断言删除先于首个 update、两文件随后重写。
   - [x] 修复（2026-09-27）：`tests/apply_locked.rs` 依赖主机 keyring 状态。现在只在主机没有可用（二进制）快照 keyring 时断言计划含密钥指纹；快照 URL 与 Ubuntu 快照文件的断言对"写入"与"已配置"两种输出都成立。两种主机状态的完整断言由 `tests/plan.rs` 在伪造主机上覆盖。
-  - [ ] 设计问题：`lock` 记录的版本可能不在所选快照里（实时 ROS 源底包构建于 2026-09-08，最新快照为 2026-08-07；Ubuntu 快照由 ROS `Release` 日期换算，晚于它的 Ubuntu 更新同样缺失）。需在 `lock` 时逐包核对快照，并调整 Ubuntu 快照时间戳的取法。
-  - [ ] 设计问题：锁文件只记录顶层 Ubuntu 包，系统库比快照新的主机上 `curl=<旧版本>` 因依赖精确版本而使整条安装失败（模拟退出 100）。
+  - [x] 设计问题（2026-09-27 解决）：`lock` 记录的版本可能不在所选快照里（实时 ROS 源底包构建于 2026-09-08，最新快照为 2026-08-07；Ubuntu 快照由 ROS `Release` 日期换算，晚于它的 Ubuntu 更新同样缺失）。现在 `lock` 下载快照 `Packages.gz`（系统 `gzip -dc` 解压，不加依赖）逐包核对：ROS 快照取最新三个日期中第一个含全部锁定 `ros-<distro>-*` 版本的，都不含则不记录并列出缺失版本；Ubuntu 快照时间戳改取本机 `/var/lib/dpkg/status` 修改时间（最后一次装包），取不到才退回 ROS `Release` 日期；其余包在两个快照中都找不到的列出。本机实测（22.04，未装 ROS）：真实 `lock` 下载并核对 ROS 与 Ubuntu 索引，4 个包全部命中，Ubuntu 快照 `20260926T105514Z` 验签通过，约 11 秒。缺版本的分支由罐装服务器测试覆盖。
+  - [x] 设计问题（2026-09-27 解决）：锁文件只记录顶层 Ubuntu 包，系统库比快照新的主机上 `curl=<旧版本>` 因依赖精确版本而使整条安装失败（模拟退出 100）。现在 ROS 层（`ros-<distro>-*`、底包）与三个工具包仍精确安装、可降级；其余 Ubuntu 包本机已装且更新时保持不变并在计划中列出，`verify` 报 `info`（新增 `debver` 模块按 dpkg 规则比较版本，用例与真实 `dpkg --compare-versions` 对照一致）。本机 `apply --locked --dry-run` 实测：锁定 `curl …1ubuntu1.25`、本机 `…1ubuntu1.29` 时计划只保留说明、不再点名 `curl=`。
   - [x] 修复（2026-09-27）：锁文件缺底包时 `verify` 仍报就绪。现在本机平台没有底包记录（含完全没有 apt 记录）时底包一行 `MISSING`、退出 1，与 `apply --locked` 拒绝该锁一致；核心与 CLI 测试覆盖。
   - [ ] 时间点 2（间隔一段时间后）与 24.04 / Jazzy 用同一脚本复测；真实 `apply --locked` 在干净虚拟机上执行。
 

@@ -249,6 +249,10 @@ lock:
   ros_snapshot_recorded: "ROS 快照 %{date}（%{base}），签名%{signature}"
   ubuntu_snapshot_failed: "未记录 Ubuntu 快照，已降级为实时源：%{error}"
   ubuntu_snapshot_recorded: "Ubuntu 快照 %{timestamp}，签名%{signature}"
+  snapshot_lacks_versions: "%{base} 中没有 %{count} 个已安装的版本（%{examples}）；如果它们是在最新快照之后从实时源安装的，请在下一个快照发布后重新运行 `rospm lock`"
+  ubuntu_timestamp_unknown: "既不知道本机最后一次 dpkg 变更的时间，也没有 ROS 快照日期"
+  snapshot_check_failed: "无法对照 %{url} 核对锁定版本：%{error}"
+  not_in_snapshots: "有 %{count} 个锁定的包不在所记录的两个快照中（%{examples}）；在其它机器上 `apply --locked` 只有在实时源仍提供这些版本时才能安装它们"
 
 snapshot:
   http_status: "%{url}：HTTP %{status}"
@@ -290,6 +294,7 @@ verify:
     none_for_host: "锁文件中没有 %{platform} 的 apt 记录"
     base_not_locked_expected: "在 rospm.lock 中固定"
     base_not_locked: "rospm.lock 中没有 %{platform} 的记录（清单中的 ROS 底包）；`apply --locked` 会拒绝此锁文件，请重新运行 `rospm lock`"
+    newer_kept: "%{version}（比锁定的新；Ubuntu 包不降级）"
   pip:
     unavailable: "未找到 pip，无法核对已安装版本"
 
@@ -320,6 +325,7 @@ native:
     locked_ubuntu_keyring_missing: "缺少 %{keyring}；在安装 ubuntu-keyring 之前 %{file} 无法使用"
     locked_no_apt_for_platform: "rospm.lock 中没有针对 %{platform} 固定的 apt 包；请为该平台重新运行 `rospm lock`"
     locked_base_missing: "rospm.lock 未固定 %{package}（清单中的 ROS 底包）；请重新运行 `rospm lock`"
+    locked_kept_newer: "%{count} 个 Ubuntu 包已安装的版本比锁定的新，保持不变、不降级（固定它们会连带固定其依赖库）：%{packages}"
     locked_rosdep_skipped: "已跳过 rosdep install：--locked 已经安装了 rospm.lock 中记录的确切 apt 版本"
     locked_non_git_source_not_pinned: "%{workspace}/%{name}：rospm.lock 不固定非 git 源（类型 %{kind}）；保持 `vcs import` 检出的原样"
   uninstall:

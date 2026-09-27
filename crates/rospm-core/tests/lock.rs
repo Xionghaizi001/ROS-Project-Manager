@@ -256,3 +256,99 @@ fn previous_lock_keeps_other_platforms_and_same_content_is_stable() {
     assert_eq!(res.lock.sources[0].rev, head);
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn lock_only_records_a_ros_snapshot_that_carries_the_installed_versions() {
+    let (root, _) = project("snap-versions", true);
+    let m = Manifest::load(&root.join("rospm.toml")).unwrap();
+    let host = synthetic_host();
+    let ros_base = snapshot::ros_snapshot_url("jazzy", "2026-09-11");
+    let index = snapshot::packages_url(&ros_base, "noble", "main", "amd64");
+    let world = |packages: &str| {
+        Canned::default()
+            .with(
+                snapshot::ros_snapshot_index_url("jazzy"),
+                200,
+                "<a href=\"2026-09-11/\">2026-09-11/</a>",
+            )
+            .with(
+                snapshot::release_url(&ros_base, "noble"),
+                200,
+                release("noble"),
+            )
+            .with(index.clone(), 200, packages)
+    };
+    let resolve = |fetch: &Canned| {
+        let res = provider::for_manifest(&m)
+            .resolve_lock(&ctx(&m, &root, &host), Some(fetch))
+            .unwrap();
+        let note = res
+            .notes
+            .iter()
+            .map(|n| n.to_string())
+            .find(|n| n.starts_with("lock.ros_snapshot_"))
+            .unwrap();
+        (res.lock.provider.native.unwrap().ros_snapshot, note)
+    };
+
+    // The snapshot predates the installed rclcpp (the 2026-09-26 finding):
+    // not recorded, and the note says which versions are missing.
+    let (date, note) = resolve(&world(
+        "Package: ros-jazzy-rclcpp\nVersion: 28.1.4-1noble\n\nPackage: ros-jazzy-ros-base\nVersion: 0.11.0-1noble\n",
+    ));
+    assert_eq!(date, None);
+    assert!(
+        note.contains("lock.snapshot_lacks_versions(count=1"),
+        "{note}"
+    );
+    assert!(note.contains("ros-jazzy-rclcpp=28.1.5-1noble"), "{note}");
+
+    // It carries both: the version check passes, and what decides next is
+    // the signature (absent from the canned world, so it fails where gpg can
+    // check it).
+    let (date, note) = resolve(&world(
+        "Package: ros-jazzy-rclcpp\nVersion: 28.1.5-1noble\n\nPackage: ros-jazzy-ros-base\nVersion: 0.11.0-1noble\n",
+    ));
+    assert!(!note.contains("snapshot_lacks_versions"), "{note}");
+    if which::which("gpg").is_ok() && which::which("gpgv").is_ok() {
+        assert_eq!(date, None, "{note}");
+    } else {
+        assert_eq!(date.as_deref(), Some("2026-09-11"), "{note}");
+    }
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn lock_takes_the_ubuntu_snapshot_at_the_last_dpkg_change() {
+    let (root, _) = project("snap-ubuntu-ts", true);
+    let m = Manifest::load(&root.join("rospm.toml")).unwrap();
+    let mut host = synthetic_host();
+    host.dpkg_changed_at = Some(1_789_150_906); // 2026-09-11T18:21:46Z
+                                                // No ROS snapshot at all: the Ubuntu one no longer depends on it.
+    let ubuntu = snapshot::ubuntu_snapshot_url("20260911T182146Z");
+    let fetch = Canned::default().with(
+        snapshot::inrelease_url(&ubuntu, "noble"),
+        200,
+        release("noble"),
+    );
+    let res = provider::for_manifest(&m)
+        .resolve_lock(&ctx(&m, &root, &host), Some(&fetch))
+        .unwrap();
+    let notes: Vec<String> = res.notes.iter().map(|n| n.to_string()).collect();
+    // The request went to the dpkg timestamp: either recorded (no keyring
+    // to check the canned InRelease against) or rejected by the signature,
+    // never "not found".
+    let ubuntu_note = notes
+        .iter()
+        .find(|n| n.starts_with("lock.ubuntu_snapshot_"))
+        .unwrap();
+    assert!(
+        !ubuntu_note.contains("HTTP 404") && !ubuntu_note.contains("http_status"),
+        "{notes:?}"
+    );
+    assert!(
+        !ubuntu_note.contains("ubuntu_timestamp_unknown"),
+        "{notes:?}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}

@@ -6,7 +6,7 @@
 //! recorded is a note in the [`Resolution`], never a silent omission
 //! (derived principle 4).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process;
 
@@ -32,6 +32,18 @@ const TOOLING: [&str; 3] = [
     "python3-vcstool",
     "python3-colcon-common-extensions",
 ];
+
+/// Packages `apply --locked` installs at exactly the locked version, even
+/// when that is a downgrade: the ROS layer (`ros-<distro>-*`, the base
+/// package) and the tooling from the ROS repository. Everything else is an
+/// Ubuntu package whose installed version may legitimately be newer (security
+/// updates; pinning it would also pin its libraries, see spec §3.2), so a
+/// newer installed version is kept and `verify` reports it as info.
+pub(crate) fn pinned_exactly(m: &crate::manifest::Manifest, name: &str) -> bool {
+    name.starts_with(&format!("ros-{}-", m.project.ros_distro))
+        || name == m.ros_base_package()
+        || TOOLING.contains(&name)
+}
 
 pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
     let m = ctx.manifest;
@@ -81,7 +93,7 @@ pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
     let sources = resolve_sources(ctx, &mut notes)?;
     let apt = resolve_apt(ctx, &mut notes)?;
     let pip = resolve_pip(host, &m.dependencies.pip, &mut notes);
-    let native = resolve_snapshots(ctx, fetch, &mut notes);
+    let native = resolve_snapshots(ctx, fetch, &apt, &mut notes);
 
     let manifest_text = std::fs::read_to_string(ctx.root.join(crate::manifest::MANIFEST_FILE))
         .or_else(|_| {
@@ -354,12 +366,22 @@ fn resolve_pip(host: &Host, requirements: &[String], notes: &mut Vec<Message>) -
 
 // ---------------------------------------------------------------- snapshots
 
-/// The snapshot pair that corresponds to "now": newest ROS snapshot serving
-/// this codename/arch with a valid signature, and the Ubuntu snapshot at the
-/// same instant. Anything that fails is a `None` plus a DEGRADED note.
+/// The snapshot pair that serves what this host has installed (spec §3.3):
+///
+/// - ROS: the newest of the recent snapshots (signature verified) whose
+///   index carries every locked `ros-<distro>-*` version. None of them does
+///   when the host installed from the live repository after the newest
+///   snapshot; the lock then records no ROS snapshot (DEGRADED, with the
+///   reason) instead of one `apply --locked` could not install from.
+/// - Ubuntu: the instant the host's dpkg state last changed (falls back to
+///   the ROS snapshot's `Release` date when unknown). The remaining locked
+///   packages are looked up in its indexes; any that are missing are listed.
+///
+/// Anything that fails is a `None` plus a DEGRADED note.
 fn resolve_snapshots(
     ctx: &Context,
     fetch: Option<&dyn Fetch>,
+    apt: &[LockedApt],
     notes: &mut Vec<Message>,
 ) -> LockedNative {
     let m = ctx.manifest;
@@ -382,37 +404,70 @@ fn resolve_snapshots(
     };
     let distro = m.project.ros_distro.as_str();
     let arch = ctx.platform.dpkg_arch();
-    let ros = match snapshot::discover_ros(fetch, distro, codename, arch) {
-        Ok(s) => s,
+    let ros_prefix = format!("ros-{distro}-");
+    let pins: Vec<(String, String)> = apt
+        .iter()
+        .filter(|a| a.platform == ctx.platform)
+        .map(|a| (a.name.clone(), a.version.clone()))
+        .collect();
+    let ros_pins: Vec<(String, String)> = pins
+        .iter()
+        .filter(|(n, _)| n.starts_with(&ros_prefix))
+        .cloned()
+        .collect();
+
+    // ---- ROS: newest verified snapshot that carries the installed versions ----
+    let mut ros_index: BTreeSet<(String, String)> = BTreeSet::new();
+    let found = snapshot::discover_ros(fetch, distro, codename, arch, &mut |s| {
+        let url = snapshot::packages_url(&s.base, codename, "main", arch);
+        let index = snapshot::fetch_packages(fetch, &url)?;
+        let missing = missing_from(&ros_pins, &index);
+        if !missing.is_empty() {
+            return Err(msg!(
+                "lock.snapshot_lacks_versions",
+                count = missing.len(),
+                base = &s.base,
+                examples = examples(&missing)
+            ));
+        }
+        ros_index = index;
+        Ok(())
+    });
+    let ros = match found {
+        Ok(s) => {
+            notes.push(msg!(
+                "lock.ros_snapshot_recorded",
+                date = s.date,
+                base = s.base,
+                signature = describe_signature(&s.signature)
+            ));
+            native.ros_snapshot = Some(s.date.clone());
+            Some(s)
+        }
         Err(e) => {
             notes.push(msg!("lock.ros_snapshot_failed", error = e));
-            return native;
+            None
         }
     };
-    notes.push(msg!(
-        "lock.ros_snapshot_recorded",
-        date = ros.date,
-        base = ros.base,
-        signature = describe_signature(&ros.signature)
-    ));
-    native.ros_snapshot = Some(ros.date.clone());
 
-    let Some(ts) = ros
-        .release
-        .date
-        .as_deref()
-        .and_then(snapshot::ubuntu_timestamp_from_date)
-    else {
+    // ---- Ubuntu: the archive as of the host's last dpkg change ----
+    let ts = ctx
+        .host
+        .dpkg_changed_at
+        .map(snapshot::ubuntu_timestamp_from_unix)
+        .or_else(|| {
+            ros.as_ref()
+                .and_then(|r| r.release.date.as_deref())
+                .and_then(snapshot::ubuntu_timestamp_from_date)
+        });
+    let Some(ts) = ts else {
         notes.push(msg!(
             "lock.ubuntu_snapshot_failed",
-            error = msg!(
-                "snapshot.release_date_unparseable",
-                date = ros.release.date.clone().unwrap_or_default()
-            )
+            error = msg!("lock.ubuntu_timestamp_unknown")
         ));
         return native;
     };
-    match snapshot::discover_ubuntu(
+    let base = match snapshot::discover_ubuntu(
         fetch,
         codename,
         &ts,
@@ -425,10 +480,84 @@ fn resolve_snapshots(
                 signature = describe_signature(&u.signature)
             ));
             native.ubuntu_snapshot = Some(u.timestamp);
+            u.base
         }
-        Err(e) => notes.push(msg!("lock.ubuntu_snapshot_failed", error = e)),
+        Err(e) => {
+            notes.push(msg!("lock.ubuntu_snapshot_failed", error = e));
+            return native;
+        }
+    };
+
+    // ---- every other locked package must be in one of the two snapshots ----
+    // ROS packages were settled above (either all present or no ROS snapshot).
+    let mut rest: Vec<(String, String)> = pins
+        .into_iter()
+        .filter(|(n, _)| !n.starts_with(&ros_prefix))
+        .filter(|p| !ros_index.contains(p))
+        .collect();
+    if let Err((url, e)) = retain_missing_from_ubuntu(fetch, &base, codename, arch, &mut rest) {
+        notes.push(msg!("lock.snapshot_check_failed", url = url, error = e));
+        return native;
+    }
+    if !rest.is_empty() {
+        notes.push(msg!(
+            "lock.not_in_snapshots",
+            count = rest.len(),
+            examples = examples(&rest)
+        ));
     }
     native
+}
+
+/// Drop from `rest` every pin some index of the Ubuntu snapshot at `base`
+/// carries. Suites newest first, `main` first, stopping as soon as nothing
+/// is left: `universe` alone is tens of megabytes.
+fn retain_missing_from_ubuntu(
+    fetch: &dyn Fetch,
+    base: &str,
+    codename: &str,
+    arch: &str,
+    rest: &mut Vec<(String, String)>,
+) -> std::result::Result<(), (String, Message)> {
+    for suite in [
+        format!("{codename}-security"),
+        format!("{codename}-updates"),
+        codename.to_string(),
+    ] {
+        for component in ["main", "universe", "restricted", "multiverse"] {
+            if rest.is_empty() {
+                return Ok(());
+            }
+            let url = snapshot::packages_url(base, &suite, component, arch);
+            let index = snapshot::fetch_packages(fetch, &url).map_err(|e| (url, e))?;
+            rest.retain(|p| !index.contains(p));
+        }
+    }
+    Ok(())
+}
+
+/// Pins whose exact `(name, version)` is not in `index`.
+fn missing_from(
+    pins: &[(String, String)],
+    index: &BTreeSet<(String, String)>,
+) -> Vec<(String, String)> {
+    pins.iter()
+        .filter(|p| !index.contains(*p))
+        .cloned()
+        .collect()
+}
+
+/// `a=1, b=2, c=3, …` — the first few pins, for a one-line note.
+fn examples(pins: &[(String, String)]) -> String {
+    let mut out: Vec<String> = pins
+        .iter()
+        .take(3)
+        .map(|(n, v)| format!("{n}={v}"))
+        .collect();
+    if pins.len() > 3 {
+        out.push("…".to_string());
+    }
+    out.join(", ")
 }
 
 fn describe_signature(sig: &Signature) -> Message {
@@ -441,6 +570,59 @@ fn describe_signature(sig: &Signature) -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::snapshot::Canned;
+
+    #[test]
+    fn ubuntu_check_stops_once_every_pin_is_found() {
+        let base = "https://snapshot.ubuntu.com/ubuntu/20260911T182146Z";
+        let url = |suite: &str, comp: &str| snapshot::packages_url(base, suite, comp, "amd64");
+        // Only the first three indexes exist: fetching any later one would
+        // be a 404 error, so success proves the search stopped early.
+        let fetch = Canned::default()
+            .with(
+                url("jammy-security", "main"),
+                200,
+                "Package: curl\nVersion: 2\n",
+            )
+            .with(url("jammy-security", "universe"), 200, "")
+            .with(
+                url("jammy-security", "restricted"),
+                200,
+                "Package: foo\nVersion: 1\n",
+            );
+        let mut rest = vec![
+            ("curl".to_string(), "2".to_string()),
+            ("foo".to_string(), "1".to_string()),
+        ];
+        retain_missing_from_ubuntu(&fetch, base, "jammy", "amd64", &mut rest).unwrap();
+        assert!(rest.is_empty());
+
+        // A version no index carries: every index is read, then it remains.
+        let mut all = Canned::default();
+        for suite in ["jammy-security", "jammy-updates", "jammy"] {
+            for comp in ["main", "universe", "restricted", "multiverse"] {
+                all = all.with(url(suite, comp), 200, "Package: curl\nVersion: 3\n");
+            }
+        }
+        let mut rest = vec![("curl".to_string(), "1".to_string())];
+        retain_missing_from_ubuntu(&all, base, "jammy", "amd64", &mut rest).unwrap();
+        assert_eq!(rest, vec![("curl".to_string(), "1".to_string())]);
+
+        // An index that cannot be read is an error naming its URL.
+        let mut rest = vec![("curl".to_string(), "1".to_string())];
+        let (bad, _) =
+            retain_missing_from_ubuntu(&Canned::default(), base, "jammy", "amd64", &mut rest)
+                .unwrap_err();
+        assert_eq!(bad, url("jammy-security", "main"));
+    }
+
+    #[test]
+    fn examples_lists_three_then_an_ellipsis() {
+        let pins: Vec<(String, String)> =
+            (1..=4).map(|i| (format!("p{i}"), format!("{i}"))).collect();
+        assert_eq!(examples(&pins[..2]), "p1=1, p2=2");
+        assert_eq!(examples(&pins), "p1=1, p2=2, p3=3, …");
+    }
 
     #[test]
     fn apt_cache_show_stanzas_map_to_sha256() {

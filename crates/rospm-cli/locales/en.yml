@@ -254,6 +254,10 @@ lock:
   ros_snapshot_recorded: "ROS snapshot %{date} (%{base}), signature %{signature}"
   ubuntu_snapshot_failed: "Ubuntu snapshot not recorded, DEGRADED to the live repository: %{error}"
   ubuntu_snapshot_recorded: "Ubuntu snapshot %{timestamp}, signature %{signature}"
+  snapshot_lacks_versions: "%{base} does not carry %{count} installed versions (%{examples}); if they came from the live repository after the newest snapshot, run `rospm lock` again once the next snapshot is published"
+  ubuntu_timestamp_unknown: "neither the time of the host's last dpkg change nor a ROS snapshot date is known"
+  snapshot_check_failed: "could not check the locked versions against %{url}: %{error}"
+  not_in_snapshots: "%{count} locked packages are in neither recorded snapshot (%{examples}); `apply --locked` elsewhere can only install them while the live repositories still carry these versions"
 
 snapshot:
   http_status: "%{url}: HTTP %{status}"
@@ -295,6 +299,7 @@ verify:
     none_for_host: "no apt entries locked for %{platform}"
     base_not_locked_expected: "pinned in rospm.lock"
     base_not_locked: "not in rospm.lock for %{platform} (the manifest's ROS base package); `apply --locked` refuses this lock, run `rospm lock` again"
+    newer_kept: "%{version} (newer than locked; Ubuntu packages are not downgraded)"
   pip:
     unavailable: "pip not found; cannot check installed versions"
 
@@ -325,6 +330,7 @@ native:
     locked_ubuntu_keyring_missing: "%{keyring} is missing; %{file} will not be usable until ubuntu-keyring is installed"
     locked_no_apt_for_platform: "rospm.lock has no pinned apt packages for %{platform}; run `rospm lock` again for this platform"
     locked_base_missing: "rospm.lock does not pin %{package} (the manifest's ROS base package); run `rospm lock` again"
+    locked_kept_newer: "%{count} Ubuntu packages are installed at a newer version than locked and are kept, not downgraded (pinning them would pin their libraries too): %{packages}"
     locked_rosdep_skipped: "rosdep install skipped: --locked already installed the exact apt versions recorded in rospm.lock"
     locked_non_git_source_not_pinned: "%{workspace}/%{name}: rospm.lock does not pin non-git sources (kind %{kind}); left at whatever `vcs import` checked out"
   uninstall:

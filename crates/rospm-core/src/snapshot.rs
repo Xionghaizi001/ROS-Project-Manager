@@ -13,7 +13,8 @@
 //! Network access goes through the [`Fetch`] trait so discovery is testable
 //! with canned responses; [`Http`] is the real implementation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write as _;
 use std::path::Path;
 use std::process;
 use std::time::Duration;
@@ -74,12 +75,28 @@ pub fn release_url(base: &str, codename: &str) -> String {
     format!("{base}/dists/{codename}/Release")
 }
 
+/// `dists/<suite>/<component>/binary-<arch>/Packages.gz` under `base`.
+pub fn packages_url(base: &str, suite: &str, component: &str, arch: &str) -> String {
+    format!("{base}/dists/{suite}/{component}/binary-{arch}/Packages.gz")
+}
+
+/// `YYYYMMDDTHHMMSSZ` for a Unix time, the form `snapshot.ubuntu.com` takes.
+pub fn ubuntu_timestamp_from_unix(secs: u64) -> String {
+    crate::lock::rfc3339_from_unix(secs).replace(['-', ':'], "")
+}
+
 // ---------------------------------------------------------------- fetching
 
 /// A GET that returns the status code and body. Implemented by [`Http`] and
 /// by canned maps in tests.
 pub trait Fetch {
     fn get(&self, url: &str) -> Result<(u16, Vec<u8>), Message>;
+
+    /// Like [`Fetch::get`] for bodies of several megabytes (`Packages`
+    /// indexes), where the short timeout meant for small files is too tight.
+    fn get_large(&self, url: &str) -> Result<(u16, Vec<u8>), Message> {
+        self.get(url)
+    }
 }
 
 /// ureq-backed [`Fetch`] with a per-request timeout.
@@ -97,22 +114,32 @@ impl Default for Http {
 
 impl Fetch for Http {
     fn get(&self, url: &str) -> Result<(u16, Vec<u8>), Message> {
+        self.get_with_timeout(url, self.timeout)
+    }
+
+    fn get_large(&self, url: &str) -> Result<(u16, Vec<u8>), Message> {
+        self.get_with_timeout(url, self.timeout * 6)
+    }
+}
+
+impl Http {
+    fn get_with_timeout(&self, url: &str, timeout: Duration) -> Result<(u16, Vec<u8>), Message> {
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(self.timeout))
+            .timeout_global(Some(timeout))
             .http_status_as_error(false)
             .max_redirects(5)
             .user_agent(concat!("rospm/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
-        let mut resp = agent
-            .get(url)
-            .call()
-            .map_err(|e| net_error(&e, self.timeout))?;
+        let mut resp = agent.get(url).call().map_err(|e| net_error(&e, timeout))?;
         let status = resp.status().as_u16();
+        // ureq caps `read_to_vec` at 10 MB; `universe` indexes are larger.
         let body = resp
             .body_mut()
+            .with_config()
+            .limit(256 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| net_error(&e, self.timeout))?;
+            .map_err(|e| net_error(&e, timeout))?;
         Ok((status, body))
     }
 }
@@ -154,6 +181,68 @@ fn get_text(fetch: &dyn Fetch, url: &str) -> Result<String, Message> {
 }
 
 // ---------------------------------------------------------------- parsing
+
+/// `(Package, Version)` of every stanza in an apt `Packages` index.
+pub fn parse_packages(text: &str) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    let (mut name, mut version): (Option<&str>, Option<&str>) = (None, None);
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.trim().is_empty() {
+            if let (Some(n), Some(v)) = (name.take(), version.take()) {
+                out.insert((n.to_string(), v.to_string()));
+            }
+            name = None;
+            version = None;
+        } else if let Some(v) = line.strip_prefix("Package:") {
+            name = Some(v.trim());
+        } else if let Some(v) = line.strip_prefix("Version:") {
+            version = Some(v.trim());
+        }
+    }
+    out
+}
+
+/// Download one `Packages.gz` and parse it. A body that is not gzip is
+/// parsed as is (canned test servers serve plain text).
+pub fn fetch_packages(fetch: &dyn Fetch, url: &str) -> Result<BTreeSet<(String, String)>, Message> {
+    let (status, body) = fetch.get_large(url)?;
+    if !(200..300).contains(&status) {
+        return Err(msg!("snapshot.http_status", url = url, status = status));
+    }
+    let body = if body.starts_with(&[0x1f, 0x8b]) {
+        gunzip(&body)?
+    } else {
+        body
+    };
+    Ok(parse_packages(&String::from_utf8_lossy(&body)))
+}
+
+/// `gzip -dc` (always present on Ubuntu; avoids a compression dependency).
+fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, Message> {
+    let mut child = process::Command::new("gzip")
+        .arg("-dc")
+        .stdin(process::Stdio::piped())
+        .stdout(process::Stdio::piped())
+        .stderr(process::Stdio::piped())
+        .spawn()
+        .map_err(|e| Message::text(format!("gzip: {e}")))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let input = bytes.to_vec();
+    // Written from another thread: a large index would otherwise fill the
+    // stdout pipe while we are still blocked writing stdin.
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let out = child
+        .wait_with_output()
+        .map_err(|e| Message::text(format!("gzip: {e}")))?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return Err(Message::text(format!(
+            "gzip: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(out.stdout)
+}
 
 /// Snapshot dates (`YYYY-MM-DD`) linked from a directory index, ascending.
 pub fn parse_index_dates(html: &str) -> Vec<String> {
@@ -280,11 +369,16 @@ pub struct RosSnapshot {
 /// [`ROS_SNAPSHOT_KEY_FINGERPRINT`]. A snapshot whose signature *fails* is
 /// rejected (the next older date is tried); one that cannot be checked
 /// because gpg is missing is accepted with [`Signature::Skipped`].
+///
+/// `accept` also has to approve each candidate (`lock` uses it
+/// to require that the snapshot carries the installed versions); a rejected
+/// candidate is skipped like one with a bad signature.
 pub fn discover_ros(
     fetch: &dyn Fetch,
     distro: &str,
     codename: &str,
     arch: &str,
+    accept: &mut dyn FnMut(&RosSnapshot) -> Result<(), Message>,
 ) -> Result<RosSnapshot, Message> {
     let index = get_text(fetch, &ros_snapshot_index_url(distro))?;
     let dates = parse_index_dates(&index);
@@ -317,19 +411,27 @@ pub fn discover_ros(
             ));
             continue;
         }
-        let signature = match verify_ros_signature(fetch, &base, codename, &release_text) {
-            Ok(sig) => sig,
-            Err(e) => {
-                first_err.get_or_insert(e);
-                continue;
-            }
-        };
-        return Ok(RosSnapshot {
+        // `accept` runs first: it only reads, and a candidate it rejects
+        // needs no keyserver round trip. Both must pass either way.
+        let mut snapshot = RosSnapshot {
             date: date.clone(),
             base,
             release,
-            signature,
-        });
+            signature: Signature::Skipped(Message::text("")),
+        };
+        if let Err(e) = accept(&snapshot) {
+            first_err.get_or_insert(e);
+            continue;
+        }
+        snapshot.signature =
+            match verify_ros_signature(fetch, &snapshot.base, codename, &release_text) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                    continue;
+                }
+            };
+        return Ok(snapshot);
     }
     Err(first_err.unwrap_or_else(|| msg!("snapshot.no_usable_date", distro = distro)))
 }
@@ -530,6 +632,64 @@ impl Drop for TempDir {
 mod tests {
     use super::*;
 
+    const PACKAGES: &str = "Package: curl\nVersion: 7.81.0-1ubuntu1.25\nArchitecture: amd64\n\nPackage: libcurl4\nArchitecture: amd64\nVersion: 7.81.0-1ubuntu1.25\n\nPackage: no-version\n\nPackage: last\nVersion: 1.0";
+
+    #[test]
+    fn packages_index_yields_name_version_pairs() {
+        let set = parse_packages(PACKAGES);
+        let pairs: Vec<(&str, &str)> = set.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("curl", "7.81.0-1ubuntu1.25"),
+                ("last", "1.0"),
+                ("libcurl4", "7.81.0-1ubuntu1.25"),
+            ]
+        );
+    }
+
+    #[test]
+    fn fetch_packages_gunzips_and_accepts_plain_text() {
+        let url = packages_url("http://x/ubuntu", "jammy-updates", "main", "amd64");
+        assert_eq!(
+            url,
+            "http://x/ubuntu/dists/jammy-updates/main/binary-amd64/Packages.gz"
+        );
+        let mut gzip = process::Command::new("gzip")
+            .arg("-c")
+            .stdin(process::Stdio::piped())
+            .stdout(process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        gzip.stdin
+            .take()
+            .unwrap()
+            .write_all(PACKAGES.as_bytes())
+            .unwrap();
+        let gz = gzip.wait_with_output().unwrap().stdout;
+        assert_eq!(&gz[..2], &[0x1f, 0x8b]);
+        let fetch = Canned::default().with(url.clone(), 200, &gz);
+        assert_eq!(
+            fetch_packages(&fetch, &url).unwrap(),
+            parse_packages(PACKAGES)
+        );
+        let plain = Canned::default().with(url.clone(), 200, PACKAGES);
+        assert_eq!(fetch_packages(&plain, &url).unwrap().len(), 3);
+        let err = fetch_packages(&Canned::default(), &url).unwrap_err();
+        assert_eq!(err.key_name(), Some("snapshot.http_status"));
+        let broken = Canned::default().with(url.clone(), 200, [0x1f, 0x8b, 0, 1, 2]);
+        assert!(fetch_packages(&broken, &url).is_err());
+    }
+
+    #[test]
+    fn ubuntu_timestamp_from_unix_matches_the_snapshot_form() {
+        assert_eq!(ubuntu_timestamp_from_unix(0), "19700101T000000Z");
+        assert_eq!(
+            ubuntu_timestamp_from_unix(1_789_150_906),
+            "20260911T182146Z"
+        );
+    }
+
     #[test]
     fn urls_follow_the_verified_layout() {
         assert_eq!(
@@ -602,7 +762,7 @@ mod tests {
                 200,
                 release_text("noble", "amd64 arm64", "Sat, 1 Aug 2026 00:00:00 UTC"),
             );
-        match discover_ros(&fetch, "jazzy", "noble", "arm64") {
+        match discover_ros(&fetch, "jazzy", "noble", "arm64", &mut |_| Ok(())) {
             Ok(s) => {
                 assert_eq!(s.date, "2026-08-01");
                 assert!(matches!(
@@ -616,13 +776,13 @@ mod tests {
             Err(e) => assert_eq!(e.key_name(), Some("snapshot.release_mismatch"), "{e}"),
         }
         // Every listed date lacks the architecture: the mismatch is reported.
-        let none = discover_ros(&fetch, "jazzy", "noble", "riscv64").unwrap_err();
+        let none = discover_ros(&fetch, "jazzy", "noble", "riscv64", &mut |_| Ok(())).unwrap_err();
         assert_eq!(none.key_name(), Some("snapshot.release_mismatch"));
         // No Release for that codename at all.
-        let none = discover_ros(&fetch, "jazzy", "jammy", "amd64").unwrap_err();
+        let none = discover_ros(&fetch, "jazzy", "jammy", "amd64", &mut |_| Ok(())).unwrap_err();
         assert_eq!(none.key_name(), Some("snapshot.http_status"));
         let empty = Canned::default().with(ros_snapshot_index_url("rolling"), 404, "");
-        let e = discover_ros(&empty, "rolling", "noble", "amd64").unwrap_err();
+        let e = discover_ros(&empty, "rolling", "noble", "amd64", &mut |_| Ok(())).unwrap_err();
         assert_eq!(e.key_name(), Some("snapshot.http_status"));
     }
 
@@ -646,7 +806,7 @@ mod tests {
     #[test]
     #[ignore]
     fn real_ros_snapshot_is_discovered_and_signed() {
-        let s = discover_ros(&Http::default(), "jazzy", "noble", "amd64").unwrap();
+        let s = discover_ros(&Http::default(), "jazzy", "noble", "amd64", &mut |_| Ok(())).unwrap();
         assert!(is_date(&s.date), "{}", s.date);
         assert_eq!(s.signature, Signature::Verified);
         let ts = ubuntu_timestamp_from_date(s.release.date.as_deref().unwrap()).unwrap();

@@ -850,3 +850,46 @@ fn native_apply_locked_removes_its_own_broken_sources_before_the_first_update() 
         .render();
     assert!(!rendered.contains("sudo rm -f"), "{rendered}");
 }
+
+#[test]
+fn native_apply_locked_keeps_newer_ubuntu_packages_but_pins_the_ros_layer_exactly() {
+    // 2026-09-26: `curl=<older>` needs the same older `libcurl4`, which the
+    // lock does not record; apt refused the whole install (exit 100).
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = bare_host();
+    let mut lock = locked(Some("2026-09-11"), Some("20260911T182146Z"));
+    lock.apt.push(LockedApt {
+        platform: Platform::LinuxX86_64,
+        name: "curl".into(),
+        version: "7.81.0-1ubuntu1.25".into(),
+        sha256: None,
+    });
+    lock.apt.push(LockedApt {
+        platform: Platform::LinuxX86_64,
+        name: "libfoo-dev".into(),
+        version: "2.0-1".into(),
+        sha256: None,
+    });
+    host.packages = PackageDb::Static(parse_dpkg_query(
+        // curl newer (kept), libfoo-dev older (upgraded to the lock),
+        // rosdep and the base newer (ROS layer: downgraded to the lock).
+        "curl\tinstalled\t7.81.0-1ubuntu1.29\nlibfoo-dev\tinstalled\t1.0-1\npython3-rosdep\tinstalled\t0.27.0-1\nros-jazzy-ros-base\tinstalled\t9.9.9-1noble\n",
+    ));
+    let rendered = provider::for_manifest(&m)
+        .plan_apply(&locked_ctx(&m, &host, &lock))
+        .unwrap()
+        .render();
+    assert!(!rendered.contains("curl=7.81.0-1ubuntu1.25"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "native.apply.locked_kept_newer(count=1, packages=curl 7.81.0-1ubuntu1.29 > 7.81.0-1ubuntu1.25)"
+        ),
+        "{rendered}"
+    );
+    assert!(rendered.contains("libfoo-dev=2.0-1"), "{rendered}");
+    assert!(rendered.contains("python3-rosdep=0.24.0-1"), "{rendered}");
+    assert!(
+        rendered.contains("ros-jazzy-ros-base=2.4.1-1noble.20260910.194500"),
+        "{rendered}"
+    );
+}

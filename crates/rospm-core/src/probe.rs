@@ -538,6 +538,10 @@ pub struct Host {
     pub locale: LocaleState,
     pub tools: BTreeMap<String, Option<PathBuf>>,
     pub packages: PackageDb,
+    /// Unix time `/var/lib/dpkg/status` last changed, i.e. the last package
+    /// install / removal. `lock` takes the Ubuntu snapshot at this instant:
+    /// what the host installed from the live archive was available then.
+    pub dpkg_changed_at: Option<u64>,
 }
 
 impl Host {
@@ -563,6 +567,11 @@ impl Host {
             locale: LocaleState::probe(),
             tools,
             packages,
+            dpkg_changed_at: fs::metadata("/var/lib/dpkg/status")
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs()),
         }
     }
 
@@ -580,6 +589,7 @@ impl Host {
             locale: LocaleState::default(),
             tools: TOOLS.iter().map(|(t, _)| (t.to_string(), None)).collect(),
             packages: PackageDb::Unavailable,
+            dpkg_changed_at: None,
         }
     }
 
