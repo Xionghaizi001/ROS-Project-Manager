@@ -385,3 +385,38 @@ version = "2.0.0"
         .unwrap();
     assert!(report.items.iter().any(|i| i.area == "apt"));
 }
+
+#[test]
+fn a_lock_without_the_base_package_is_not_ready() {
+    // `apply --locked` refuses such a lock (native.apply.locked_base_missing);
+    // verify used to call it ready because every locked entry matched.
+    let root = tmp("no-base");
+    let lock_text = r#"
+schema_version = 1
+generated_at = "2026-01-01T00:00:00Z"
+manifest_sha256 = "sha256:deadbeef"
+
+[provider]
+kind = "native"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "python3-rosdep"
+version = "0.26.0-1"
+"#;
+    let lock = Lock::parse(lock_text, Path::new("rospm.lock")).unwrap();
+    let m = manifest();
+    let mut host = Host::empty();
+    host.packages = installed(&[("python3-rosdep", "0.26.0-1")]);
+    let report = provider::for_manifest(&m)
+        .verify(&ctx(&m, &root, &host, &lock), &lock)
+        .unwrap();
+    assert!(!report.ready(), "{report:#?}");
+    let base = item(&report, "ros");
+    assert_eq!(base.subject.to_string(), "ros-jazzy-ros-base");
+    assert_eq!(base.status, Status::Missing);
+    assert_eq!(
+        base.actual.to_string(),
+        "verify.apt.base_not_locked(platform=linux-x86_64)"
+    );
+}

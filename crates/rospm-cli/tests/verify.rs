@@ -94,22 +94,22 @@ fn missing_lock_file_fails_with_a_hint_to_run_lock() {
 }
 
 #[test]
-fn matching_lock_reports_ready_then_a_manifest_edit_breaks_it() {
+fn lock_without_the_base_package_is_not_ready_and_a_manifest_edit_is_reported() {
     let dir = fixture("verify-ok");
     fs::write(dir.join("rospm.toml"), MANIFEST).unwrap();
     let rev = git_repo(&dir.join("ws/src/demo_pkg"));
     fs::write(dir.join("rospm.lock"), lock_toml(MANIFEST, &rev)).unwrap();
 
+    // The lock pins no apt packages, not even the base package, so it is not
+    // ready (`apply --locked` would refuse it); the source row still matches.
+    // The fully ready case needs a dpkg database and is covered by the core
+    // tests (`matching_source_and_apt_is_ready`).
     let out = rospm()
         .current_dir(&dir)
         .args(["verify", "--json"])
         .output()
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(!out.status.success());
     let v = json(&out);
     assert_eq!(v["ok"], true);
     assert_eq!(v["manifest_matches"], true);
@@ -119,7 +119,12 @@ fn matching_lock_reports_ready_then_a_manifest_edit_breaks_it() {
         .find(|i| i["subject"] == "main: src/demo_pkg")
         .expect("the locked source is reported");
     assert_eq!(source["status"], "ok", "{v:#}");
-    assert_eq!(v["environment"]["ready"], true, "{v:#}");
+    let base = items
+        .iter()
+        .find(|i| i["subject"] == "ros-jazzy-ros-base")
+        .expect("the unlocked base package is reported");
+    assert_eq!(base["status"], "missing", "{v:#}");
+    assert_eq!(v["environment"]["ready"], false, "{v:#}");
 
     // Edit the manifest without re-locking: the hash no longer matches.
     let edited = format!("{MANIFEST}\n# a harmless comment\n");

@@ -226,6 +226,18 @@ pub fn verify(ctx: &Context, lock: &Lock) -> Result<EnvReport> {
             Status::Info,
         );
     }
+    // `apply --locked` refuses a lock without the base package for this
+    // platform, so verify must not call such a lock ready either.
+    let ros_base = m.ros_base_package();
+    if !for_host.iter().any(|e| e.name == ros_base) {
+        r.push(
+            "ros",
+            ros_base.clone(),
+            msg!("verify.apt.base_not_locked_expected"),
+            msg!("verify.apt.base_not_locked", platform = ctx.platform),
+            Status::Missing,
+        );
+    }
     if for_host.is_empty() {
         r.push(
             "apt",
@@ -235,7 +247,6 @@ pub fn verify(ctx: &Context, lock: &Lock) -> Result<EnvReport> {
             Status::Info,
         );
     } else {
-        let ros_base = m.ros_base_package();
         let names: Vec<String> = for_host.iter().map(|e| e.name.clone()).collect();
         match host.packages.status(&names) {
             None => {

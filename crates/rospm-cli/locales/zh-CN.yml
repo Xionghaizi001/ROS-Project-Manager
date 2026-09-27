@@ -288,6 +288,8 @@ verify:
   apt:
     other_platform: "%{count} 条 %{platform} 的记录未在本机核对"
     none_for_host: "锁文件中没有 %{platform} 的 apt 记录"
+    base_not_locked_expected: "在 rospm.lock 中固定"
+    base_not_locked: "rospm.lock 中没有 %{platform} 的记录（清单中的 ROS 底包）；`apply --locked` 会拒绝此锁文件，请重新运行 `rospm lock`"
   pip:
     unavailable: "未找到 pip，无法核对已安装版本"
 

@@ -227,7 +227,7 @@ version = "1.26.4"
 | manifest | 清单原文哈希 vs `manifest_sha256`；`environment.provider` vs `provider.kind` | 不一致 → `MISMATCH`（提示重新 `rospm lock`） |
 | os | `provider.native.ubuntu` vs `/etc/os-release`；两个快照日期只作 `info` 展示（是否已切到快照源由 `apply --locked` 负责） | 不同 → `MISMATCH`，不可读 → `unknown` |
 | source | 每条 git 记录：目录不存在 → `MISSING`；不是 git 检出 → `MISMATCH`；`HEAD` ≠ `rev` → `MISMATCH`（同时给出两个短 SHA）；origin 与 `url` 宽松比较不同 → 额外一行 `MISMATCH`；非 git 类型 → `info` 未核对；锁文件里的 workspace 不在清单 → `MISMATCH` | git 缺失 → `unknown` |
-| apt / ros | 只核对本机平台的记录：未安装 → `MISSING`，版本不同 → `MISMATCH`；其它平台的记录合并成一行 `info`；底包一行归 `ros` 区域 | `dpkg-query` 不可用 → 每包 `unknown` |
+| apt / ros | 只核对本机平台的记录：未安装 → `MISSING`，版本不同 → `MISMATCH`；其它平台的记录合并成一行 `info`；底包一行归 `ros` 区域；锁文件没有本机平台的底包记录 → 底包一行 `MISSING`（`apply --locked` 会拒绝这样的锁） | `dpkg-query` 不可用 → 每包 `unknown` |
 | pip | 与 `pip list --format=freeze` 对比：未装 → `MISSING`，版本不同 → `MISMATCH` | pip 不可用 → `unknown` |
 
 退出码：全部一致（无 `MISSING` / `MISMATCH` / `unknown`）为 0，否则 1（供 CI 用）。`--json` 形如 `{ ok, manifest, lock, generated_at, manifest_matches, ros_snapshot, ubuntu_snapshot, environment: { probed, ready, problems, unknown, items } }`。
