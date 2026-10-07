@@ -1,4 +1,15 @@
-# P1 native 提供者实机验证（Ubuntu 22.04 / Humble）
+# P1 native 提供者实机验证（Ubuntu 22.04 / Humble、Ubuntu 24.04 / Jazzy）
+
+## 8. Ubuntu 24.04 / Jazzy 验收（2026-10-07）
+
+在 Ubuntu 24.04.5 x86_64 虚拟机、无 ROS apt 源的基线执行 `examples/minimal`：
+
+- `rospm apply` 成功完成 bootstrap、Jazzy `ros-base`、vcs、colcon、rosdep 与 OpenCV 依赖安装；ROS 源使用官方地址，密钥指纹校验通过。
+- `rospm check --strict` 通过。`rospm env --shell bash` 输出 `/opt/ros/jazzy/setup.bash` 与 workspace setup；source 后 `ros2 run demo_nodes_cpp talker` 连续发布 `Hello World: 1..7`。
+- 完整 demos 构建因虚拟机资源与包数量较大而停止；随后 `colcon build --packages-select demo_nodes_cpp` 完成目标包构建（约 2 分 56 秒）。
+- `rospm lock` 记录 210 个 apt 包；`rospm verify` 报告全部锁定条目一致；`rospm deps check` 完成。`rospm uninstall --yes` 后 `check` 的 ROS 源、`/opt/ros/jazzy` 与底包均回到 `MISSING`。
+
+日志目录：`/tmp/rospm-validation-20261007/log/`。
 
 验证日期：2026-09-26。环境：WSL2 上的 Ubuntu 22.04.5（x86_64，12 核 / 15 GB），sudo 免密，
 起始状态无 `/opt/ros`、无 ROS apt 源、无 vcs / colcon / rosdep，`universe` 已启用，locale 为
@@ -6,7 +17,7 @@
 全部命令输出保存在 `/tmp/rospm-p1/log/`（`00`–`20` 编号，本文引用的编号即文件前缀）。
 
 **结论：phases.md P1 验收的 22.04 三条全部通过。** 过程中发现并修复 4 个缺陷、补 1 项探测
-（见 §5），24.04 + Jazzy 同流程待另一台机器。
+（见 §5）。24.04 + Jazzy 的本轮结果见 §8。
 
 ## 1. 基线（log 00–03）
 

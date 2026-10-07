@@ -638,7 +638,11 @@ mod tests {
             err.contains("C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654"),
             "{err}"
         );
-        assert!(err.contains("expects 0000"), "{err}");
+        assert!(err.contains("plan.key_fingerprint_mismatch"), "{err}");
+        assert!(
+            err.contains("expected=0000000000000000000000000000000000000000"),
+            "{err}"
+        );
         assert!(!dest.exists());
     }
 

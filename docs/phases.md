@@ -86,7 +86,7 @@
 
 ### 验收
 - [x] 在一台干净 22.04 虚拟机上，仅凭清单 + 源码完成 `apply && build && shell`，`ros2 run` 成功（`apply` 须从无 ROS apt 源起步）。（2026-09-26，WSL2 Ubuntu 22.04.5，`examples/minimal-humble`，`ros2 run demo_nodes_cpp talker` 在 `rospm shell` 内正常发布）
-- [ ] 同样流程在 24.04 + Jazzy 上通过。
+- [x] 同样流程在 24.04 + Jazzy 上通过（2026-10-07，Ubuntu 24.04.5 x86_64 虚拟机；`apply`、`check --strict`、bash `env`、`build`、`ros2 run demo_nodes_cpp talker`、`lock`、`verify`、`deps check`、`uninstall --yes` 闭环；详见 [p1-native-validation.md](p1-native-validation.md)）。
 - [x] `rospm uninstall --yes` 后 `rospm check` 对 ROS 各项回到 `MISSING`。（2026-09-26，三次 uninstall 均通过；第二轮 apply 的 `rosdep update` 因主机到 GitHub 的连接超时未完成，bootstrap 与密钥校验步骤已有实机证据）
 
 ---
@@ -138,14 +138,15 @@
   - [x] 设计问题（2026-09-27 解决）：`lock` 记录的版本可能不在所选快照里（实时 ROS 源底包构建于 2026-09-08，最新快照为 2026-08-07；Ubuntu 快照由 ROS `Release` 日期换算，晚于它的 Ubuntu 更新同样缺失）。现在 `lock` 下载快照 `Packages.gz`（系统 `gzip -dc` 解压，不加依赖）逐包核对：ROS 快照取最新三个日期中第一个含全部锁定 `ros-<distro>-*` 版本的，都不含则不记录并列出缺失版本；Ubuntu 快照时间戳改取本机 `/var/lib/dpkg/status` 修改时间（最后一次装包），取不到才退回 ROS `Release` 日期；其余包在两个快照中都找不到的列出。本机实测（22.04，未装 ROS）：真实 `lock` 下载并核对 ROS 与 Ubuntu 索引，4 个包全部命中，Ubuntu 快照 `20260926T105514Z` 验签通过，约 11 秒。缺版本的分支由罐装服务器测试覆盖。
   - [x] 设计问题（2026-09-27 解决）：锁文件只记录顶层 Ubuntu 包，系统库比快照新的主机上 `curl=<旧版本>` 因依赖精确版本而使整条安装失败（模拟退出 100）。现在 ROS 层（`ros-<distro>-*`、底包）与三个工具包仍精确安装、可降级；其余 Ubuntu 包本机已装且更新时保持不变并在计划中列出，`verify` 报 `info`（新增 `debver` 模块按 dpkg 规则比较版本，用例与真实 `dpkg --compare-versions` 对照一致）。本机 `apply --locked --dry-run` 实测：锁定 `curl …1ubuntu1.25`、本机 `…1ubuntu1.29` 时计划只保留说明、不再点名 `curl=`。
   - [x] 修复（2026-09-27）：锁文件缺底包时 `verify` 仍报就绪。现在本机平台没有底包记录（含完全没有 apt 记录）时底包一行 `MISSING`、退出 1，与 `apply --locked` 拒绝该锁一致；核心与 CLI 测试覆盖。
-  - [ ] 时间点 2（间隔一段时间后）与 24.04 / Jazzy 用同一脚本复测；真实 `apply --locked` 在干净虚拟机上执行。
+  - [x] 时间点 2（2026-10-07，Ubuntu 24.04 / Jazzy）用同一脚本复测：ROS 快照 `2026-09-11`、Ubuntu 快照 `20261007T141443Z`；锁定版本 1/1 在快照中，干净机模拟 669 包、当前主机模拟 126 包均成功。日志见 [p2-locked-validation.md](p2-locked-validation.md)。
+  - [x] 在卸载恢复干净的 Ubuntu 24.04 虚拟机上真实执行新的 `apply --locked`（2026-10-07）：快照源安装 205 个锁定 apt 条目，随后 `check --strict`、`verify`、`deps check` 均退出 0，并再次 `uninstall --yes` 收尾。
 
 ### `rospm deps check` / `rospm deps install`
 - [x] 解析 workspace 中全部 `package.xml`，与已安装集合求差（2026-09-26，spec §4 表）。依赖键分内部 / 外部 / 跳过；外部键经 `rosdep check` + `rosdep resolve` 映射到 apt 包后查 dpkg；rosdep 输出解析为纯函数并用罐装文本单测；`package.xml` 解析失败也在表中报出。本机实测（rosdep 已 update）：`rclcpp` → `ros-humble-rclcpp` 未安装 `MISSING`，`libopencv-dev` 已装给出版本。
 - [x] `install` 交给 rosdep 执行，支持 `--dry-run`（2026-09-26）：命令形状与 `apply` 第 4 步一致，不做 `rosdep init`（提示先 `rospm apply`）、不测速；rosdep 禁用时只有一条说明。
 
 ### 验收
-- [ ] 两台机器、间隔数周执行 `apply --locked`，`verify` 报告一致。
+- [ ] 两台机器、间隔数周执行真实 `apply --locked`，`verify` 报告一致（本机时间点 2 已完成，第二台机器与后续间隔复测仍待执行）。
 - [ ] CI 增加 `lock` → 新容器 `apply --locked` → `verify` 场景。
 
 ---

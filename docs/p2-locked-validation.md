@@ -140,3 +140,27 @@ sim: locked install, this host (+live Ubuntu) exit 100, 0 pkgs
 - **旧快照是否仍可用。** 用 `2026-08-07` 快照合成的锁在时间点 2 是否仍能完整解析，这是"间隔数周 `apply --locked`"验收的前提。
 - **24.04 / Jazzy。** 在该机器上 `cargo build --release` 后运行同一脚本，汇总表可与本节逐行对比。真实闭环可以照搬上一节的做法；2026-09-27 起不再需要手工合成快照锁、去掉非 ROS 的 Ubuntu 包，直接用 `lock` 的结果，并留意其中的 `snapshot_lacks_versions` / `not_in_snapshots` 说明。
 - **真实闭环复测。** 时间点 2 在本机重复上一节两轮流程，确认旧快照仍能回放；若 humble 已有新快照，再试一次"实时安装 → `lock` → 回放"，观察第 2 条是否暂时消失。
+
+## 时间点 2：2026-10-07，Ubuntu 24.04 / Jazzy
+
+使用同一 `scripts/p2-locked-sandbox-check.sh`，工作目录为 `/tmp/rospm-validation-20261007/p2-sandbox/`。
+
+```
+time (UTC)                                   2026-10-07T14:14:45Z
+host                                         Ubuntu 24.04 noble amd64
+rospm lock (network)                         exit 0
+ROS snapshot / Ubuntu snapshot               2026-09-11 / 20261007T141443Z
+sandbox apt-get update (snapshots)           exit 0
+sandbox apt-get update (host+snapshots)      exit 0
+locked versions not in snapshot (this lock)  0 / 1
+ros-jazzy-ros-base live / snapshot           0.11.0-1noble.20261006.035407 / 0.11.0-1noble.20260903.093452
+sim: clean install from snapshot             exit 0, 669 pkgs
+sim: locked install, clean machine           exit 0, 669 pkgs
+sim: locked install, this host (+live Ubuntu) exit 0, 126 pkgs
+```
+
+当前时间点的 Jazzy 快照索引、干净 dpkg 状态解析和当前主机共存源模拟安装均成功；随后已在卸载后的干净状态完成真实 `apply --locked`，见下节。
+
+### 时间点 2 真实快照回放
+
+随后使用 P1 的 `uninstall --yes` 将本机恢复到无 `/opt/ros`、无 ROS apt 源的状态，在 `/tmp/rospm-validation-20261007/p2-sandbox/synth/` 使用上述快照锁执行真实 `rospm apply --locked`。命令成功完成快照 keyring、ROS/Ubuntu 快照源、`apt-get update`、205 个锁定 apt 条目、源码 checkout 和 rosdep cache 更新；`check --strict`、`verify`、`deps check` 均退出 0。最后再次执行 `rospm uninstall --yes`，删除 ROS 包和 rospm 快照源，恢复干净状态。证据日志为 `17-apply-locked-real.log`、`18-locked-check.log`、`19-locked-verify.log`、`20-locked-deps.log`、`21-locked-uninstall.log`。
