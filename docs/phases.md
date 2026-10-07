@@ -26,8 +26,8 @@
   - [x] ROS 快照：目录布局 `snapshots.ros.org/<distro>/<date>/ubuntu/…`，日期不定期；索引大小与 SHA256 与 Release 一致；Rolling 当前 404。
   - [x] ROS 快照 `Release.gpg` 签名密钥来源核验：密钥 `4B63…CBF125EA` 与 `packages.ros.org` 的 `ros.key` 不同，来源为官方 wiki SnapshotRepository 页 + OSRF 官方 Dockerfile，从 `keyserver.ubuntu.com` 取得后 `gpgv` 验证 Release.gpg / InRelease 通过，有效期至 2027-06-01。P2 必须用 `signed-by=` 引用该 keyring，禁止 `trusted=yes`。
   - [x] RoboStack rosdep 源链、`--os=conda:linux` 系统键映射、`skip_keys` 只作用于 install/check 的语义。
-  - [x] conda-forge 补丁版 rosdep（0.26.0 build 1）对 ROS 包（`rclcpp`）的 conda 映射对照：`--os=conda:linux` 解析为 `ros-humble-rclcpp`，系统键与上游 master 一致。附带发现：其 `check`/`install` 只兼容 micromamba 1.x（2.x 的 `list --json` 格式不同），P3 不应依赖 rosdep 的 conda 检测。
-  - [x] pixi 0.81.0 完整下载并校验（SHA256 与官方 .sha256 一致），`pixi lock` + `pixi-pack --platform linux-aarch64` 在 x86 上真实打包成功，归档内 34 个包的 SHA256 与 `pixi.lock` 逐一匹配。ARM 主机实际解包运行移交 P3/P5。
+  - [x] conda-forge 补丁版 rosdep（0.26.0 build 1）对 ROS 包（`rclcpp`）的 conda 映射对照：`--os=conda:linux` 解析为 `ros-humble-rclcpp`，系统键与上游 master 一致。附带发现：其 `check`/`install` 只兼容 micromamba 1.x（2.x 的 `list --json` 格式不同），P8 不应依赖 rosdep 的 conda 检测。
+  - [x] pixi 0.81.0 完整下载并校验（SHA256 与官方 .sha256 一致），`pixi lock` + `pixi-pack --platform linux-aarch64` 在 x86 上真实打包成功，归档内 34 个包的 SHA256 与 `pixi.lock` 逐一匹配。ARM 主机实际解包运行移交 P3/P8。
 - [x] spec 与示例清单 review。（仅限当前阶段，后续如有变更仍需重新 review ）
 - **产出**：`rospm --help` 可运行 ✅。
 
@@ -55,12 +55,12 @@
 - [x] 清单校验、拓扑排序、平台覆盖合并、`--target <platform>`、`--json` 输出。
 - [x] 环境探测（2026-09-25，`Provider::probe_env` + `rospm-core::probe`）：平台与 Ubuntu 版本、git / vcs / colcon / rosdep / apt-get 是否在 PATH、`/opt/ros/<distro>` 与底包 dpkg 状态、rosdep `init`（`20-default.list`）/ `update`（`$ROS_HOME/rosdep/sources.cache/index`）、平台覆盖后的额外 apt 包 dpkg 状态、每个 `.repos` 条目是否已 import 到 `src/`（git checkout 且 `origin` URL 一致，宽松比较 `.git` / ssh 写法）、`src/` 下 `package.xml` 数量、colcon defaults 文件、是否已 build。
 - [x] ROS 安装前置条件探测（2026-09-26）：locale 是否 UTF-8、apt `universe` 是否启用（一行式与 deb822 两种源格式）、是否已有引用 `packages.ros.org/ros2` 的 apt 源文件。`doctor` 同步输出这三项。
-- [x] 输出差异报告（期望 vs 实际），不修改系统。状态分 `ok` / `MISSING` / `MISMATCH` / `unknown`（探测工具缺失）/ `info`；默认只报告、退出码 0，`--strict` 在未就绪时退出 1（供 CI）；`--target` 与主机不同时跳过探测并注明；pixi / docker 提供者输出一行"P3 / P4 未实现"。
+- [x] 输出差异报告（期望 vs 实际），不修改系统。状态分 `ok` / `MISSING` / `MISMATCH` / `unknown`（探测工具缺失）/ `info`；默认只报告、退出码 0，`--strict` 在未就绪时退出 1（供 CI）；`--target` 与主机不同时跳过探测并注明；pixi / docker 提供者输出一行"P8 / P9 未实现"。
 
 ### `rospm apply`
 - [x] native 计划生成：ROS apt 源 → 底包 → `vcs import` → `rosdep install` → 额外 apt；`--dry-run` 打印计划。
 - [x] 安装 ROS 的 bootstrap（2026-09-26，spec §4.1，决策 #14）：主机 Ubuntu 版本与清单不符直接报错；按探测结果只补缺的步骤：`locales` + `locale-gen`/`update-locale`、`add-apt-repository universe`、下载 `ros.key` 到 keyring、写 `sources.list.d/ros2.list`（`--dry-run` 打印文件内容）、`apt-get update`。系统文件经 `sudo tee` 写入。CI 冒烟对 22.04 / 24.04 各用一份匹配的示例清单，并断言计划里含源文件写入。
-- [x] `--locked` 在 P2 前明确降级告警；`--offline` 返回 NotImplemented(P6)。
+- [x] `--locked` 在 P2 前明确降级告警；`--offline` 返回 NotImplemented(P5)。
 - [x] 非 dry-run 在真实机器上执行并处理失败（2026-09-26）：干净 22.04 主机上从无 ROS apt 源起步，11 步全部成功；命令失败时以非零退出并打印失败命令（实测 `curl` 被 SIGTERM 中断的场景）；二次 `apply` 幂等（bootstrap 步骤按探测结果跳过，apt / vcs / rosdep 自身幂等）。sudo 免密与 `rosdep init` 未初始化两种情况已覆盖；apt 锁冲突与 sudo 交互式输密码未构造场景。
 - [x] `ros.key` 下载与密钥指纹核验（2026-09-26）：先下到临时文件（`curl -f`、连接 / 单次超时、瞬时错误重试），`gpg --show-keys` 核对完整指纹 `C1CF…C654` 后才 `sudo install` 到 keyring；404、指纹不符、下载挂起都报错且不写 keyring。前置包加入 `gnupg`（ubuntu 容器镜像只有 `gpgv`）。三个需要网络的 `#[ignore]` 测试本机实跑通过；真实 `apply` 中该步骤在网络停滞时 3 分钟内有界失败、网络正常时通过指纹校验并安装。
 
@@ -150,10 +150,66 @@
 
 ---
 
-## Phase 3 — Pixi 提供者（约 3 周）
+## Phase 3 — aarch64 与平台覆盖（约 3 周）
+
+状态：**未开始**。清单的 `[target.<platform>]` 覆盖/替换/排除已在 schema 与 `check --target` 中实现，但仓库索引查询与映射表未做。
+
+- [x] 清单 `[target.<arch>]` 段：覆盖、替换、排除（schema + `effective_apt` 合并）。
+- [ ] `rospm check --target aarch64`：查询 apt / conda 仓库索引，报告目标架构缺失的包。
+- [ ] 内置可更新的替换映射表，与用户声明合并，用户声明优先。
+- [ ] 在 Docker 容器内搭建 QEMU aarch64 环境，运行 native 提供者的 `check` / `apply --locked` / `build` / `ros2 run` 集成测试，验证 aarch64 的可用性与兼容性；优先使用 GitHub ARM runner，缺失时以 QEMU 作为稳定回退。
+- **产出**：x86 上生成的锁文件，在 Raspberry Pi / Jetson 上 `apply --locked` 成功，缺失包有明确替代或明确报错。
+
+---
+
+## Phase 4 — Release 与 schema v1（约 1–2 周）
+
+状态：**未开始**。
+
+- [ ] 完成 aarch64 验收后的回归测试、文档与示例清单整理。
+- [ ] 冻结 manifest / lock schema v1，整理迁移说明与兼容性声明。
+- [ ] 构建并发布 1.0 版本及 aarch64 产物。
+- **产出**：1.0 发布，native 提供者、aarch64 目标与 schema v1 作为稳定基线。
+
+---
+
+## Phase 5 — 离线导出与导入（约 3–4 周）
+
+状态：**未开始**。`export` / `import` 返回 NotImplemented(P5)；`apply --offline` 同样。
+
+- [ ] 定义 bundle 格式：`manifest + lock + sources/ + payload/ + SHA256SUMS`（spec §5，决策 #10）。
+- [ ] native：`apt-get download` 求闭包，`dpkg-scanpackages` 生成本地仓库；`dpkg --add-architecture` 跨架构下载。
+- [ ] pixi：调用 `pixi-pack --platform`。
+- [ ] docker：`docker save` 指定平台镜像。
+- [ ] `rospm export --target aarch64` / `rospm import`；导入后走 `apply --locked --offline`。
+- **产出**：联网 x86 机器导出，断网 arm64 机器导入并成功编译运行。
+
+---
+
+## Phase 6 — 编辑器集成与打磨（约 2 周）
+
+状态：**未开始**。`editor` 返回 NotImplemented(P6)。
+
+- [ ] 生成 `.vscode/settings.json`、`c_cpp_properties.json`、`launch.json`。
+- [ ] CLion 走 `compile_commands.json`。
+- [ ] devcontainer 复用未来 Docker 提供者产物。
+- [ ] shell 补全、`doctor` 扩展自检、错误信息润色、文档站。
+
+---
+
+## Phase 7 — GUI（选装，独立排期）
+
+状态：**未开始**。
+
+- [ ] Tauri 或 egui，只调用与 CLI 相同的库层（`rospm-core`），不另写业务逻辑。
+- [ ] 功能：清单编辑、check / verify 结果可视化、导出向导。
+
+---
+
+## Phase 8 — Pixi 提供者（约 3 周）
 
 状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库（`rospm-core::pixi`）已合并，尚未接入 CLI。
-前置：P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
+前置：Phase 3 的 aarch64 验收、Phase 4 的 1.0 release 与 Phase 7 的 GUI；P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
 
 - [~] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
   - [x] 核心库 `rospm-core::pixi`（2026-09-26，codex 实现、主会话 review 并补测试）：`generate` 输出 RoboStack channel、`linux-64` / `linux-aarch64` 平台、底包与构建工具、`[activation.env]`、按叠加顺序的 `build-<ws>` 任务与汇总 `build` 任务；`read_summary` 读取现有 `pixi.toml`（含 `[project]` 与表形式 channel）。2026-09-26 已合并到 main。
@@ -168,57 +224,11 @@
 
 ---
 
-## Phase 4 — Docker 提供者（约 2–3 周）
+## Phase 9 — Docker 提供者（约 2–3 周）
 
-状态：**未开始**。`ProviderKind::Docker` 目前为 `Unimplemented` 占位。可与 P3 并行，都依赖 P2 的 Provider 抽象。
+状态：**未开始**。`ProviderKind::Docker` 目前为 `Unimplemented` 占位，前置为 Phase 3 的 aarch64 验收、Phase 4 的 1.0 release 与 Phase 7 的 GUI。
 
 - [ ] 从清单生成 `Dockerfile`（分层：底包 → rosdep 依赖 → 源码 → 编译）、`compose.yaml`、`devcontainer.json`。
 - [ ] 锁定记录 image digest；`apply` 即 build，`shell` 即 `exec`。
-- [ ] 用 `buildx` 支持 `--platform linux/arm64`，为 P5 铺路。
+- [ ] 用 `buildx` 支持 `--platform linux/arm64`，复用 Phase 3 的 QEMU 测试环境验证跨架构镜像。
 - **产出**：`rospm apply` 直接产出可运行的镜像，`rospm shell` 进入容器且 ROS 环境就位。
-
----
-
-## Phase 5 — aarch64 与平台覆盖（约 3 周）
-
-状态：**未开始**。清单的 `[target.<platform>]` 覆盖/替换/排除已在 schema 与 `check --target` 中实现，但仓库索引查询与映射表未做。
-
-- [x] 清单 `[target.<arch>]` 段：覆盖、替换、排除（schema + `effective_apt` 合并）。
-- [ ] `rospm check --target aarch64`：查询 apt / conda 仓库索引，报告目标架构缺失的包。
-- [ ] 内置可更新的替换映射表，与用户声明合并，用户声明优先。
-- [ ] CI 增加 aarch64 集成矩阵（GitHub ARM runner，缺失时 QEMU）。
-- **产出**：x86 上生成的锁文件，在 Raspberry Pi / Jetson 上 `apply --locked` 成功，缺失包有明确替代或明确报错。
-
----
-
-## Phase 6 — 离线导出与导入（约 3–4 周）
-
-状态：**未开始**。`export` / `import` 返回 NotImplemented(P6)；`apply --offline` 同样。
-
-- [ ] 定义 bundle 格式：`manifest + lock + sources/ + payload/ + SHA256SUMS`（spec §5，决策 #10）。
-- [ ] native：`apt-get download` 求闭包，`dpkg-scanpackages` 生成本地仓库；`dpkg --add-architecture` 跨架构下载。
-- [ ] pixi：调用 `pixi-pack --platform`。
-- [ ] docker：`docker save` 指定平台镜像。
-- [ ] `rospm export --target aarch64` / `rospm import`；导入后走 `apply --locked --offline`。
-- **产出**：联网 x86 机器导出，断网 arm64 机器导入并成功编译运行。
-
----
-
-## Phase 7 — 编辑器集成与打磨（约 2 周）
-
-状态：**未开始**。`editor` 返回 NotImplemented(P7)。
-
-- [ ] 生成 `.vscode/settings.json`、`c_cpp_properties.json`、`launch.json`。
-- [ ] CLion 走 `compile_commands.json`。
-- [ ] devcontainer 复用 P4 产物。
-- [ ] shell 补全、`doctor` 扩展自检、错误信息润色、文档站。
-- [ ] 1.0 发布，冻结 manifest / lock schema v1。
-
----
-
-## Phase 8 — GUI（选装，独立排期）
-
-状态：**未开始**。
-
-- [ ] Tauri 或 egui，只调用与 CLI 相同的库层（`rospm-core`），不另写业务逻辑。
-- [ ] 功能：清单编辑、check / verify 结果可视化、导出向导。
