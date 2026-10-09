@@ -69,6 +69,11 @@ impl FromStr for Platform {
     type Err = ParsePlatformError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "aarch64" | "arm64" => return Ok(Self::LinuxAarch64),
+            "x86_64" | "amd64" => return Ok(Self::LinuxX86_64),
+            _ => {}
+        }
         Platform::ALL
             .iter()
             .copied()

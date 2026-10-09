@@ -2,6 +2,20 @@
 # 不翻译：子命令名、参数名、清单键值、--json 的键名与枚举值、计划里的 shell 命令。
 # 占位符写法为 %{name}。
 
+repository:
+  header: "仓库包可用性（%{platform}）"
+  ready: "所有已检查的包名均存在于目标仓库索引中"
+  not_ready: "仓库检查未通过：%{summary}"
+  available: "目标仓库索引中可用"
+  found: "已找到 %{platform} 的包"
+  missing: "未找到 %{platform} 的包"
+  incomplete: "%{platform} 的索引查询不完整"
+  offline: "ROSPM_NO_NETWORK 已禁用网络"
+  invalid: "仓库索引无效"
+  unsupported: "暂不支持此配置的仓库检查"
+  pixi_unsupported: "Pixi 必须声明 channel；此检查暂不支持 feature 环境"
+  pixi_invalid: "pixi channel 或依赖表格式无效"
+
 pixi:
   parse: "无法解析 pixi.toml：%{source}"
 
@@ -36,7 +50,7 @@ cli:
     target: "按此目标平台而非本机评估平台覆盖"
     strict: "本机与清单不符时以非零退出码退出"
     platform_not_listed: "平台 %{platform} 未列在 project.platforms 中"
-    target_note: "目标平台的仓库可用性在路线图 P5 中检查；这里只应用了清单层面的覆盖"
+    target_note: "查询目标仓库索引中的声明包名；不求解版本约束和传递依赖"
     probing_skipped: "已跳过环境探测：目标 %{target} 与本机（%{host}）不同"
     manifest_line: "清单        %{path}"
     project_line: "项目        %{name}（ROS %{distro}，提供者 %{provider}）"

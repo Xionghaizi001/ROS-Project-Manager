@@ -391,6 +391,9 @@ impl Manifest {
 
         for key in self.target.keys() {
             match key.parse::<Platform>() {
+                Ok(p) if key != p.as_str() => {
+                    errs.push(msg!("manifest.target_unknown_platform", key = key))
+                }
                 Ok(p) if !self.project.platforms.contains(&p) => {
                     errs.push(msg!("manifest.target_not_listed", key = key))
                 }

@@ -7,6 +7,20 @@
 _test:
   en_only: "english only"
 
+repository:
+  header: "Repository package availability (%{platform})"
+  ready: "All checked package names are available in target indexes"
+  not_ready: "Repository check incomplete: %{summary}"
+  available: "Available in target repository indexes"
+  found: "Found for %{platform}"
+  missing: "Not found for %{platform}"
+  incomplete: "Index queries incomplete for %{platform}"
+  offline: "Network disabled by ROSPM_NO_NETWORK"
+  invalid: "Invalid repository index"
+  unsupported: "Repository checking is unsupported for this configuration"
+  pixi_unsupported: "Pixi channels are required; feature environments are not supported by this check"
+  pixi_invalid: "Invalid pixi channels or dependency tables"
+
 pixi:
   parse: "could not parse pixi.toml: %{source}"
 
@@ -41,7 +55,7 @@ cli:
     target: "Evaluate platform overrides for this target instead of the host"
     strict: "Exit non-zero when the host does not match the manifest"
     platform_not_listed: "platform %{platform} is not listed in project.platforms"
-    target_note: "repository availability for the target platform is checked in roadmap P5; only manifest-level overrides were applied"
+    target_note: "Target repository indexes are checked for declared package names; versions and transitive dependencies are not solved"
     probing_skipped: "environment probing skipped: target %{target} differs from this host (%{host})"
     manifest_line: "manifest    %{path}"
     project_line: "project     %{name} (ROS %{distro}, provider %{provider})"

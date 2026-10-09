@@ -239,7 +239,7 @@ version = "1.26.4"
 | 命令 | 级别 | 作用 | `--dry-run` |
 |---|---|---|---|
 | `init [--from-env] [--base ros-base\|desktop]` | 写项目文件 / 幂等 | 生成清单模板；`--from-env` 尽力探测（决策 #3）；`--base` 选底包元包（默认 `ros-base`，`desktop` 含 RViz / demos），写入 `environment.native.ros_base`；已存在不覆盖，需 `--force` | — |
-| `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；默认只报告（退出码 0），`--strict` 在主机未就绪时退出 1；`--target` 与主机不同则跳过探测，P5 起查目标架构包可用性 | — |
+| `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；显式 `--target` 查询 apt / conda 目标仓库索引，跨架构时跳过主机探测；默认只报告（退出码 0），`--strict` 在所执行的检查有缺失或未知项时退出 1 | — |
 | `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
 | `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
 | `apply [--locked] [--offline] [--mirror <name>]` | 修改系统 | 先测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
@@ -254,6 +254,10 @@ version = "1.26.4"
 | `doctor [--no-network]` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用；ROS apt 源 / `universe` / locale 状态；官方源与各镜像的测速表（§4.1.1） | — |
 
 全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`（P1.5 起，见 §4.2）。
+
+`check --target aarch64`（也接受 `linux-aarch64` / `arm64`）的仓库检查独立输出为 JSON 的 `repositories.items`；未指定 `--target` 时该字段为 `null`，不联网查询索引。native 查询官方 ROS 与 Ubuntu 的目标架构索引（arm64 使用 Ubuntu ports），覆盖 release / updates / security 的四个组件，检查平台覆盖合并后的 apt 包、底包及三个构建工具包。pixi 读取配置的 `pixi.toml`，不存在则在内存中生成默认配置；查询各 channel 的目标子目录及 `noarch` 的完整 `repodata.json.bz2`，包含普通、host、build 与适用 target 依赖，暂不支持 feature 环境。需安装 `gzip`（apt）或 `bzip2`（conda）。
+
+这里仅检查包名存在性，不求解版本约束、虚拟包或传递依赖，也不代表目标主机已安装或可成功构建。成功索引中存在包即报告 `ok`；全部索引查询成功仍找不到才报告 `missing`；下载、解压、解析失败或 `ROSPM_NO_NETWORK=1` 则报告 `unknown`，`--strict` 退出 1。该检查不修改主机 apt 源、不注册额外架构，也不替代包管理器安装时的签名验证。
 
 ### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
 

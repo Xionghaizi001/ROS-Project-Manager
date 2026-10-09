@@ -173,6 +173,11 @@ fn uninstall_refuses_without_a_terminal_and_dry_run_only_prints() {
 
 #[test]
 fn check_for_a_foreign_target_skips_probing() {
+    let target = if cfg!(target_arch = "aarch64") {
+        "linux-x86_64"
+    } else {
+        "linux-aarch64"
+    };
     let dir = fixture("target");
     let out = rospm()
         .current_dir(&dir)
@@ -182,7 +187,8 @@ fn check_for_a_foreign_target_skips_probing() {
     assert!(out.status.success());
     let out = rospm()
         .current_dir(&dir)
-        .args(["check", "--target", "linux-aarch64", "--json"])
+        .args(["check", "--target", target, "--json"])
+        .env("ROSPM_NO_NETWORK", "1")
         .output()
         .unwrap();
     assert!(
@@ -197,6 +203,33 @@ fn check_for_a_foreign_target_skips_probing() {
         .unwrap()
         .iter()
         .any(|n| n.as_str().unwrap().contains("probing skipped")));
+}
+
+#[test]
+fn target_repository_offline_is_unknown_and_strict_fails() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/minimal/rospm.toml");
+    for strict in [false, true] {
+        let mut cmd = rospm();
+        cmd.args([
+            "--manifest",
+            example.to_str().unwrap(),
+            "check",
+            "--target",
+            "aarch64",
+            "--json",
+        ])
+        .env("ROSPM_NO_NETWORK", "1");
+        if strict {
+            cmd.arg("--strict");
+        }
+        let out = cmd.output().unwrap();
+        assert_eq!(out.status.success(), !strict);
+        let report = json(&out);
+        assert_eq!(report["evaluated_platform"], "linux-aarch64");
+        let items = report["repositories"]["items"].as_array().unwrap();
+        assert!(!items.is_empty());
+        assert!(items.iter().all(|item| item["status"] == "unknown"));
+    }
 }
 
 #[test]

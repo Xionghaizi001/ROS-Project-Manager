@@ -189,17 +189,36 @@ fn apply_locked_dry_run_plans_the_pinned_snapshot_and_never_touches_the_network(
     // happen. The core tests (`tests/plan.rs`) cover both cases on fake hosts.
     let keyring = Path::new("/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg");
     let keyring_usable = fs::read(keyring).is_ok_and(|b| !rospm_core::plan::is_ascii_armored(&b));
-    if !keyring_usable {
+    let sources = rospm_core::probe::AptSources::probe();
+    let foreign_source = sources
+        .ros2
+        .as_deref()
+        .filter(|path| *path != Path::new(rospm_core::probe::ROS_APT_LIST));
+    if let Some(path) = foreign_source {
+        // Foreign sources are deliberately preserved, even with --locked.
+        // The core plan tests cover this policy independently of the host.
         assert!(
-            stdout.contains("4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA"),
+            stdout.contains("the locked ROS snapshot was not applied"),
+            "{stdout}"
+        );
+        assert!(stdout.contains(&path.display().to_string()), "{stdout}");
+        assert!(
+            !stdout.contains("write /etc/apt/sources.list.d/ros2.list"),
+            "{stdout}"
+        );
+    } else {
+        if !keyring_usable {
+            assert!(
+                stdout.contains("4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA"),
+                "{stdout}"
+            );
+        }
+        // Written or already configured, the snapshot URL shows up either way.
+        assert!(
+            stdout.contains(&format!("snapshots.ros.org/{distro}/2026-09-11/ubuntu")),
             "{stdout}"
         );
     }
-    // Written or already configured, the snapshot URL shows up either way.
-    assert!(
-        stdout.contains(&format!("snapshots.ros.org/{distro}/2026-09-11/ubuntu")),
-        "{stdout}"
-    );
     // A separate, rospm-owned Ubuntu snapshot file; Ubuntu's own sources.list
     // is never mentioned.
     assert!(

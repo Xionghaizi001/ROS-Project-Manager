@@ -219,13 +219,17 @@ pub fn fetch_packages(fetch: &dyn Fetch, url: &str) -> Result<BTreeSet<(String, 
 
 /// `gzip -dc` (always present on Ubuntu; avoids a compression dependency).
 fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, Message> {
-    let mut child = process::Command::new("gzip")
+    decompress(bytes, "gzip")
+}
+
+pub(crate) fn decompress(bytes: &[u8], program: &str) -> Result<Vec<u8>, Message> {
+    let mut child = process::Command::new(program)
         .arg("-dc")
         .stdin(process::Stdio::piped())
         .stdout(process::Stdio::piped())
         .stderr(process::Stdio::piped())
         .spawn()
-        .map_err(|e| Message::text(format!("gzip: {e}")))?;
+        .map_err(|e| Message::text(format!("{program}: {e}")))?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let input = bytes.to_vec();
     // Written from another thread: a large index would otherwise fill the
@@ -233,11 +237,11 @@ fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, Message> {
     let writer = std::thread::spawn(move || stdin.write_all(&input));
     let out = child
         .wait_with_output()
-        .map_err(|e| Message::text(format!("gzip: {e}")))?;
+        .map_err(|e| Message::text(format!("{program}: {e}")))?;
     let _ = writer.join();
     if !out.status.success() {
         return Err(Message::text(format!(
-            "gzip: {}",
+            "{program}: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         )));
     }

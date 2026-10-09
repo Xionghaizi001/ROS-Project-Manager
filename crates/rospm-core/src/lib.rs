@@ -34,6 +34,7 @@ pub mod platform;
 pub mod probe;
 pub mod provider;
 pub mod repos;
+pub mod repository;
 pub mod scm;
 pub mod snapshot;
 

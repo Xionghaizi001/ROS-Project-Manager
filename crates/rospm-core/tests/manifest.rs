@@ -165,6 +165,11 @@ fn reserved_env_is_rejected() {
 
 #[test]
 fn target_platform_must_be_declared() {
+    // CLI aliases must not silently create override tables that target_for ignores.
+    let text = format!("{MINIMAL}\n[target.amd64.exclude]\napt = [\"x\"]\n");
+    assert!(validation_errors(&text)
+        .iter()
+        .any(|e| e == "manifest.target_unknown_platform(key=amd64)"));
     let text = format!("{MINIMAL}\n[target.linux-aarch64.exclude]\napt = [\"x\"]\n");
     let errs = validation_errors(&text);
     assert!(

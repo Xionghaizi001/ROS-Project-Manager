@@ -282,6 +282,7 @@ struct CheckReport {
     pip_recorded: Vec<String>,
     notes: Vec<String>,
     environment: EnvSummary,
+    repositories: Option<rospm_core::probe::EnvReport>,
 }
 
 pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<()> {
@@ -365,6 +366,14 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
         },
     };
 
+    let repositories = target.map(|_| {
+        rospm_core::repository::check(
+            m,
+            &loaded.root,
+            platform,
+            &rospm_core::snapshot::Http::default(),
+        )
+    });
     let report = CheckReport {
         ok: true,
         manifest: loaded.path.display().to_string(),
@@ -383,9 +392,12 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
         pip_recorded: m.dependencies.pip.clone(),
         notes,
         environment,
+        repositories,
     };
 
-    let strict_failed = strict && !report.environment.ready;
+    let strict_failed = strict
+        && ((!cross && !report.environment.ready)
+            || report.repositories.as_ref().is_some_and(|r| !r.ready()));
 
     if global.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -442,6 +454,9 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
             println!("{}", msg!("cli.check.note_line", text = n));
         }
         println!("{}", tr("cli.check.valid_line"));
+        if let Some(r) = &report.repositories {
+            print_check_report(r, &report.evaluated_platform, true);
+        }
         if let Some(r) = &env_report {
             println!();
             print_env_report(r, &report.evaluated_platform);
@@ -457,7 +472,16 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
 /// Expected-vs-actual table. Read-only; the hints point at the command that
 /// would change things, nothing is executed here.
 fn print_env_report(r: &EnvReport, platform: &str) {
-    println!("{}", msg!("cli.check.env_header", platform = platform));
+    print_check_report(r, platform, false);
+}
+
+fn print_check_report(r: &EnvReport, platform: &str, repositories: bool) {
+    let header = if repositories {
+        msg!("repository.header", platform = platform)
+    } else {
+        msg!("cli.check.env_header", platform = platform)
+    };
+    println!("{header}");
     let subjects: Vec<String> = r.items.iter().map(|i| i.subject.to_string()).collect();
     let width = subjects
         .iter()
@@ -485,7 +509,14 @@ fn print_env_report(r: &EnvReport, platform: &str) {
     let problems = r.problems();
     let unknown = r.unknown();
     if r.ready() {
-        println!("{}", tr("cli.check.ready"));
+        println!(
+            "{}",
+            tr(if repositories {
+                "repository.ready"
+            } else {
+                "cli.check.ready"
+            })
+        );
     } else {
         let mut parts = Vec::new();
         if problems == 1 {
@@ -498,7 +529,11 @@ fn print_env_report(r: &EnvReport, platform: &str) {
         }
         println!(
             "{}",
-            msg!("cli.check.not_ready", summary = parts.join(", "))
+            if repositories {
+                msg!("repository.not_ready", summary = parts.join(", "))
+            } else {
+                msg!("cli.check.not_ready", summary = parts.join(", "))
+            }
         );
     }
 }
