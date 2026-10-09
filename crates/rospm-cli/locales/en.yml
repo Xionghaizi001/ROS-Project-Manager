@@ -451,7 +451,8 @@ init:
     env_unsupported: "project.ros_distro: $ROS_DISTRO is `%{value}`, which rospm does not support (humble, jazzy, rolling)"
     from_ament: "project.ros_distro: %{distro} from $AMENT_PREFIX_PATH"
     only_install: "project.ros_distro: %{distro} is the only ROS install under /opt/ros"
-    none: "project.ros_distro: no $ROS_DISTRO and no supported ROS install under /opt/ros; defaulted to jazzy"
+    from_ubuntu: "project.ros_distro: %{distro} from the Ubuntu ROS release mapping"
+    none: "project.ros_distro: no $ROS_DISTRO, supported ROS install, or Ubuntu release mapping; review the generated value"
     several: "project.ros_distro: several ROS installs found (%{distros}); source one before running `init --from-env`, or pick manually (defaulted to %{default})"
   ubuntu:
     unsupported_release: "environment.native.ubuntu: host runs Ubuntu %{version}, which is outside the supported matrix (22.04, 24.04)"

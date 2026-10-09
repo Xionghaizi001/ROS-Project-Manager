@@ -446,7 +446,8 @@ init:
     env_unsupported: "project.ros_distro：$ROS_DISTRO 为 `%{value}`，rospm 不支持（humble、jazzy、rolling）"
     from_ament: "project.ros_distro：%{distro}，来自 $AMENT_PREFIX_PATH"
     only_install: "project.ros_distro：%{distro} 是 /opt/ros 下唯一的 ROS 安装"
-    none: "project.ros_distro：没有 $ROS_DISTRO，/opt/ros 下也没有受支持的 ROS 安装；默认为 jazzy"
+    from_ubuntu: "project.ros_distro：%{distro}，来自 Ubuntu ROS 发行版映射"
+    none: "project.ros_distro：没有 $ROS_DISTRO、受支持的 ROS 安装或可用的 Ubuntu 映射；请检查生成的值"
     several: "project.ros_distro：发现多个 ROS 安装（%{distros}）；请先 source 其中一个再运行 `init --from-env`，或手动选择（默认为 %{default}）"
   ubuntu:
     unsupported_release: "environment.native.ubuntu：本机为 Ubuntu %{version}，不在支持矩阵内（22.04、24.04）"

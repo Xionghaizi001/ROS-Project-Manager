@@ -311,7 +311,27 @@ fn detect_distro(d: &mut Draft, facts: &HostFacts) {
             d.notes
                 .push(msg!("init.ros_distro.only_install", distro = one));
         }
-        [] => d.todos.push(msg!("init.ros_distro.none")),
+        [] => {
+            // A clean host has no ROS installation to inspect. Ubuntu's ROS
+            // release matrix still gives us a reliable distro choice.
+            let from_ubuntu = facts.os.as_ref().and_then(|os| {
+                if !os.is_ubuntu() {
+                    return None;
+                }
+                match os.version_id.as_deref() {
+                    Some("22.04") => Some(RosDistro::Humble),
+                    Some("24.04") => Some(RosDistro::Jazzy),
+                    _ => None,
+                }
+            });
+            if let Some(distro) = from_ubuntu {
+                d.ros_distro = Some(distro);
+                d.notes
+                    .push(msg!("init.ros_distro.from_ubuntu", distro = distro));
+            } else {
+                d.todos.push(msg!("init.ros_distro.none"));
+            }
+        }
         many => d.todos.push(msg!(
             "init.ros_distro.several",
             distros = many
@@ -1165,6 +1185,24 @@ mod tests {
             .todos
             .iter()
             .any(|t| t.key_name() == Some("init.ros_distro.several")));
+        d.validate().unwrap();
+    }
+
+    #[test]
+    fn clean_ubuntu_host_uses_matching_ros_release() {
+        let root = tmp("ubuntu-release");
+        let mut facts = HostFacts::empty();
+        facts.os = Some(OsRelease::parse("ID=ubuntu\nVERSION_ID=\"22.04\"\n"));
+        let d = draft(&root, &facts);
+        assert_eq!(d.ros_distro, Some(RosDistro::Humble));
+        assert!(d
+            .notes
+            .iter()
+            .any(|n| n.key_name() == Some("init.ros_distro.from_ubuntu")));
+        assert!(!d
+            .todos
+            .iter()
+            .any(|t| t.key_name() == Some("init.ros_distro.none")));
         d.validate().unwrap();
     }
 

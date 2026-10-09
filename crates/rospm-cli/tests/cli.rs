@@ -389,7 +389,7 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("sudo apt-get install -y ros-jazzy-ros-base"),
+        stdout.contains("sudo apt-get install -y ros-humble-ros-base"),
         "{stdout}"
     );
 
