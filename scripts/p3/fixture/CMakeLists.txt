@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(p3_native)
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+add_executable(probe src/probe.cpp)
+ament_target_dependencies(probe rclcpp)
+install(TARGETS probe DESTINATION lib/${PROJECT_NAME})
+ament_package()

@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-19。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-20。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -39,12 +39,13 @@
 
 ## Phase 3 — aarch64 与平台覆盖（约 3 周）
 
-状态：**进行中**。目标仓库索引查询已完成并通过回归验证（2026-10-09）；内置替换映射表已完成（2026-10-19），aarch64 集成验收尚未开始。
+状态：**QEMU 开发验收完成，原生 ARM 发布验收待执行**（2026-10-20）。目标仓库索引查询已完成并通过回归验证（2026-10-09）；内置替换映射表已完成（2026-10-19）；已自行搭建 Docker + QEMU 环境并通过 aarch64 集成验收，正式发布前再使用原生 ARM runner 复测。
 
 - [x] `rospm check --target aarch64`：查询 apt / conda 仓库索引，报告目标架构缺失的包（2026-10-09）。覆盖 apt 平台合并、Ubuntu ports 与更新/安全组件、conda 目标子目录与 `noarch`；失败索引报告 `unknown`，`--strict` 返回非零。单测、CLI 本地 HTTP 集成测试与真实网络查询证据见 [p3-repository-validation.md](p3-repository-validation.md)。
 - [x] 内置可更新的替换映射表，与用户声明合并，用户声明优先（2026-10-19）：带修订号的独立 TOML 随版本更新，首批为 GNU aarch64 目标工具链包名；用户同名规则可禁用默认项，按追加 → 单次替换 → 排除 → 去重合并。仓库检查、普通安装与锁定共用解析结果，展示替换来源；`apply --locked` 保持锁记录包名。核心与 CLI 回归覆盖合并优先级、中英文提示、仓库查询、安装计划及锁定重放，维护说明见 [替换映射表](replacements.md)。
-- [ ] 在 Docker 容器内搭建 QEMU aarch64 环境，运行 native 提供者的 `check` / `apply --locked` / `build` / `ros2 run` 集成测试，验证 aarch64 的可用性与兼容性；优先使用 GitHub ARM runner，缺失时以 QEMU 作为稳定回退。
-- **产出**：x86 上生成的锁文件，在 Raspberry Pi / Jetson 上 `apply --locked` 成功，缺失包有明确替代或明确报错。
+- [x] 在 Docker 容器内搭建 QEMU aarch64 环境，运行 native 提供者的 `check` / `apply --locked` / `build` / `ros2 run` 集成测试（2026-10-20）。Ubuntu 24.04 / Jazzy 的全新 ARM 容器真实还原成功，`verify` / `deps check` 通过，节点输出 `P3_NATIVE_OK arch=aarch64 node=p3_native_probe`；重复还原无包变更，再次采集保持两平台各 205 条包版本、源码记录和清单哈希一致；替换映射及缺包报错验证通过。可重跑脚本为 `scripts/p3-qemu-check.sh`，流程与证据见 [QEMU 集成验收](p3-qemu-validation.md)。
+- [ ] 正式发布前使用 GitHub `ubuntu-24.04-arm` 原生 runner 复测同一 fixture 的锁定还原、编译和节点运行，保留日志（发布门槛，当前不依赖 runner）。
+- **产出**：开发阶段已验证 x86 最终生成的多平台锁在 QEMU aarch64 上 `apply --locked`、构建和节点运行成功，缺失包有明确替代或明确报错。正式发布前通过原生 ARM runner 复测；当前未验证 Raspberry Pi / Jetson 的硬件接口与驱动。
 
 ---
 
