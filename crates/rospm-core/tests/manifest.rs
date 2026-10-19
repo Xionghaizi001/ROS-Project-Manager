@@ -230,3 +230,86 @@ fn manifest_round_trips_through_toml() {
         m.effective_apt(Platform::LinuxAarch64)
     );
 }
+
+#[test]
+fn builtin_apt_defaults_apply_without_a_target_table_and_match_exact_names() {
+    let mut m = parse(FULL).unwrap();
+    m.target.clear();
+    m.dependencies.apt = [
+        "gcc-x86-64-linux-gnu",
+        "gcc-aarch64-linux-gnu",
+        "g++-x86-64-linux-gnu",
+        "binutils-x86-64-linux-gnu",
+        "libc6-dev-amd64-cross",
+        "gcc-x86-64-linux-gnu=13.2",
+        "gcc-x86-64-linux-gnu:amd64",
+        "nvidia-cuda-toolkit",
+        "libmkl-dev",
+    ]
+    .map(String::from)
+    .to_vec();
+    assert_eq!(m.effective_apt(Platform::LinuxX86_64), m.dependencies.apt);
+    let resolved = m.resolve_apt(Platform::LinuxAarch64);
+    assert_eq!(
+        resolved.packages,
+        vec![
+            "gcc-aarch64-linux-gnu",
+            "g++-aarch64-linux-gnu",
+            "binutils-aarch64-linux-gnu",
+            "libc6-dev-arm64-cross",
+            "gcc-x86-64-linux-gnu=13.2",
+            "gcc-x86-64-linux-gnu:amd64",
+            "nvidia-cuda-toolkit",
+            "libmkl-dev",
+        ]
+    );
+    assert_eq!(resolved.replacements.len(), 4);
+    assert!(resolved
+        .replacements
+        .iter()
+        .all(|r| r.source == rospm_core::replacements::ReplacementSource::Builtin));
+}
+
+#[test]
+fn user_rules_override_defaults_before_one_pass_replacement_and_final_exclusion() {
+    use rospm_core::replacements::ReplacementSource;
+
+    let mut m = parse(FULL).unwrap();
+    m.dependencies.apt = vec!["gcc-x86-64-linux-gnu".into()];
+    let target = m.target.get_mut("linux-aarch64").unwrap();
+    target.dependencies.apt = vec![
+        "g++-x86-64-linux-gnu".into(),
+        "binutils-x86-64-linux-gnu".into(),
+        "gcc-x86-64-linux-gnu".into(),
+    ];
+    target.replace.clear();
+    // A same-name override disables a built-in rule for this project.
+    target
+        .replace
+        .insert("gcc-x86-64-linux-gnu".into(), "gcc-x86-64-linux-gnu".into());
+    // Neither a built-in nor a user result is replaced a second time.
+    target
+        .replace
+        .insert("g++-aarch64-linux-gnu".into(), "must-not-chain".into());
+    target.replace.insert(
+        "binutils-x86-64-linux-gnu".into(),
+        "gcc-x86-64-linux-gnu".into(),
+    );
+    let resolved = m.resolve_apt(Platform::LinuxAarch64);
+    assert_eq!(
+        resolved.packages,
+        vec!["gcc-x86-64-linux-gnu", "g++-aarch64-linux-gnu"]
+    );
+    assert_eq!(resolved.replacements.len(), 2);
+    assert_eq!(resolved.replacements[0].source, ReplacementSource::Builtin);
+    assert_eq!(resolved.replacements[1].source, ReplacementSource::Manifest);
+
+    let target = m.target.get_mut("linux-aarch64").unwrap();
+    target.exclude.apt = vec![
+        "gcc-x86-64-linux-gnu".into(),
+        "g++-aarch64-linux-gnu".into(),
+    ];
+    let resolved = m.resolve_apt(Platform::LinuxAarch64);
+    assert!(resolved.packages.is_empty());
+    assert!(resolved.replacements.is_empty());
+}

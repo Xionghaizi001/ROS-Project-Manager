@@ -118,7 +118,7 @@ sign = false
 | `workspaces.<name>` | 至少一个 | `path` 相对于清单所在目录；`sources` 可省略（纯本地源码） |
 | `workspaces.<name>.underlays` | 否 | 引用的 workspace 必须存在；整体必须是 DAG |
 | `dependencies.pip` | 否 | 只记录，`apply` 不执行 |
-| `target.<platform>.*` | 否 | `<platform>` 必须在 `project.platforms` 内；合并顺序：追加 → 替换 → 排除 |
+| `target.<platform>.*` | 否 | `<platform>` 必须在 `project.platforms` 内；合并顺序：追加 → 替换（用户规则优先于内置映射，同名覆盖可禁用默认项，只替换一次）→ 排除（匹配替换后包名）→ 按顺序去重；内置表与更新方式见 [替换映射表](replacements.md) |
 | `env.*` | 否 | 字符串；工具保留 `AMENT_PREFIX_PATH`、`COLCON_PREFIX_PATH` 由叠加顺序自动生成，用户声明时报错 |
 
 ### 2.3 叠加顺序的推导

@@ -251,7 +251,9 @@ fn resolve_apt(ctx: &Context, notes: &mut Vec<Message>) -> Result<Vec<LockedApt>
         .installed_with_prefix(&prefix)
         .ok_or_else(|| Error::Host(msg!("lock.dpkg_unavailable")))?;
     let mut wanted = vec![m.ros_base_package()];
-    wanted.extend(m.effective_apt(ctx.platform));
+    let apt = m.resolve_apt(ctx.platform);
+    notes.extend(apt.replacements.iter().map(|r| r.notice(ctx.platform)));
+    wanted.extend(apt.packages);
     wanted.extend(TOOLING.iter().map(|s| s.to_string()));
     for w in &wanted {
         if !names.contains(w) {

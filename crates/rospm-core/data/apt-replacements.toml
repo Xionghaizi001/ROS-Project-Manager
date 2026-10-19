@@ -1,0 +1,16 @@
+# Maintained defaults for explicitly declared apt dependencies. See
+# docs/replacements.md for scope, overrides, and the update procedure.
+schema_version = 1
+revision = "2026-10-19.1"
+
+# GNU target toolchain packages: preserve the tool's role, change its target.
+# Package references (Ubuntu 22.04 and 24.04):
+# https://packages.ubuntu.com/search?keywords=gcc-aarch64-linux-gnu&searchon=names&exact=1&suite=all&section=all
+# https://packages.ubuntu.com/search?keywords=g%2B%2B-aarch64-linux-gnu&searchon=names&exact=1&suite=all&section=all
+# https://packages.ubuntu.com/search?keywords=binutils-aarch64-linux-gnu&searchon=names&exact=1&suite=all&section=all
+# https://packages.ubuntu.com/search?keywords=libc6-dev-arm64-cross&searchon=names&exact=1&suite=all&section=all
+[target.linux-aarch64]
+gcc-x86-64-linux-gnu = "gcc-aarch64-linux-gnu"
+"g++-x86-64-linux-gnu" = "g++-aarch64-linux-gnu"
+binutils-x86-64-linux-gnu = "binutils-aarch64-linux-gnu"
+libc6-dev-amd64-cross = "libc6-dev-arm64-cross"

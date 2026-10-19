@@ -33,6 +33,7 @@ pub mod plan;
 pub mod platform;
 pub mod probe;
 pub mod provider;
+pub mod replacements;
 pub mod repos;
 pub mod repository;
 pub mod scm;

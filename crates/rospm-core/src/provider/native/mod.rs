@@ -723,12 +723,15 @@ impl Provider for Native {
         // 5. Extra apt packages after platform overrides — already installed
         // as part of the pinned set in step 2 under `--locked`.
         if locked_native.is_none() {
-            let apt = m.effective_apt(ctx.platform);
-            if !apt.is_empty() {
+            let apt = m.resolve_apt(ctx.platform);
+            for replacement in &apt.replacements {
+                plan.note(replacement.notice(ctx.platform));
+            }
+            if !apt.packages.is_empty() {
                 plan.run(
                     Command::new("apt-get")
                         .args(["install", "-y"])
-                        .args(apt)
+                        .args(apt.packages)
                         .sudo(),
                 );
             }

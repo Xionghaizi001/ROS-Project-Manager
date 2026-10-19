@@ -21,6 +21,10 @@ repository:
   pixi_unsupported: "Pixi channels are required; feature environments are not supported by this check"
   pixi_invalid: "Invalid pixi channels or dependency tables"
 
+replacement:
+  builtin: "apt[%{platform}]: %{from} -> %{to} (built-in mappings %{revision}); review target compatibility"
+  manifest: "apt[%{platform}]: %{from} -> %{to} (manifest override); review target compatibility"
+
 pixi:
   parse: "could not parse pixi.toml: %{source}"
 

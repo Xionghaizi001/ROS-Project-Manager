@@ -10,6 +10,57 @@ use std::process::Command;
 use common::*;
 
 #[test]
+fn check_shows_replacement_sources_in_both_languages_without_writing_the_manifest() {
+    let dir = fixture("replacement-notes");
+    let text = r#"
+schema_version = 1
+[project]
+name = "replacements"
+ros_distro = "jazzy"
+platforms = ["linux-x86_64", "linux-aarch64"]
+[environment]
+provider = "native"
+[workspaces.main]
+path = "ws"
+[dependencies]
+apt = ["gcc-x86-64-linux-gnu", "g++-x86-64-linux-gnu"]
+[target.linux-aarch64.replace]
+"g++-x86-64-linux-gnu" = "custom-cxx"
+"#;
+    fs::write(dir.join("rospm.toml"), text).unwrap();
+    for (lang, builtin, user) in [
+        ("en", "built-in mappings", "manifest override"),
+        ("zh", "内置映射表", "用户清单覆盖"),
+    ] {
+        let out = rospm()
+            .current_dir(&dir)
+            .args(["--lang", lang, "check", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v = json(&out);
+        assert_eq!(
+            v["effective_apt"]["linux-aarch64"],
+            serde_json::json!(["gcc-aarch64-linux-gnu", "custom-cxx"])
+        );
+        assert_eq!(
+            v["effective_apt"]["linux-x86_64"],
+            serde_json::json!(["gcc-x86-64-linux-gnu", "g++-x86-64-linux-gnu"])
+        );
+        let notes = v["notes"].to_string();
+        assert!(notes.contains(builtin) && notes.contains(user), "{notes}");
+        assert!(notes.contains("gcc-x86-64-linux-gnu -> gcc-aarch64-linux-gnu"));
+        assert!(!notes.contains("replacement.builtin"));
+    }
+    assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), text);
+    assert!(!dir.join(".rospm").exists());
+}
+
+#[test]
 fn init_from_env_writes_a_valid_manifest_that_check_accepts() {
     let dir = fixture("init");
     let manifest = dir.join("rospm.toml");

@@ -98,6 +98,42 @@ fn release(codename: &str) -> String {
 }
 
 #[test]
+fn arm_lock_records_the_resolved_package_version_and_replacement_notice() {
+    let (root, _) = project("arm-replacements", true);
+    let text = fs::read_to_string(root.join("rospm.toml"))
+        .unwrap()
+        .replace("apt = [\"curl\"]", "apt = [\"gcc-x86-64-linux-gnu\"]");
+    fs::write(root.join("rospm.toml"), text).unwrap();
+    let m = Manifest::load(&root.join("rospm.toml")).unwrap();
+    let mut host = synthetic_host();
+    host.platform = Some(Platform::LinuxAarch64);
+    host.packages = PackageDb::Static(parse_dpkg_query(
+        "ros-jazzy-ros-base\tinstalled\t0.11.0-1noble\ngcc-aarch64-linux-gnu\tinstalled\t4:13.2.0-7ubuntu1\n",
+    ));
+    let mut c = ctx(&m, &root, &host);
+    c.platform = Platform::LinuxAarch64;
+    let res = provider::for_manifest(&m).resolve_lock(&c, None).unwrap();
+    let gcc = res
+        .lock
+        .apt
+        .iter()
+        .find(|a| a.name == "gcc-aarch64-linux-gnu")
+        .unwrap();
+    assert_eq!(gcc.platform, Platform::LinuxAarch64);
+    assert_eq!(gcc.version, "4:13.2.0-7ubuntu1");
+    assert!(!res
+        .lock
+        .apt
+        .iter()
+        .any(|a| a.name == "gcc-x86-64-linux-gnu"));
+    assert!(res
+        .notes
+        .iter()
+        .any(|n| n.key_name() == Some("replacement.builtin")));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn lock_records_sources_apt_and_degrades_without_network() {
     let (root, head) = project("full", true);
     let m = Manifest::load(&root.join("rospm.toml")).unwrap();

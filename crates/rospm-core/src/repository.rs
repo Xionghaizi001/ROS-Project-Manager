@@ -345,6 +345,45 @@ apt = ["excluded"]
     }
 
     #[test]
+    fn apt_repository_checks_the_builtin_or_user_replacement_not_the_original() {
+        let mut m = manifest();
+        m.dependencies.apt = vec!["gcc-x86-64-linux-gnu".into()];
+        m.target.clear();
+        let fetch = Apt {
+            urls: Mutex::new(vec![]),
+            fail_ros: false,
+            body: compress(
+                "Package: gcc-aarch64-linux-gnu\nVersion: 1\nArchitecture: arm64\n",
+                "gzip",
+            ),
+        };
+        let report = check(&m, Path::new("."), Platform::LinuxAarch64, &fetch);
+        assert!(report
+            .items
+            .iter()
+            .any(|i| i.subject.to_string() == "gcc-aarch64-linux-gnu" && i.status == Status::Ok));
+        assert!(!report
+            .items
+            .iter()
+            .any(|i| i.subject.to_string() == "gcc-x86-64-linux-gnu"));
+
+        m.target
+            .entry("linux-aarch64".into())
+            .or_default()
+            .replace
+            .insert("gcc-x86-64-linux-gnu".into(), "custom-compiler".into());
+        let report = check(&m, Path::new("."), Platform::LinuxAarch64, &fetch);
+        assert!(report
+            .items
+            .iter()
+            .any(|i| i.subject.to_string() == "custom-compiler" && i.status == Status::Missing));
+        assert!(!report
+            .items
+            .iter()
+            .any(|i| i.subject.to_string() == "gcc-aarch64-linux-gnu"));
+    }
+
+    #[test]
     fn apt_uses_target_ports_and_all_pockets_and_distinguishes_failure() {
         let fetch = Apt { urls: Mutex::new(vec![]), fail_ros: false,
             body: compress("Package: extra\nVersion: 1\nArchitecture: all\n\nPackage: wrong\nVersion: 1\nArchitecture: amd64\n", "gzip") };

@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 use crate::message::Message;
 use crate::msg;
 use crate::platform::{Platform, RosDistro};
+use crate::replacements::{self, AptReplacement, AptResolution, ReplacementSource};
 
 pub const MANIFEST_FILE: &str = "rospm.toml";
 pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
@@ -503,22 +504,51 @@ impl Manifest {
         self.target.get(platform.as_str())
     }
 
-    /// Extra apt packages for `platform` after applying overrides
-    /// (append → replace → exclude), de-duplicated and order-preserving.
+    /// Extra apt packages after append → replace → exclude → deduplicate.
+    /// Manifest replacements override bundled defaults, including identity rules.
     pub fn effective_apt(&self, platform: Platform) -> Vec<String> {
+        self.resolve_apt(platform).packages
+    }
+
+    /// Resolve exact package names once (no chained or wildcard replacements).
+    /// Retain provenance for changes that survive the user's final exclusions.
+    pub fn resolve_apt(&self, platform: Platform) -> AptResolution {
+        let target = self.target_for(platform);
+        let defaults = replacements::builtin().target.get(&platform);
         let mut pkgs: Vec<String> = self.dependencies.apt.clone();
-        if let Some(t) = self.target_for(platform) {
+        if let Some(t) = target {
             pkgs.extend(t.dependencies.apt.iter().cloned());
-            for p in pkgs.iter_mut() {
-                if let Some(replacement) = t.replace.get(p.as_str()) {
-                    *p = replacement.clone();
+        }
+        let mut result = AptResolution::default();
+        let mut seen = HashSet::new();
+        for from in pkgs {
+            let rule = target
+                .and_then(|t| t.replace.get(&from))
+                .map(|to| (to, ReplacementSource::Manifest))
+                .or_else(|| {
+                    defaults
+                        .and_then(|rules| rules.get(&from))
+                        .map(|to| (to, ReplacementSource::Builtin))
+                });
+            let to = rule.map(|(to, _)| to).unwrap_or(&from);
+            if target.is_some_and(|t| t.exclude.apt.contains(to)) {
+                continue;
+            }
+            if let Some((to, source)) = rule.filter(|(to, _)| *to != &from) {
+                let replacement = AptReplacement {
+                    from: from.clone(),
+                    to: to.clone(),
+                    source,
+                };
+                if !result.replacements.contains(&replacement) {
+                    result.replacements.push(replacement);
                 }
             }
-            pkgs.retain(|p| !t.exclude.apt.contains(p));
+            if seen.insert(to.clone()) {
+                result.packages.push(to.clone());
+            }
         }
-        let mut seen = HashSet::new();
-        pkgs.retain(|p| seen.insert(p.clone()));
-        pkgs
+        result
     }
 
     /// Ubuntu release for the native provider.

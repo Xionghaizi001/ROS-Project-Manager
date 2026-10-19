@@ -337,7 +337,14 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
 
     let mut effective_apt = BTreeMap::new();
     for p in &m.project.platforms {
-        effective_apt.insert(p.to_string(), m.effective_apt(*p));
+        let resolved = m.resolve_apt(*p);
+        notes.extend(
+            resolved
+                .replacements
+                .iter()
+                .map(|r| r.notice(*p).to_string()),
+        );
+        effective_apt.insert(p.to_string(), resolved.packages);
     }
 
     // Probe the host only when the evaluated platform *is* the host; probing

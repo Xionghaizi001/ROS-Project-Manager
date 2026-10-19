@@ -699,6 +699,35 @@ fn native_apply_locked_degrades_to_the_live_repositories_when_the_lock_has_no_sn
 }
 
 #[test]
+fn native_apply_reports_builtin_replacements_but_locked_replay_keeps_recorded_names() {
+    let mut m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    m.dependencies.apt = vec!["gcc-x86-64-linux-gnu".into()];
+    let host = bare_host();
+    let mut c = ctx(&m, &host);
+    c.platform = Platform::LinuxAarch64;
+    let rendered = provider::for_manifest(&m).plan_apply(&c).unwrap().render();
+    assert!(rendered.contains("sudo apt-get install -y gcc-aarch64-linux-gnu"));
+    assert!(rendered.contains("replacement.builtin(platform=linux-aarch64, from=gcc-x86-64-linux-gnu, to=gcc-aarch64-linux-gnu, revision="));
+
+    let mut lock = locked(None, None);
+    for apt in &mut lock.apt {
+        apt.platform = Platform::LinuxAarch64;
+    }
+    lock.apt.push(LockedApt {
+        platform: Platform::LinuxAarch64,
+        name: "gcc-x86-64-linux-gnu".into(),
+        version: "13.2".into(),
+        sha256: None,
+    });
+    c.locked = true;
+    c.lock = Some(&lock);
+    let rendered = provider::for_manifest(&m).plan_apply(&c).unwrap().render();
+    assert!(rendered.contains("gcc-x86-64-linux-gnu=13.2"), "{rendered}");
+    assert!(!rendered.contains("gcc-aarch64-linux-gnu"), "{rendered}");
+    assert!(!rendered.contains("replacement.builtin"));
+}
+
+#[test]
 fn native_apply_locked_without_a_lock_is_an_error() {
     let m = Manifest::parse(FULL, Path::new("t")).unwrap();
     let host = bare_host();

@@ -16,6 +16,10 @@ repository:
   pixi_unsupported: "Pixi 必须声明 channel；此检查暂不支持 feature 环境"
   pixi_invalid: "pixi channel 或依赖表格式无效"
 
+replacement:
+  builtin: "apt[%{platform}]：%{from} -> %{to}（内置映射表 %{revision}）；请核对目标平台兼容性"
+  manifest: "apt[%{platform}]：%{from} -> %{to}（用户清单覆盖）；请核对目标平台兼容性"
+
 pixi:
   parse: "无法解析 pixi.toml：%{source}"
 
