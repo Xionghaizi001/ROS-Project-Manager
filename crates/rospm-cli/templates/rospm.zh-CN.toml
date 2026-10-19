@@ -3,15 +3,15 @@ schema_version = 1
 
 [project]
 name = "@NAME@"
-ros_distro = "jazzy"                     # humble | jazzy | rolling
+ros_distro = "@DISTRO@"                     # humble | jazzy | rolling
 platforms = ["linux-x86_64"]             # ARM 目标请加上 "linux-aarch64"
 
 [environment]
 provider = "native"                      # native | pixi | docker
 
 [environment.native]
-# ubuntu = "24.04"                       # 默认为该发行版对应的 Ubuntu 版本
-# ros_base = "ros-jazzy-ros-base"        # 或 ros-jazzy-desktop；`rospm init --base desktop` 会设置它
+# ubuntu = "@UBUNTU@"                       # 默认为该发行版对应的 Ubuntu 版本
+# ros_base = "ros-@DISTRO@-ros-base"        # 或 ros-@DISTRO@-desktop；`rospm init --base desktop` 会设置它
 
 [workspaces.main]
 path = "ws"

@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-09。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-19。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -26,6 +26,12 @@
 
 - [ ] 在 GitHub 实际跑通 CI（含 `ubuntu-24.04-arm` runner）。
 - [ ] `env --shell fish`（原 P1 未完成项）。
+- [x] `apply` 可安装指定的 ROS 发行版，而不是默认的 Jazzy（2026-10-19 提出）。已实现：`apply --distro` 持久化选择，`init` 支持指定发行版及按主机选择默认。
+  - [x] `apply --distro <humble|jazzy|rolling>`：与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符直接报错、不改任何东西；相符则把 `ros_distro` 写回清单（`ros_base` 若为 `ros-<旧发行版>-*` 一并改名），显式的 `environment.native.ubuntu` 同步为目标版本，再按新发行版执行；保留清单注释，`--dry-run` 只预览而不写回。发行版随项目走：写回清单而非一次性覆盖（2026-10-19 用户确认，决策 #18），保证随后的 `lock` / `verify` / `build` / `env` / `uninstall` 看到同一发行版。
+  - [x] `--locked` 与 `--distro` 不同时，锁文件哈希必然不匹配，直接报错提示先 `apply --distro` 再 `lock`。
+  - [x] 本机已装另一发行版时只在计划中说明（不自动卸载旧发行版，`uninstall` 按清单只卸当前发行版）。
+  - [x] `init --distro <名>`；不带参数时按主机 Ubuntu 选默认（22.04 → Humble，24.04 → Jazzy），无法识别时仍为 Jazzy。
+  - [x] 测试：计划输出（源 codename、底包名）、清单写回、Ubuntu 不符报错、`--locked` 冲突；`spec.md` 命令表同步。
 - [ ] 两台机器、间隔数周执行真实 `apply --locked`，`verify` 报告一致（22.04 / Humble 与 24.04 / Jazzy 的已有记录见上；独立机器同锁比较与后续间隔复测仍待执行）。
 - [ ] CI 增加 `lock` → 新容器 `apply --locked` → `verify` 场景。
 

@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{ArgAction, Command, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rospm_core::manifest::RosFlavor;
 use rospm_core::mirror::Mirror;
-use rospm_core::platform::Platform;
+use rospm_core::platform::{Platform, RosDistro};
 use rospm_core::provider::Shell;
 
 use commands::Global;
@@ -59,6 +59,8 @@ enum Cmd {
     Init {
         #[arg(long, help = tr("cli.init.from_env"))]
         from_env: bool,
+        #[arg(long, value_name = "NAME", conflicts_with = "from_env", help = tr("cli.init.distro"))]
+        distro: Option<RosDistro>,
         #[arg(long, value_name = "FLAVOR", value_parser = ["ros-base", "desktop"], hide_possible_values = true, help = tr("cli.init.base"))]
         base: Option<String>,
         #[arg(long, help = tr("cli.init.force"))]
@@ -84,6 +86,8 @@ enum Cmd {
 
     #[command(about = tr("cli.apply.about"))]
     Apply {
+        #[arg(long, value_name = "NAME", help = tr("cli.apply.distro"))]
+        distro: Option<RosDistro>,
         #[arg(long, help = tr("cli.apply.locked"))]
         locked: bool,
         #[arg(long, help = tr("cli.apply.offline"))]
@@ -242,18 +246,20 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Cmd::Init {
             from_env,
+            distro,
             base,
             force,
         } => {
             let base = base
                 .as_deref()
                 .map(|b| b.parse::<RosFlavor>().expect("validated by clap"));
-            commands::init(&global, from_env, base, force)
+            commands::init(&global, from_env, distro, base, force)
         }
         Cmd::Check { target, strict } => commands::check(&global, target, strict),
         Cmd::Lock { platform } => commands::lock(&global, platform),
         Cmd::Verify => commands::verify(&global),
         Cmd::Apply {
+            distro,
             locked,
             offline,
             mirror,
@@ -262,7 +268,7 @@ fn main() -> ExitCode {
             let mirror = mirror
                 .as_deref()
                 .map(|m| m.parse::<Mirror>().expect("validated by clap"));
-            commands::apply(&global, locked, offline, dry_run, mirror)
+            commands::apply(&global, locked, offline, dry_run, mirror, distro)
         }
         Cmd::Uninstall {
             keep_source,

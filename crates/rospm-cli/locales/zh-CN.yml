@@ -31,6 +31,7 @@ cli:
   dry_run: "只打印计划，不执行"
   init:
     about: "在当前目录生成 rospm.toml 模板"
+    distro: "模板的 ROS 发行版：humble | jazzy | rolling（默认 Ubuntu 22.04 选 Humble，否则 Jazzy；不与 --from-env 同用）"
     from_env: "根据本机与当前目录起草清单（尽力探测；探测不到的字段标 TODO）"
     base: "安装哪个 ROS 元包：`ros-base`（最小，默认）或 `desktop`（含 RViz、demos、教程）"
     force: "覆盖已存在的 rospm.toml"
@@ -90,6 +91,8 @@ cli:
     lock_line: "锁文件      %{path}"
   apply:
     about: "配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
+    distro: "选择 humble | jazzy | rolling 并写回清单（dry-run 只预览）"
+    locked_distro_conflict: "--locked 不能更改清单的发行版；请先运行 `rospm apply --distro <名>`，再运行 `rospm lock`"
     locked: "遵循 rospm.lock（快照仓库、固定版本）"
     offline: "只使用离线包中的内容，不访问网络"
     mirror: "从指定源集下载 ROS，跳过测速与询问：official | tuna | ustc | aliyun（也可用 `ROSPM_MIRROR`）"
@@ -318,6 +321,7 @@ native:
     title: "apply `%{name}`（native，%{distro}，%{platform}）"
     locked_degraded: "--locked：rospm.lock 中没有记录 %{what} 的快照；已降级为使用实时仓库"
     no_repo_for_ubuntu: "Ubuntu %{ubuntu}（environment.native.ubuntu）没有对应的 ROS apt 仓库；支持：22.04（humble）、24.04（jazzy、rolling）"
+    other_distros_kept: "保留其他已安装的 ROS 发行版：%{distros}；uninstall 只卸载清单中的发行版（%{distro}）"
     wrong_ubuntu: "清单要求 ROS %{distro} 使用 Ubuntu %{ubuntu}，而本机是 %{have}；rospm 不会安装或升级 Ubuntu 本身"
     os_release_unreadable: "/etc/os-release 不可读；按 Ubuntu %{ubuntu}（%{codename}）处理"
     locale_switched: "%{file}：LANG 设为 en_US.UTF-8（原为 %{from}）；这是登录时的默认值，请在当前 shell 中运行 `export LANG=en_US.UTF-8`，或重新登录"

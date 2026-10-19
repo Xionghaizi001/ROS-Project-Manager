@@ -36,6 +36,7 @@ cli:
   dry_run: "Print the plan and exit"
   init:
     about: "Create a rospm.toml template in the current directory"
+    distro: "ROS distribution for the template: humble | jazzy | rolling (default: Humble on Ubuntu 22.04, otherwise Jazzy; without --from-env)"
     from_env: "Draft the manifest from this host and directory (best effort; undetected fields are marked TODO)"
     base: "Which ROS metapackage to install: `ros-base` (bare bones, default) or `desktop` (adds RViz, demos, tutorials)"
     force: "Overwrite an existing rospm.toml"
@@ -95,6 +96,8 @@ cli:
     lock_line: "lock        %{path}"
   apply:
     about: "Set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
+    distro: "Select humble | jazzy | rolling and save it to the manifest (dry-run only previews)"
+    locked_distro_conflict: "--locked cannot change the manifest distribution; run `rospm apply --distro <name>` first, then `rospm lock`"
     locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
     offline: "Use only bundled payloads, never the network"
     mirror: "Download ROS from this source set instead of probing and asking: official | tuna | ustc | aliyun (also `ROSPM_MIRROR`)"
@@ -323,6 +326,7 @@ native:
     title: "apply `%{name}` (native, %{distro}, %{platform})"
     locked_degraded: "--locked: no %{what} snapshot recorded in rospm.lock; DEGRADED to the live repository"
     no_repo_for_ubuntu: "no ROS apt repository for Ubuntu %{ubuntu} (environment.native.ubuntu); supported: 22.04 (humble), 24.04 (jazzy, rolling)"
+    other_distros_kept: "keeping other installed ROS distributions: %{distros}; uninstall only removes the manifest distribution (%{distro})"
     wrong_ubuntu: "manifest needs Ubuntu %{ubuntu} for ROS %{distro}, this host is %{have}; rospm does not install or upgrade Ubuntu itself"
     os_release_unreadable: "/etc/os-release is unreadable; assuming Ubuntu %{ubuntu} (%{codename})"
     locale_switched: "%{file}: LANG set to en_US.UTF-8 (was %{from}); this is the login default, so run `export LANG=en_US.UTF-8` in the current shell or log in again"

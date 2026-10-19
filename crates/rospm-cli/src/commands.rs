@@ -18,8 +18,11 @@ use rospm_core::lock::{sha256_hex, Lock, LOCK_FILE};
 use rospm_core::manifest::{Manifest, RosFlavor, MANIFEST_FILE};
 use rospm_core::mirror::{self, Mirror};
 use rospm_core::net::{self, ProbeResult, Role, Verdict};
+use rospm_core::plan::Step;
 use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
-use rospm_core::probe::{EnvReport, Host, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, TOOLS};
+use rospm_core::probe::{
+    EnvReport, Host, OsRelease, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, TOOLS,
+};
 use rospm_core::provider::{self, Context, Shell};
 use rospm_core::repos::ReposFile;
 use rospm_core::snapshot::{Fetch, Http};
@@ -118,10 +121,8 @@ pub fn describe(err: &anyhow::Error) -> String {
 /// One template per language (comments differ, keys and values do not).
 const TEMPLATE_EN: &str = include_str!("../templates/rospm.en.toml");
 const TEMPLATE_ZH_CN: &str = include_str!("../templates/rospm.zh-CN.toml");
-/// `ros_distro` hard-coded in the templates; `--base` composes the package from it.
-const TEMPLATE_DISTRO: RosDistro = RosDistro::Jazzy;
 /// Start of the commented-out `ros_base` line that `--base` replaces.
-const TEMPLATE_ROS_BASE_LINE: &str = "# ros_base = \"ros-jazzy-ros-base\"";
+const TEMPLATE_ROS_BASE_LINE: &str = "# ros_base = ";
 
 fn template() -> &'static str {
     match i18n::current() {
@@ -147,7 +148,23 @@ fn set_template_ros_base(text: &str, pkg: &str) -> String {
     out
 }
 
-pub fn init(global: &Global, from_env: bool, base: Option<RosFlavor>, force: bool) -> Result<()> {
+fn default_distro(os: Option<&OsRelease>) -> RosDistro {
+    match os
+        .filter(|os| os.is_ubuntu())
+        .and_then(|os| os.version_id.as_deref())
+    {
+        Some("22.04") => RosDistro::Humble,
+        _ => RosDistro::Jazzy,
+    }
+}
+
+pub fn init(
+    global: &Global,
+    from_env: bool,
+    distro: Option<RosDistro>,
+    base: Option<RosFlavor>,
+    force: bool,
+) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let path = global
         .manifest
@@ -170,10 +187,13 @@ pub fn init(global: &Global, from_env: bool, base: Option<RosFlavor>, force: boo
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "my_project".into());
-    let mut text = template().replace("@NAME@", &name);
+    let distro = distro.unwrap_or_else(|| default_distro(OsRelease::load().as_ref()));
+    let mut text = template()
+        .replace("@NAME@", &name)
+        .replace("@DISTRO@", distro.as_str())
+        .replace("@UBUNTU@", distro.default_ubuntu());
     if let Some(flavor) = base {
-        // The template's distro is fixed (jazzy); `--base` only picks the metapackage.
-        let pkg = flavor.package(TEMPLATE_DISTRO);
+        let pkg = flavor.package(distro);
         text = set_template_ros_base(&text, &pkg);
         assert!(
             text.contains(&pkg),
@@ -709,8 +729,12 @@ pub fn apply(
     offline: bool,
     dry_run: bool,
     mirror: Option<Mirror>,
+    distro: Option<RosDistro>,
 ) -> Result<()> {
-    let loaded = load(global)?;
+    let mut loaded = load(global)?;
+    if locked && distro.is_some_and(|d| d != loaded.manifest.project.ros_distro) {
+        bail!("{}", tr("cli.apply.locked_distro_conflict"));
+    }
     // `--locked` requires a lock before anything else runs: missing or out
     // of date with rospm.toml is a user error, corrected by re-running
     // `rospm lock`, never a silent degradation (spec §3.2).
@@ -720,6 +744,7 @@ pub fn apply(
         None
     };
     let host = Host::probe();
+    let manifest_update = prepare_distro(&mut loaded, &host, distro)?;
     let requested = requested_mirror(mirror)?;
     let sources = if dry_run || offline {
         let m = requested.unwrap_or(mirror::OFFICIAL);
@@ -745,7 +770,17 @@ pub fn apply(
         other => other,
     };
     let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
-    let plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
+    let mut plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
+    if let Some(contents) = manifest_update {
+        plan.steps.insert(
+            0,
+            Step::WriteFile {
+                path: loaded.path.clone(),
+                contents,
+                sudo: false,
+            },
+        );
+    }
     let mut out = std::io::stdout().lock();
     let result = plan.execute(dry_run, &mut out);
     out.flush()?;
@@ -759,6 +794,71 @@ pub fn apply(
         Err(e) => Err(e.into()),
         Ok(()) => Ok(()),
     }
+}
+
+/// Validate a distro change before any writes or network probes. The returned
+/// text is written as the first plan step, so dry runs leave the project intact.
+fn prepare_distro(
+    loaded: &mut Loaded,
+    host: &Host,
+    distro: Option<RosDistro>,
+) -> Result<Option<String>> {
+    let Some(distro) = distro.filter(|d| *d != loaded.manifest.project.ros_distro) else {
+        return Ok(None);
+    };
+    let ubuntu = distro.default_ubuntu();
+    if host.ubuntu_matches(ubuntu) != Some(true) {
+        let have = host
+            .os
+            .as_ref()
+            .and_then(|os| os.pretty_name.as_deref())
+            .map(str::to_string)
+            .unwrap_or_else(|| tr("native.unknown_os"));
+        bail!(
+            "{}",
+            msg!(
+                "native.apply.wrong_ubuntu",
+                ubuntu = ubuntu,
+                distro = distro,
+                have = have
+            )
+        );
+    }
+    let text = std::fs::read_to_string(&loaded.path)?;
+    let mut doc = text.parse::<toml_edit::DocumentMut>()?;
+    set_toml_string(&mut doc["project"]["ros_distro"], distro.as_str());
+    if let Some(native) = doc
+        .get_mut("environment")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .and_then(|env| env.get_mut("native"))
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        if let Some(base) = native.get_mut("ros_base") {
+            let old_prefix = format!("ros-{}-", loaded.manifest.project.ros_distro);
+            if let Some(suffix) = base.as_str().and_then(|s| s.strip_prefix(&old_prefix)) {
+                let package = format!("ros-{distro}-{suffix}");
+                set_toml_string(base, &package);
+            }
+        }
+        if let Some(version) = native.get_mut("ubuntu") {
+            set_toml_string(version, ubuntu);
+        }
+    }
+    let text = doc.to_string();
+    loaded.manifest = Manifest::parse(&text, &loaded.path)?;
+    Ok(Some(text))
+}
+
+/// Keep comments and surrounding whitespace when replacing a TOML value.
+fn set_toml_string(item: &mut toml_edit::Item, text: &str) {
+    let decor = item
+        .as_value()
+        .expect("validated string field")
+        .decor()
+        .clone();
+    let mut value = toml_edit::Value::from(text);
+    *value.decor_mut() = decor;
+    *item = toml_edit::Item::Value(value);
 }
 
 /// Load and validate `rospm.lock` for `apply --locked` (spec §3.2): absent or
@@ -1550,18 +1650,120 @@ mod tests {
     #[test]
     fn both_templates_are_valid_manifests() {
         for (lang, text) in [("en", TEMPLATE_EN), ("zh-CN", TEMPLATE_ZH_CN)] {
-            let text = text.replace("@NAME@", "demo");
-            let m = Manifest::parse(&text, Path::new("rospm.toml"))
-                .unwrap_or_else(|e| panic!("{lang} template is invalid: {e}"));
-            assert_eq!(m.project.ros_distro, TEMPLATE_DISTRO, "{lang}");
-            assert!(
-                text.contains(TEMPLATE_ROS_BASE_LINE),
-                "{lang} template lost the ros_base line `--base` rewrites"
-            );
-            let with_base = set_template_ros_base(&text, "ros-jazzy-desktop");
-            let m = Manifest::parse(&with_base, Path::new("rospm.toml"))
-                .unwrap_or_else(|e| panic!("{lang} template with --base is invalid: {e}"));
-            assert_eq!(m.ros_base_package(), "ros-jazzy-desktop", "{lang}");
+            for distro in RosDistro::ALL {
+                let text = text
+                    .replace("@NAME@", "demo")
+                    .replace("@DISTRO@", distro.as_str())
+                    .replace("@UBUNTU@", distro.default_ubuntu());
+                let m = Manifest::parse(&text, Path::new("rospm.toml"))
+                    .unwrap_or_else(|e| panic!("{lang} template is invalid: {e}"));
+                assert_eq!(m.project.ros_distro, distro, "{lang}");
+                assert!(
+                    text.contains(TEMPLATE_ROS_BASE_LINE),
+                    "{lang} template lost the ros_base line `--base` rewrites"
+                );
+                let package = RosFlavor::Desktop.package(distro);
+                let with_base = set_template_ros_base(&text, &package);
+                let m = Manifest::parse(&with_base, Path::new("rospm.toml"))
+                    .unwrap_or_else(|e| panic!("{lang} template with --base is invalid: {e}"));
+                assert_eq!(m.ros_base_package(), package, "{lang}");
+            }
         }
+    }
+
+    #[test]
+    fn template_distro_defaults_follow_ubuntu() {
+        for (release, want) in [
+            ("22.04", RosDistro::Humble),
+            ("24.04", RosDistro::Jazzy),
+            ("26.04", RosDistro::Jazzy),
+        ] {
+            let os = OsRelease::parse(&format!("ID=ubuntu\nVERSION_ID={release}\n"));
+            assert_eq!(default_distro(Some(&os)), want);
+        }
+        assert_eq!(default_distro(None), RosDistro::Jazzy);
+        assert_eq!(
+            default_distro(Some(&OsRelease::parse("ID=debian\nVERSION_ID=22.04"))),
+            RosDistro::Jazzy
+        );
+    }
+
+    #[test]
+    fn distro_switch_prepares_manifest_and_matching_plan_without_writing() {
+        let dir = std::env::temp_dir().join(format!("rospm-distro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(MANIFEST_FILE);
+        let original = set_template_ros_base(
+            &TEMPLATE_EN
+                .replace("@NAME@", "demo")
+                .replace("@DISTRO@", "jazzy")
+                .replace("@UBUNTU@", "24.04"),
+            "ros-jazzy-desktop",
+        )
+        .replace("# ubuntu =", "ubuntu =");
+        std::fs::write(&path, &original).unwrap();
+        for distro in [RosDistro::Humble, RosDistro::Rolling] {
+            let mut loaded = Loaded {
+                path: path.clone(),
+                root: dir.clone(),
+                manifest: Manifest::parse(&original, &path).unwrap(),
+            };
+            let mut host = Host::empty();
+            host.os = Some(OsRelease::parse(&format!(
+                "ID=ubuntu\nVERSION_ID={}\n",
+                distro.default_ubuntu()
+            )));
+            host.ros_distros = vec!["jazzy".into()];
+            let text = prepare_distro(&mut loaded, &host, Some(distro))
+                .unwrap()
+                .unwrap();
+            assert_eq!(loaded.manifest.project.ros_distro, distro);
+            assert_eq!(
+                loaded.manifest.ros_base_package(),
+                format!("ros-{distro}-desktop")
+            );
+            assert_eq!(loaded.manifest.ubuntu(), distro.default_ubuntu());
+            assert!(text.contains("# humble | jazzy | rolling"));
+            assert!(text.contains("# defaults to the distro's release"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL).unwrap();
+            let plan = provider::for_manifest(&loaded.manifest)
+                .plan_apply(&ctx)
+                .unwrap()
+                .render();
+            assert!(
+                plan.contains(&format!(
+                    " {} main",
+                    ubuntu_codename(distro.default_ubuntu()).unwrap()
+                )),
+                "{plan}"
+            );
+            assert!(
+                plan.contains(&format!("apt-get install -y ros-{distro}-desktop")),
+                "{plan}"
+            );
+            assert!(plan.contains("native.apply.other_distros_kept"));
+
+            // Unknown or incompatible hosts must fail before touching even the in-memory manifest.
+            for os in [None, Some(OsRelease::parse("ID=ubuntu\nVERSION_ID=20.04"))] {
+                host.os = os;
+                let before = loaded.manifest.project.ros_distro;
+                assert!(prepare_distro(&mut loaded, &host, Some(RosDistro::Jazzy)).is_err());
+                assert_eq!(loaded.manifest.project.ros_distro, before);
+                assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            }
+        }
+        let custom = original.replace("ros-jazzy-desktop", "custom-ros");
+        std::fs::write(&path, &custom).unwrap();
+        let mut loaded = Loaded {
+            path: path.clone(),
+            root: dir.clone(),
+            manifest: Manifest::parse(&custom, &path).unwrap(),
+        };
+        let mut host = Host::empty();
+        host.os = Some(OsRelease::parse("ID=ubuntu\nVERSION_ID=22.04"));
+        prepare_distro(&mut loaded, &host, Some(RosDistro::Humble)).unwrap();
+        assert_eq!(loaded.manifest.ros_base_package(), "custom-ros");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

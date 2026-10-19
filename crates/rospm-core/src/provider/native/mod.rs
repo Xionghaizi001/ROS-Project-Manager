@@ -458,6 +458,20 @@ impl Provider for Native {
             }
         }
 
+        let others: Vec<_> = host
+            .ros_distros
+            .iter()
+            .filter(|d| d.as_str() != distro.as_str())
+            .cloned()
+            .collect();
+        if !others.is_empty() {
+            plan.note(msg!(
+                "native.apply.other_distros_kept",
+                distros = others.join(", "),
+                distro = distro
+            ));
+        }
+
         // 1. Bootstrap the ROS apt source (official install guide, minus the
         // steps this host already satisfies), or — under `--locked` — pin it
         // to the recorded snapshot (spec §3.2). URLs come from the chosen

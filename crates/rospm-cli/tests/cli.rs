@@ -90,7 +90,7 @@ fn init_base_picks_the_metapackage() {
     let dir = fixture("base");
     let out = rospm()
         .current_dir(&dir)
-        .args(["init", "--base", "desktop"])
+        .args(["init", "--distro", "jazzy", "--base", "desktop"])
         .output()
         .unwrap();
     assert!(
@@ -106,7 +106,7 @@ fn init_base_picks_the_metapackage() {
 
     let out = rospm()
         .current_dir(&dir)
-        .args(["init", "--force", "--base", "ros-base"])
+        .args(["init", "--force", "--distro", "jazzy", "--base", "ros-base"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -125,6 +125,58 @@ fn init_base_picks_the_metapackage() {
         !out.status.success(),
         "unknown flavor must be rejected by clap"
     );
+}
+
+#[test]
+fn apply_distro_conflicts_with_locked_and_dry_run_keeps_manifest() {
+    let dir = fixture("apply-distro");
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["init", "--distro", "jazzy", "--base", "desktop"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let path = dir.join("rospm.toml");
+    let original = fs::read_to_string(&path).unwrap();
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["apply", "--locked", "--distro", "humble", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr)
+        .contains("run `rospm apply --distro <name>` first, then `rospm lock`"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), original);
+
+    let os = rospm_core::probe::OsRelease::load();
+    if let Some(os) = os.filter(|os| os.is_ubuntu()) {
+        let distro = match os.version_id.as_deref() {
+            Some("22.04") => "humble",
+            Some("24.04") => "rolling",
+            _ => return,
+        };
+        let out = rospm()
+            .current_dir(&dir)
+            .args(["apply", "--distro", distro, "--dry-run"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains(&format!("native, {distro},")), "{stdout}");
+        assert!(
+            stdout.contains(&format!("ros-{distro}-desktop")),
+            "{stdout}"
+        );
+        assert!(
+            stdout.contains(&format!("[1] write {}", path.display())),
+            "{stdout}"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
 }
 
 #[test]

@@ -3,15 +3,15 @@ schema_version = 1
 
 [project]
 name = "@NAME@"
-ros_distro = "jazzy"                     # humble | jazzy | rolling
+ros_distro = "@DISTRO@"                     # humble | jazzy | rolling
 platforms = ["linux-x86_64"]             # add "linux-aarch64" for ARM targets
 
 [environment]
 provider = "native"                      # native | pixi | docker
 
 [environment.native]
-# ubuntu = "24.04"                       # defaults to the distro's release
-# ros_base = "ros-jazzy-ros-base"        # or ros-jazzy-desktop; `rospm init --base desktop` sets it
+# ubuntu = "@UBUNTU@"                       # defaults to the distro's release
+# ros_base = "ros-@DISTRO@-ros-base"        # or ros-@DISTRO@-desktop; `rospm init --base desktop` sets it
 
 [workspaces.main]
 path = "ws"
