@@ -112,6 +112,10 @@ enum Cmd {
     Build {
         #[arg(help = tr("cli.build.workspace"))]
         workspace: Option<String>,
+        #[arg(long, value_name = "NAME", conflicts_with = "conda_prefix", help = tr("cli.build.conda_env"))]
+        conda_env: Option<String>,
+        #[arg(long, value_name = "PATH", conflicts_with = "conda_env", help = tr("cli.build.conda_prefix"))]
+        conda_prefix: Option<PathBuf>,
         #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
@@ -275,9 +279,18 @@ fn main() -> ExitCode {
             yes,
             dry_run,
         } => commands::uninstall(&global, keep_source, yes, dry_run),
-        Cmd::Build { workspace, dry_run } => {
-            commands::build(&global, workspace.as_deref(), dry_run)
-        }
+        Cmd::Build {
+            workspace,
+            conda_env,
+            conda_prefix,
+            dry_run,
+        } => commands::build(
+            &global,
+            workspace.as_deref(),
+            conda_env,
+            conda_prefix,
+            dry_run,
+        ),
         Cmd::Env { shell } => commands::env(&global, shell),
         Cmd::Shell => commands::shell(&global),
         Cmd::Deps { command } => match command {

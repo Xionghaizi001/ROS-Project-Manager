@@ -138,6 +138,8 @@ cli:
   build:
     about: "Build workspaces with colcon in overlay order [produces artifacts]"
     workspace: "Build only this workspace (its underlays must already be built)"
+    conda_env: "Use this Conda environment name for this build, overriding build.conda (mutually exclusive with --conda-prefix)"
+    conda_prefix: "Use this Conda prefix for this build (relative to the current directory), overriding build.conda (mutually exclusive with --conda-env)"
   env:
     about: "Print a script that enters the project environment (`source <(rospm env)`)"
     shell: "Shell syntax to emit: bash (default) | zsh"
@@ -234,6 +236,10 @@ package_xml:
   missing_name: "missing <name>"
 
 manifest:
+  conda_selector_required: "build.conda must set exactly one of name or prefix"
+  conda_name_invalid: "Conda environment name must be non-empty, must not start with '-', must not be '.' or '..', and must not contain whitespace or / \\ : # NUL"
+  conda_prefix_invalid: "Conda environment prefix must be non-empty and must not contain NUL"
+  conda_native_only: "build.conda is currently supported only with environment.provider = \"native\""
   name_empty: "project.name must not be empty"
   no_platforms: "project.platforms must list at least one platform"
   provider_table_mismatch: "environment.%{name} is present but environment.provider is \"%{provider}\""

@@ -1,0 +1,21 @@
+schema_version = 1
+
+[project]
+name = "conda-build"
+description = "native ROS with an existing Conda build environment"
+ros_distro = "jazzy"
+platforms = ["linux-x86_64", "linux-aarch64"]
+
+[environment]
+provider = "native"
+
+[build.conda]
+name = "robot-dev"
+# To select by path, replace name above with:
+# prefix = ".conda/robot-dev"             # relative to this manifest
+
+[workspaces.main]
+path = "ws"                              # place local ROS packages in ws/src
+
+[workspaces.main.colcon]
+build_args = ["--symlink-install"]

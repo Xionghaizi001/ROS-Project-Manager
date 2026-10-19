@@ -902,6 +902,22 @@ impl Provider for Native {
             for line in source_lines(ctx, &underlays, Shell::Bash) {
                 cmd = cmd.preamble(line);
             }
+            if let Some(conda) = &m.build.conda {
+                conda.validate()?;
+                // Activate Conda before sourcing ROS/underlays. Do not let a
+                // caller's shell startup files select another environment.
+                let cwd = cmd.cwd.take().expect("workspace directory is set");
+                let script = format!("set -e\n{}", cmd.render());
+                cmd = Command::new("conda").args(["run", "--no-capture-output"]);
+                if let Some(name) = &conda.name {
+                    cmd = cmd.args(["-n", name]);
+                } else if let Some(prefix) = &conda.prefix {
+                    cmd = cmd.arg("-p").arg(ctx.root.join(prefix).to_string_lossy());
+                }
+                cmd = cmd
+                    .args(["bash", "--noprofile", "--norc", "-c", &script])
+                    .cwd(cwd);
+            }
             plan.run(cmd);
         }
         Ok(plan)

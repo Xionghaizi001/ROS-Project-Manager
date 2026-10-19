@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use rospm_core::introspect::{self, HostFacts};
 use rospm_core::lock::{sha256_hex, Lock, LOCK_FILE};
-use rospm_core::manifest::{Manifest, RosFlavor, MANIFEST_FILE};
+use rospm_core::manifest::{CondaBuild, Manifest, RosFlavor, MANIFEST_FILE};
 use rospm_core::mirror::{self, Mirror};
 use rospm_core::net::{self, ProbeResult, Role, Verdict};
 use rospm_core::plan::Step;
@@ -1138,8 +1138,31 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
     Ok(())
 }
 
-pub fn build(global: &Global, workspace: Option<&str>, dry_run: bool) -> Result<()> {
-    let loaded = load(global)?;
+pub fn build(
+    global: &Global,
+    workspace: Option<&str>,
+    conda_env: Option<String>,
+    conda_prefix: Option<PathBuf>,
+    dry_run: bool,
+) -> Result<()> {
+    let mut loaded = load(global)?;
+    if conda_env.is_some() || conda_prefix.is_some() {
+        let mut conda = CondaBuild {
+            name: conda_env,
+            prefix: conda_prefix,
+        };
+        // Validate before resolving: an empty CLI path must not become cwd.
+        conda.validate()?;
+        if let Some(prefix) = &mut conda.prefix {
+            if prefix.is_relative() {
+                *prefix = std::env::current_dir()
+                    .context(tr("cli.err.no_cwd"))?
+                    .join(&*prefix);
+            }
+        }
+        loaded.manifest.build.conda = Some(conda);
+        loaded.manifest.validate()?;
+    }
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace)?;

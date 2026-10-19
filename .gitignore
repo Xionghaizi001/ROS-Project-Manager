@@ -5,6 +5,7 @@
 *.rospm.tar.zst
 /.tools/
 
+
 # example projects: sources are fetched, not committed
-/examples/*/ws/
+/examples/*
 .claude/worktrees/

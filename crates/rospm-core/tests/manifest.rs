@@ -35,6 +35,58 @@ fn minimal_example_parses() {
     assert_eq!(m.build_order().unwrap(), vec!["main"]);
     assert_eq!(m.ros_base_package(), "ros-jazzy-ros-base");
     assert_eq!(m.ubuntu(), "24.04");
+    assert!(m.build.conda.is_none());
+    assert!(!m.to_toml().unwrap().contains("[build"));
+}
+
+#[test]
+fn conda_build_selectors_roundtrip_without_changing_paths() {
+    for selector in ["name = 'robot-dev'", "prefix = '.conda/robot dev'"] {
+        let m = parse(&format!("{MINIMAL}\n[build.conda]\n{selector}\n")).unwrap();
+        let reparsed = parse(&m.to_toml().unwrap()).unwrap();
+        let conda = reparsed.build.conda.unwrap();
+        if selector.starts_with("name") {
+            assert_eq!(conda.name.as_deref(), Some("robot-dev"));
+            assert!(conda.prefix.is_none());
+        } else {
+            assert_eq!(conda.prefix.as_deref(), Some(Path::new(".conda/robot dev")));
+            assert!(conda.name.is_none());
+        }
+    }
+    Manifest::parse(
+        include_str!("../../../examples/conda/rospm.toml"),
+        Path::new("example"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn conda_build_rejects_ambiguous_empty_and_unknown_configuration() {
+    for selector in [
+        "",
+        "name = 'robot'\nprefix = 'env'",
+        "name = ''",
+        "name = 'robot dev'",
+        "name = 'env/path'",
+        "name = '-robot'",
+        "name = '..'",
+        "prefix = ''",
+        "prefix = '   '",
+        "nmae = 'robot'",
+    ] {
+        assert!(
+            parse(&format!("{MINIMAL}\n[build.conda]\n{selector}\n")).is_err(),
+            "accepted {selector:?}"
+        );
+    }
+    assert!(parse(&format!("{MINIMAL}\n[build]\ncondaa = 'robot'\n")).is_err());
+    let text = format!(
+        "{}\n[environment.pixi]\n[build.conda]\nname = 'robot'\n",
+        MINIMAL.replace("provider = \"native\"", "provider = \"pixi\"")
+    );
+    assert!(validation_errors(&text)
+        .iter()
+        .any(|m| m == "manifest.conda_native_only"));
 }
 
 #[test]

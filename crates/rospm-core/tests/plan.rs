@@ -424,6 +424,54 @@ fn native_build_plan_sources_underlays_first() {
 }
 
 #[test]
+fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
+    for selector in [
+        "name = 'robot-dev'",
+        "prefix = '.conda/robot dev'",
+        "prefix = '/opt/robot dev'",
+    ] {
+        let m = Manifest::parse(
+            &format!("{FULL}\n[build.conda]\n{selector}\n"),
+            Path::new("t"),
+        )
+        .unwrap();
+        let host = bare_host();
+        let plan = provider::for_manifest(&m)
+            .plan_build(&ctx(&m, &host), None)
+            .unwrap();
+        assert_eq!(plan.action_count(), 2);
+        let commands: Vec<_> = plan
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Run(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(commands[0].cwd.as_deref(), Some(Path::new("/proj/deps_ws")));
+        assert_eq!(commands[1].cwd.as_deref(), Some(Path::new("/proj/ws")));
+        for cmd in &commands {
+            assert_eq!(cmd.program, "conda");
+            assert_eq!(cmd.args[..2], ["run", "--no-capture-output"]);
+            match selector {
+                s if s.starts_with("name") => assert_eq!(cmd.args[2..4], ["-n", "robot-dev"]),
+                s if s.contains("/opt/") => assert_eq!(cmd.args[2..4], ["-p", "/opt/robot dev"]),
+                _ => assert_eq!(cmd.args[2..4], ["-p", "/proj/.conda/robot dev"]),
+            }
+            assert_eq!(cmd.args[4..8], ["bash", "--noprofile", "--norc", "-c"]);
+            assert!(cmd.preamble.is_empty(), "ROS must be sourced inside Conda");
+            assert!(cmd.args[8].starts_with("set -e\nsource /opt/ros/jazzy/setup.bash"));
+            assert!(cmd.args[8].contains("colcon build --mixin release"));
+        }
+        let deps_script = &commands[0].args[8];
+        assert!(deps_script.contains("COLCON_DEFAULTS_FILE=/proj/colcon/deps.defaults.yaml"));
+        let main_script = &commands[1].args[8];
+        assert!(main_script.contains("deps_ws/install/setup.bash"));
+        assert!(main_script.contains("--mixin release ccache --symlink-install"));
+    }
+}
+
+#[test]
 fn env_script_lists_workspaces_in_order_and_exports_env() {
     let m = Manifest::parse(FULL, Path::new("t")).unwrap();
     let host = bare_host();

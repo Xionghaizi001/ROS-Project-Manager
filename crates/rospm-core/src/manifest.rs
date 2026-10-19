@@ -30,6 +30,8 @@ pub struct Manifest {
     pub schema_version: u32,
     pub project: Project,
     pub environment: Environment,
+    #[serde(default, skip_serializing_if = "Build::is_empty")]
+    pub build: Build,
     /// Insertion order is preserved and used as the tie-breaker when sorting.
     pub workspaces: IndexMap<String, Workspace>,
     #[serde(default)]
@@ -90,6 +92,59 @@ pub struct Environment {
     pub pixi: Option<PixiEnv>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docker: Option<DockerEnv>,
+}
+
+/// Project-wide build options, independent of individual workspaces.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Build {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conda: Option<CondaBuild>,
+}
+
+impl Build {
+    fn is_empty(&self) -> bool {
+        self.conda.is_none()
+    }
+}
+
+/// Select an existing Conda environment. Exactly one selector is required.
+/// A manifest prefix is relative to the manifest directory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CondaBuild {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<PathBuf>,
+}
+
+impl CondaBuild {
+    pub fn validate(&self) -> Result<()> {
+        let message = match (&self.name, &self.prefix) {
+            (Some(name), None)
+                if !name.is_empty()
+                    && !name.starts_with('-')
+                    && name != "."
+                    && name != ".."
+                    && !name
+                        .chars()
+                        .any(|c| c.is_whitespace() || "/\\:#\0".contains(c)) =>
+            {
+                return Ok(());
+            }
+            (Some(_), None) => msg!("manifest.conda_name_invalid"),
+            (None, Some(prefix))
+                if !prefix.to_string_lossy().trim().is_empty()
+                    && !prefix.to_string_lossy().contains('\0') =>
+            {
+                return Ok(());
+            }
+            (None, Some(_)) => msg!("manifest.conda_prefix_invalid"),
+            _ => msg!("manifest.conda_selector_required"),
+        };
+        Err(Error::Validation(vec![message]))
+    }
 }
 
 /// The two official ROS 2 base metapackages (install guide: "Desktop Install
@@ -335,6 +390,14 @@ impl Manifest {
         }
         if self.project.platforms.is_empty() {
             errs.push(msg!("manifest.no_platforms"));
+        }
+        if let Some(conda) = &self.build.conda {
+            if let Err(Error::Validation(messages)) = conda.validate() {
+                errs.extend(messages);
+            }
+            if self.environment.provider != ProviderKind::Native {
+                errs.push(msg!("manifest.conda_native_only"));
+            }
         }
 
         // Exactly the matching provider sub-table may be present (spec §2.2).

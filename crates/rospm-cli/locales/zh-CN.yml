@@ -133,6 +133,8 @@ cli:
   build:
     about: "按叠加顺序用 colcon 编译 workspace [产出产物]"
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
+    conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
+    conda_prefix: "本次构建使用此 Conda 环境路径（相对于当前目录），覆盖 build.conda（与 --conda-env 互斥）"
   env:
     about: "输出进入项目环境的脚本（`source <(rospm env)`）"
     shell: "输出的 shell 语法：bash（默认）| zsh"
@@ -229,6 +231,10 @@ package_xml:
   missing_name: "缺少 <name>"
 
 manifest:
+  conda_selector_required: "build.conda 必须且只能设置 name 或 prefix 中的一项"
+  conda_name_invalid: "Conda 环境名称不能为空、不能以 '-' 开头、不能为 '.' 或 '..'，且不能包含空白或 / \\ : # NUL"
+  conda_prefix_invalid: "Conda 环境路径不能为空，且不能包含 NUL"
+  conda_native_only: "build.conda 当前仅支持 environment.provider = \"native\""
   name_empty: "project.name 不能为空"
   no_platforms: "project.platforms 至少要列出一个平台"
   provider_table_mismatch: "存在 environment.%{name}，但 environment.provider 是 \"%{provider}\""

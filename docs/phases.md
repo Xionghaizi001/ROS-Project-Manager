@@ -13,7 +13,7 @@
 - [x] `apply --locked` 的长期实测与相关修复：
   - [x] 时间点 1（2026-09-26，22.04 / Humble）非破坏性核验，脚本 `scripts/p2-locked-sandbox-check.sh`：真实 `lock` 发现并验签 `2026-08-07` / `20260808T004205Z`；隔离 apt 目录中两个快照的索引可下载；按快照合成的锁在空 dpkg 状态下完整解析 645 个包，`--allow-downgrades` 对 `python3-rosdep` 生效。
   - [x] 修复：写 `rospm-ubuntu-snapshot.list` 后缺少 `apt-get update`，锁定安装原本看不到 Ubuntu 快照索引（`tests/plan.rs` 加断言）。
-  - [x] 真实闭环（2026-09-26，本机，用户同意实装）：实时 `apply` → `build` / 运行节点 → `lock` → `verify` → `uninstall`，已装包列表与基线完全一致；快照锁真实 `apply --locked` 成功（212 个包、`python3-rosdep` 降级、`git checkout --detach`），`verify` / `deps check` / `check --strict` 全部就绪，节点用锁定的 rclcpp 16.0.19 编译运行，重新 `lock` 与输入逐条一致，`uninstall` 后只剩按设计保留的工具版本差异。
+  - [x] 真实闭环：实时 `apply` → `build` / 运行节点 → `lock` → `verify` → `uninstall`，已装包列表与基线完全一致；快照锁真实 `apply --locked` 成功（212 个包、`python3-rosdep` 降级、`git checkout --detach`），`verify` / `deps check` / `check --strict` 全部就绪，节点用锁定的 rclcpp 16.0.19 编译运行，重新 `lock` 与输入逐条一致，`uninstall` 后只剩按设计保留的工具版本差异。
   - [x] 修复：keyserver 返回的快照密钥为 armor 格式，原样写入 `.gpg` 导致 apt 报 `NO_PUBKEY`；现在先 `gpg --dearmor`，探测识别 armor 格式的 keyring 并重装。
   - [x] 修复：`uninstall` 在 `ros2.list` 已不存在时漏删快照 keyring 与 `rospm-ubuntu-snapshot.list`。
   - [x] 修复（2026-09-27）：失败的 `apply --locked` 留下坏源后，计划起始的 `apt-get update` 使重跑失败，只能 `uninstall` 恢复。现在起始 update 之前先删除本次会重写的 rospm 自有源文件（`ros2.list`、`rospm-ubuntu-snapshot.list`），外来文件与无需重写的文件不动；`tests/plan.rs` 用"armor keyring + 旧 Ubuntu 快照"的残留状态断言删除先于首个 update、两文件随后重写。
@@ -26,8 +26,8 @@
 
 - [ ] 在 GitHub 实际跑通 CI（含 `ubuntu-24.04-arm` runner）。
 - [ ] `env --shell fish`（原 P1 未完成项）。
-- [x] `apply` 可安装指定的 ROS 发行版，而不是默认的 Jazzy（2026-10-19 提出）。已实现：`apply --distro` 持久化选择，`init` 支持指定发行版及按主机选择默认。
-  - [x] `apply --distro <humble|jazzy|rolling>`：与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符直接报错、不改任何东西；相符则把 `ros_distro` 写回清单（`ros_base` 若为 `ros-<旧发行版>-*` 一并改名），显式的 `environment.native.ubuntu` 同步为目标版本，再按新发行版执行；保留清单注释，`--dry-run` 只预览而不写回。发行版随项目走：写回清单而非一次性覆盖（2026-10-19 用户确认，决策 #18），保证随后的 `lock` / `verify` / `build` / `env` / `uninstall` 看到同一发行版。
+- [x] `apply` 可安装指定的 ROS 发行版，而不是默认的 Jazzy。已实现：`apply --distro` 持久化选择，`init` 支持指定发行版及按主机选择默认。
+  - [x] `apply --distro <humble|jazzy|rolling>`：与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符直接报错、不改任何东西；相符则把 `ros_distro` 写回清单（`ros_base` 若为 `ros-<旧发行版>-*` 一并改名），显式的 `environment.native.ubuntu` 同步为目标版本，再按新发行版执行；保留清单注释，`--dry-run` 只预览而不写回。发行版随项目走：写回清单而非一次性覆盖，保证随后的 `lock` / `verify` / `build` / `env` / `uninstall` 看到同一发行版。
   - [x] `--locked` 与 `--distro` 不同时，锁文件哈希必然不匹配，直接报错提示先 `apply --distro` 再 `lock`。
   - [x] 本机已装另一发行版时只在计划中说明（不自动卸载旧发行版，`uninstall` 按清单只卸当前发行版）。
   - [x] `init --distro <名>`；不带参数时按主机 Ubuntu 选默认（22.04 → Humble，24.04 → Jazzy），无法识别时仍为 Jazzy。
@@ -39,11 +39,8 @@
 
 ## Phase 3 — aarch64 与平台覆盖（约 3 周）
 
-状态：**QEMU 开发验收完成，原生 ARM 发布验收待执行**（2026-10-20）。目标仓库索引查询已完成并通过回归验证（2026-10-09）；内置替换映射表已完成（2026-10-19）；已自行搭建 Docker + QEMU 环境并通过 aarch64 集成验收，正式发布前再使用原生 ARM runner 复测。
+状态：**QEMU 开发验收完成，原生 ARM 发布验收待执行**。目标仓库索引查询已完成并通过回归验证；内置替换映射表已完成；已搭建 Docker + QEMU 环境并通过 aarch64 集成验收，正式发布前再使用原生 ARM runner 复测。
 
-- [x] `rospm check --target aarch64`：查询 apt / conda 仓库索引，报告目标架构缺失的包（2026-10-09）。覆盖 apt 平台合并、Ubuntu ports 与更新/安全组件、conda 目标子目录与 `noarch`；失败索引报告 `unknown`，`--strict` 返回非零。单测、CLI 本地 HTTP 集成测试与真实网络查询证据见 [p3-repository-validation.md](p3-repository-validation.md)。
-- [x] 内置可更新的替换映射表，与用户声明合并，用户声明优先（2026-10-19）：带修订号的独立 TOML 随版本更新，首批为 GNU aarch64 目标工具链包名；用户同名规则可禁用默认项，按追加 → 单次替换 → 排除 → 去重合并。仓库检查、普通安装与锁定共用解析结果，展示替换来源；`apply --locked` 保持锁记录包名。核心与 CLI 回归覆盖合并优先级、中英文提示、仓库查询、安装计划及锁定重放，维护说明见 [替换映射表](replacements.md)。
-- [x] 在 Docker 容器内搭建 QEMU aarch64 环境，运行 native 提供者的 `check` / `apply --locked` / `build` / `ros2 run` 集成测试（2026-10-20）。Ubuntu 24.04 / Jazzy 的全新 ARM 容器真实还原成功，`verify` / `deps check` 通过，节点输出 `P3_NATIVE_OK arch=aarch64 node=p3_native_probe`；重复还原无包变更，再次采集保持两平台各 205 条包版本、源码记录和清单哈希一致；替换映射及缺包报错验证通过。可重跑脚本为 `scripts/p3-qemu-check.sh`，流程与证据见 [QEMU 集成验收](p3-qemu-validation.md)。
 - [ ] 正式发布前使用 GitHub `ubuntu-24.04-arm` 原生 runner 复测同一 fixture 的锁定还原、编译和节点运行，保留日志（发布门槛，当前不依赖 runner）。
 - **产出**：开发阶段已验证 x86 最终生成的多平台锁在 QEMU aarch64 上 `apply --locked`、构建和节点运行成功，缺失包有明确替代或明确报错。正式发布前通过原生 ARM runner 复测；当前未验证 Raspberry Pi / Jetson 的硬件接口与驱动。
 
@@ -51,13 +48,13 @@
 
 ## Phase 3.5 — Conda 自动配置与一键还原（约 2–3 周）
 
-状态：**未开始**（2026-10-19 新增并扩展需求）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
+状态：**进行中**（2026-10-20，已完成项目级 Conda 构建配置与 CLI 覆盖）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
 
 需求与合理性：项目可能依赖只安装在特定 Conda 环境中的 Python 包或工具，显式选择环境能避免依赖用户当前终端的激活状态，并让本地与 CI 的构建入口一致。但仅激活环境不足以保证成功：colcon 自身的解释器、CMake 缓存的 Python 路径，以及 ROS Python 扩展的 ABI 都可能仍指向系统环境。尤其是 apt 安装的 ROS 与 Conda Python 不一定兼容，因此需要在编译前检查并明确报告冲突，不能承诺任意环境均可编译。
 
 一键还原要求：当清单声明使用 rospm 管理的 Conda 环境时，缺少 Conda 应由还原流程自动补齐，无需用户另行安装、手动激活或重新执行命令。rospm 负责编排工具安装、环境创建、依赖安装与后续还原，依赖求解和包安装交给 Conda；主机仍须满足清单声明的操作系统、架构及驱动等前置条件。
 
-- [ ] 定义可选的项目级 Conda 构建配置及 CLI 覆盖（拟 `build --conda-env <name>` / `--conda-prefix <path>`，名称与路径互斥，CLI 优先）；清单记录默认选择，未配置时保持原构建方式。实现时同步 `spec.md`、schema、示例与中英文帮助。
+- [x] 定义可选的项目级 Conda 构建配置及 CLI 覆盖：native 清单 `[build.conda]` 必须且只能设置 `name` / `prefix`，`build --conda-env <name>` / `--conda-prefix <path>` 互斥并覆盖整个默认选择，不写回清单；清单相对路径以清单目录为基准，CLI 相对路径以当前目录为基准。配置后通过 `conda run` 构建，未配置时保持原构建方式；已同步 `spec.md`、Rust manifest schema、`examples/conda`、双语模板与中英文帮助。回归覆盖配置校验与序列化、覆盖优先级、相对 / 绝对 / 含空格路径、拓扑与 colcon 参数保留、预览无写入、Conda 子进程调用及失败状态；环境准备与兼容性检查仍由后续项完成。
 - [ ] 区分“使用已有环境”与“由 rospm 管理环境”：后者在清单中声明 Python 版本、channels、环境定义文件及锁文件引用，路径相对于清单解析；环境使用项目专用 prefix，避免同名项目冲突。已有环境缺失时明确报错；受管环境由 `apply` 自动准备。
 - [ ] Conda 自动引导：探测并复用兼容的已有 Conda；没有时按主机操作系统 / 架构选择固定版本的 Miniforge 安装器，从官方来源下载并校验 SHA256，非交互安装到 rospm 管理的用户目录。该步骤无需 sudo，不修改 `.bashrc` 等 shell 启动文件、不执行全局 `conda init`；安装完成后在同一次还原中继续执行。安装器版本、来源与摘要应由受信任的配置固定，摘要不符时拒绝执行。
 - [ ] 环境创建与依赖安装：调用 Conda 按项目定义创建环境并安装构建依赖；先支持本机平台的精确锁定重放，定义锁文件引用、摘要及 Conda / pip 依赖覆盖规则。`apply --locked` 必须使用完整的目标平台锁记录，缺失时明确失败，不重新求解；外部已有环境只做检查，不自动获得可重放保证。后续 Phase 8 继续提供基于 `pixi.lock` 的多平台环境管理。
@@ -65,7 +62,7 @@
 - [ ] 安装与还原步骤幂等：复用已校验的工具、下载缓存和符合定义 / 锁记录的项目环境，失败后重跑可继续；未完成的工具或环境不得标记为就绪，不修改外部已有环境。`--dry-run` 展示安装器版本、工具与环境位置、依赖输入及后续命令，不下载或写文件；下载、校验、安装失败时报告具体步骤，离线且无所需缓存时明确报错。
 - [ ] 使用 `conda run -n <name>` / `-p <path>` 或等价的受控子进程执行构建，不依赖调用终端已激活环境；验证环境存在，按 workspace 拓扑顺序加载兼容的 ROS / underlay，并让 `--dry-run` 展示环境、解释器与完整构建命令。直接 `build` 时缺少 Conda、环境或构建工具应明确报错并提示先执行 `apply`，不静默回退到系统环境。
 - [ ] 确保 colcon、Python 构建步骤与 CMake 的 `Python3_EXECUTABLE` / `PYTHON_EXECUTABLE`（按包所用查找机制）使用所选环境的解释器；检查所需 Python 模块及 ROS Python 扩展能否导入，发现版本 / ABI 不兼容时给出诊断。切换环境时检测旧构建目录中的解释器缓存，提示清理或隔离构建目录。
-- [ ] 对接 `env` / `shell` 的 Conda 环境选择，验证安装生成的 Python 入口及 `ros2 run` 使用目标解释器；native 的 apt 锁记录与受管 Conda 环境锁记录分别校验，明确记录环境名称或路径本身不等于锁定包版本。
+- [ ] 对接 `env` / `shell` 的 Conda 环境选择，验证安装生成的 Python 入口及 `ros2 run` 使用目标解释器，必要时可清除节点文件的 `shebang` ；native 的 apt 锁记录与受管 Conda 环境锁记录分别校验，明确记录环境名称或路径本身不等于锁定包版本。
 - [ ] 验收：未激活 Conda 的终端中，指定名称和路径均能完成最小 ROS Python 包构建并运行节点，能导入仅目标环境安装的依赖；覆盖构建预览不写文件、缺环境与 ABI 冲突诊断、切换环境后的缓存检测；未配置 Conda 的 native 构建回归通过。
 - [ ] 干净机一键验收：在满足 ROS 主机前置条件、未安装 Conda 的机器上，仅凭项目清单、目标平台锁文件和源码入口，一条命令完成 Conda 安装、项目环境创建、依赖与源码还原、编译和最小节点运行验证。覆盖 x86_64 / aarch64 安装器选择、重复执行复用、安装中断后重试、摘要错误、缺少锁记录，以及 shell 启动文件保持不变；锁定重放在另一干净环境中得到相同包记录。
 - **产出**：已有 Conda 用户可直接指定环境；未安装 Conda 的用户可一条命令自动准备工具和项目环境并完成还原、编译与验证；不兼容环境在构建前得到明确诊断。

@@ -49,6 +49,11 @@ ros_base = "ros-jazzy-ros-base"            # 底包：ros-base（精简）或 de
 # dockerfile = "docker/Dockerfile"         # 省略则由工具生成到 .rospm/docker/
 # platforms = ["linux/amd64", "linux/arm64"] # buildx
 
+# ---------- 可选的项目级 Conda 构建环境（native） ----------
+# [build.conda]
+# name = "robot-dev"                       # 已有环境名称；与 prefix 二选一
+# prefix = ".conda/robot-dev"               # 或已有环境路径，相对于清单目录
+
 # ---------- workspace 与叠加顺序 ----------
 [workspaces.deps]
 path = "deps_ws"
@@ -115,11 +120,16 @@ sign = false
 | `project.ros_distro` | 是 | 枚举，见决策 #5 |
 | `project.platforms` | 是 | 至少一项；`lock` 按每个平台分别解析 |
 | `environment.provider` | 是 | 只允许存在对应的 `environment.<provider>` 子表，多余子表报错 |
+| `build.conda` | 否 | 当前仅用于 native；表存在时必须且只能设置 `name`（已有环境名称）或 `prefix`（已有环境路径）；空值、未知字段报错；省略此表保持原构建方式 |
 | `workspaces.<name>` | 至少一个 | `path` 相对于清单所在目录；`sources` 可省略（纯本地源码） |
 | `workspaces.<name>.underlays` | 否 | 引用的 workspace 必须存在；整体必须是 DAG |
 | `dependencies.pip` | 否 | 只记录，`apply` 不执行 |
 | `target.<platform>.*` | 否 | `<platform>` 必须在 `project.platforms` 内；合并顺序：追加 → 替换（用户规则优先于内置映射，同名覆盖可禁用默认项，只替换一次）→ 排除（匹配替换后包名）→ 按顺序去重；内置表与更新方式见 [替换映射表](replacements.md) |
 | `env.*` | 否 | 字符串；工具保留 `AMENT_PREFIX_PATH`、`COLCON_PREFIX_PATH` 由叠加顺序自动生成，用户声明时报错 |
+
+`build.conda` 是所有 workspace 共用的默认选择。`name` 不能包含空白、`/`、`\`、`:`、`#` 或 NUL，不能以 `-` 开头，也不能为 `.` 或 `..`；`prefix` 允许空格，但不能是空白字符串或包含 NUL。清单中的相对 `prefix` 从清单所在目录解析；CLI 的相对 `--conda-prefix` 从调用时的当前目录解析；绝对路径直接使用。不展开 `~` 或环境变量，也不要求预览时路径已存在。
+
+`build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括另一种选择方式），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再加载 ROS 与 underlay 并执行 colcon；`--dry-run` 展示该完整命令且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。此配置只选择已有环境，不代表依赖版本已锁定；Conda 须可从 `PATH` 调用，环境须已准备。自动安装、受管环境、构建前的工具 / Python ABI / CMake 缓存检查以及 `env` / `shell` 对接见 Phase 3.5 后续任务。
 
 ### 2.3 叠加顺序的推导
 
@@ -244,7 +254,7 @@ version = "1.26.4"
 | `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
 | `apply [--distro <名>] [--locked] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
-| `build [<workspace>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置 | 必须 |
+| `build [<workspace>] [--conda-env <name> \| --conda-prefix <path>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置；可覆盖项目默认的 Conda 环境选择 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |
 | `shell` | 启动子进程 | 在已 source 的子 shell 中工作 | — |
 | `deps check` / `deps install` | 只读 / 修改系统 | `check`：解析全部 workspace 的 `package.xml`，把依赖键分为内部（项目内某个包提供）、外部（交给 rosdep）、跳过（`skip_keys`）；外部键经 `rosdep check` / `rosdep resolve` 映射到 apt 包并查 dpkg，输出期望 vs 实际表（未装 `MISSING`、rosdep 无法解析或未安装 rosdep 为 `unknown`），`package.xml` 解析失败为 `MISMATCH`；始终退出 0；`--json` 为 `{ ok, workspaces[], internal[], external[], skipped[], environment }`。`install`：与 `apply` 的 rosdep 步骤同一命令（未 `rosdep update` 时先 update，按叠加顺序逐 workspace `rosdep install`，`--skip-keys`，`ROSPM_MIRROR` 生效），但不做 `rosdep init`（提示先 `rospm apply`）、不测速 | install 必须 |
