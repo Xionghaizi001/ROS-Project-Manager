@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::manifest::ProviderKind;
+use crate::manifest::{is_apt_name, ProviderKind};
 use crate::message::Message;
+use crate::msg;
 use crate::platform::Platform;
 
 pub const LOCK_FILE: &str = "rospm.lock";
@@ -137,7 +138,41 @@ impl Lock {
                 supported: SUPPORTED_SCHEMA_VERSION,
             });
         }
+        lock.validate()?;
         Ok(lock)
+    }
+
+    /// Names, versions and revisions become arguments of `sudo apt-get
+    /// install name=version` and `git checkout rev`; anything that could be
+    /// read as an option is refused.
+    fn validate(&self) -> Result<()> {
+        let mut errs: Vec<Message> = Vec::new();
+        for a in &self.apt {
+            if !is_apt_name(&a.name) {
+                errs.push(msg!("lock.apt_name_invalid", name = a.name));
+            }
+            let version_ok = !a.version.is_empty()
+                && a.version
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b".+~:-".contains(&c));
+            if !version_ok {
+                errs.push(msg!(
+                    "lock.apt_version_invalid",
+                    name = a.name,
+                    version = a.version
+                ));
+            }
+        }
+        for s in &self.sources {
+            if s.rev.is_empty() || !s.rev.bytes().all(|c| c.is_ascii_hexdigit()) {
+                errs.push(msg!("lock.rev_invalid", name = s.name, rev = s.rev));
+            }
+        }
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Validation(errs))
+        }
     }
 
     pub fn load(path: &Path) -> Result<Lock> {

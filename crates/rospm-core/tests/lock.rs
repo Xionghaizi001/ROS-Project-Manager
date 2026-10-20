@@ -388,3 +388,45 @@ fn lock_takes_the_ubuntu_snapshot_at_the_last_dpkg_change() {
     );
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn lock_refuses_names_versions_and_revs_that_look_like_options() {
+    let text = r#"
+schema_version = 1
+generated_at = "2026-01-01T00:00:00Z"
+manifest_sha256 = "sha256:deadbeef"
+
+[provider]
+kind = "native"
+
+[[sources]]
+workspace = "main"
+name = "demo"
+type = "git"
+url = "https://example.com/demo.git"
+rev = "--upload-pack=touch /tmp/pwn"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "-oDPkg::Pre-Invoke::=touch /tmp/pwn"
+version = "1.0"
+
+[[apt]]
+platform = "linux-x86_64"
+name = "curl"
+version = "1.0 -oAPT::x=y"
+"#;
+    let err = Lock::parse(text, Path::new("rospm.lock")).unwrap_err();
+    let rospm_core::Error::Validation(list) = err else {
+        panic!("{err:?}")
+    };
+    let keys: Vec<_> = list.iter().filter_map(|m| m.key_name()).collect();
+    assert_eq!(
+        keys,
+        [
+            "lock.apt_name_invalid",
+            "lock.apt_version_invalid",
+            "lock.rev_invalid"
+        ]
+    );
+}

@@ -236,6 +236,7 @@ package_xml:
   missing_name: "missing <name>"
 
 manifest:
+  apt_name_invalid: "%{field}: `%{name}` is not a valid apt package name (lowercase letters, digits and + . -, starting with a letter or digit)"
   conda_selector_required: "build.conda must set exactly one of name or prefix or the managed table"
   conda_python_invalid: "build.conda.managed.python must be a numeric major.minor or major.minor.patch version"
   conda_channels_invalid: "build.conda.managed.channels must list at least one non-empty channel, without leading/trailing whitespace, NUL or newlines"
@@ -313,6 +314,9 @@ plan:
   key_fingerprint_mismatch: "key downloaded from %{url} has fingerprint %{found} but rospm expects %{expected}; not installed to %{dest}"
 
 lock:
+  apt_name_invalid: "rospm.lock: `%{name}` is not a valid apt package name; refusing to pass it to apt-get"
+  apt_version_invalid: "rospm.lock: apt package %{name} has invalid version `%{version}` (allowed: letters, digits and . + ~ : -)"
+  rev_invalid: "rospm.lock: source %{name} has revision `%{rev}`, expected a hexadecimal commit id"
   os_release_unreadable: "/etc/os-release is unreadable; assuming this host runs Ubuntu %{ubuntu} as the manifest says"
   foreign_platform: "cannot resolve %{platform} on this %{host} host; run `rospm lock` on such a machine, its entries are merged into the same file (roadmap P5 adds repository queries)"
   no_vcs_no_git: "neither vcs nor git is available; source revisions cannot be recorded"

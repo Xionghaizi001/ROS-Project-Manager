@@ -431,3 +431,15 @@ fn user_rules_override_defaults_before_one_pass_replacement_and_final_exclusion(
     assert!(resolved.packages.is_empty());
     assert!(resolved.replacements.is_empty());
 }
+
+#[test]
+fn apt_names_that_look_like_options_are_refused() {
+    let text = format!(
+        "{MINIMAL}\n[dependencies]\napt = [\"curl\", \"-oDPkg::Pre-Invoke::=touch /tmp/pwn\"]\n\
+         [target.linux-x86_64]\nreplace = {{ curl = \"--force-yes\" }}\n"
+    );
+    let errs = validation_errors(&text);
+    assert_eq!(errs.len(), 2, "{errs:?}");
+    assert!(errs[0].contains("manifest.apt_name_invalid") && errs[0].contains("dependencies.apt"));
+    assert!(errs[1].contains("target.linux-x86_64.replace") && errs[1].contains("--force-yes"));
+}

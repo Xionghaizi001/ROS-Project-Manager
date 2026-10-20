@@ -24,6 +24,14 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 /// not set them by hand (spec §2.2).
 pub const RESERVED_ENV: &[&str] = &["AMENT_PREFIX_PATH", "COLCON_PREFIX_PATH"];
 
+/// A Debian package name: `^[a-z0-9][a-z0-9+.-]*$` (Debian Policy §5.6.1).
+pub fn is_apt_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b"+.-".contains(&c))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -528,6 +536,42 @@ impl Manifest {
                 }
                 Ok(_) => {}
                 Err(_) => errs.push(msg!("manifest.target_unknown_platform", key = key)),
+            }
+        }
+
+        // These names reach `sudo apt-get install` as arguments; a leading `-`
+        // would turn one into an apt option (e.g. `-oDPkg::Pre-Invoke=...`).
+        let targets = self.target.iter();
+        let apt_fields = (self
+            .dependencies
+            .apt
+            .iter()
+            .map(|n| ("dependencies.apt".to_string(), n)))
+        .chain(targets.clone().flat_map(|(k, t)| {
+            t.dependencies
+                .apt
+                .iter()
+                .map(move |n| (format!("target.{k}.dependencies.apt"), n))
+        }))
+        .chain(targets.clone().flat_map(|(k, t)| {
+            t.replace
+                .iter()
+                .flat_map(|(from, to)| [from, to])
+                .map(move |n| (format!("target.{k}.replace"), n))
+        }))
+        .chain(targets.flat_map(|(k, t)| {
+            t.exclude
+                .apt
+                .iter()
+                .map(move |n| (format!("target.{k}.exclude.apt"), n))
+        }));
+        for (field, name) in apt_fields {
+            if !is_apt_name(name) {
+                errs.push(msg!(
+                    "manifest.apt_name_invalid",
+                    field = field,
+                    name = name
+                ));
             }
         }
 

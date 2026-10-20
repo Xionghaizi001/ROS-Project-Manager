@@ -231,6 +231,7 @@ package_xml:
   missing_name: "缺少 <name>"
 
 manifest:
+  apt_name_invalid: "%{field}：`%{name}` 不是合法的 apt 包名（只能包含小写字母、数字和 + . -，且以字母或数字开头）"
   conda_selector_required: "build.conda 必须且只能设置 name、prefix 或 managed 子表中的一项"
   conda_python_invalid: "build.conda.managed.python 必须是数字版本号 major.minor 或 major.minor.patch"
   conda_channels_invalid: "build.conda.managed.channels 必须至少列出一个非空 channel，不能包含首尾空白、NUL 或换行"
@@ -308,6 +309,9 @@ plan:
   key_fingerprint_mismatch: "从 %{url} 下载的密钥指纹为 %{found}，rospm 期望 %{expected}；未安装到 %{dest}"
 
 lock:
+  apt_name_invalid: "rospm.lock：`%{name}` 不是合法的 apt 包名，拒绝传给 apt-get"
+  apt_version_invalid: "rospm.lock：apt 包 %{name} 的版本号 `%{version}` 不合法（只允许字母、数字和 . + ~ : -）"
+  rev_invalid: "rospm.lock：源 %{name} 的 revision `%{rev}` 不合法，应为十六进制提交号"
   os_release_unreadable: "/etc/os-release 不可读；按清单假定本机为 Ubuntu %{ubuntu}"
   foreign_platform: "本机是 %{host}，无法解析 %{platform}；请在那种机器上运行 `rospm lock`，其记录会合并进同一个文件（路线图 P5 加入仓库索引查询）"
   no_vcs_no_git: "vcs 与 git 都不可用，无法记录源码提交"
