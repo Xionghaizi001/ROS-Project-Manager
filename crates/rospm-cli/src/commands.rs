@@ -1345,10 +1345,10 @@ pub fn shell(global: &Global) -> Result<()> {
 
     // Interactive bash that sources our script after the user's rc files.
     let rc = format!(
-        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {}\nexport ROSPM_PROJECT={}\nPS1=\"(rospm:{}) $PS1\"\n",
+        // PS1 expands $ROSPM_PROJECT at display time without re-parsing its value.
+        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {}\nexport ROSPM_PROJECT={}\nPS1='(rospm:$ROSPM_PROJECT) '\"$PS1\"\n",
         rospm_core::plan::shell_quote(&env_file.to_string_lossy()),
         rospm_core::plan::shell_quote(&loaded.manifest.project.name),
-        loaded.manifest.project.name
     );
     let rc_file = env_dir.join("shellrc");
     std::fs::write(&rc_file, rc)?;

@@ -239,6 +239,7 @@ manifest:
   conda_prefix_invalid: "Conda 环境路径不能为空，且不能包含 NUL"
   conda_native_only: "build.conda 当前仅支持 environment.provider = \"native\""
   conda_lock_platform_required: "project.platforms 列出多个平台时，build.conda.managed.lock_file 必须包含 {platform} 占位符，使每个平台有各自的锁文件"
+  name_control_chars: "project.name 不能包含控制字符（换行、制表符、转义序列）"
   name_empty: "project.name 不能为空"
   no_platforms: "project.platforms 至少要列出一个平台"
   provider_table_mismatch: "存在 environment.%{name}，但 environment.provider 是 \"%{provider}\""
@@ -248,6 +249,7 @@ manifest:
   unknown_underlay: "workspace `%{name}` 引用了未知的 underlay `%{underlay}`"
   target_not_listed: "声明了 target.%{key}，但 `%{key}` 未列在 project.platforms 中"
   target_unknown_platform: "target.%{key}：未知平台（可选：linux-x86_64、linux-aarch64）"
+  env_name_invalid: "env.%{key}：环境变量名必须匹配 [A-Za-z_][A-Za-z0-9_]*"
   env_reserved: "env.%{key} 由 workspace 叠加顺序推导，不能手动设置"
   underlay_cycle: "workspace 之间存在 underlay 循环：%{workspaces}"
 

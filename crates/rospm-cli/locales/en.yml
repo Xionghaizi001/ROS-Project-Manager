@@ -244,6 +244,7 @@ manifest:
   conda_prefix_invalid: "Conda environment prefix must be non-empty and must not contain NUL"
   conda_native_only: "build.conda is currently supported only with environment.provider = \"native\""
   conda_lock_platform_required: "build.conda.managed.lock_file must contain the {platform} placeholder when project.platforms lists several platforms, so each platform has its own lock file"
+  name_control_chars: "project.name must not contain control characters (newlines, tabs, escape sequences)"
   name_empty: "project.name must not be empty"
   no_platforms: "project.platforms must list at least one platform"
   provider_table_mismatch: "environment.%{name} is present but environment.provider is \"%{provider}\""
@@ -253,6 +254,7 @@ manifest:
   unknown_underlay: "workspace `%{name}` references unknown underlay `%{underlay}`"
   target_not_listed: "target.%{key} is declared but `%{key}` is not listed in project.platforms"
   target_unknown_platform: "target.%{key}: unknown platform (expected one of: linux-x86_64, linux-aarch64)"
+  env_name_invalid: "env.%{key}: environment variable names must match [A-Za-z_][A-Za-z0-9_]*"
   env_reserved: "env.%{key} is derived from the workspace overlay order and must not be set manually"
   underlay_cycle: "underlay cycle detected among workspaces: %{workspaces}"
 

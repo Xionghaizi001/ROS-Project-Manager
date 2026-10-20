@@ -455,6 +455,10 @@ impl Manifest {
         if self.project.name.trim().is_empty() {
             errs.push(msg!("manifest.name_empty"));
         }
+        // The name is printed into generated shell scripts and the terminal.
+        if self.project.name.chars().any(char::is_control) {
+            errs.push(msg!("manifest.name_control_chars"));
+        }
         if self.project.platforms.is_empty() {
             errs.push(msg!("manifest.no_platforms"));
         }
@@ -578,6 +582,12 @@ impl Manifest {
         for key in self.env.keys() {
             if RESERVED_ENV.contains(&key.as_str()) {
                 errs.push(msg!("manifest.env_reserved", key = key));
+            }
+            // Keys are emitted unquoted as `export KEY=...` in `rospm env`.
+            let valid = key.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
+            if !valid {
+                errs.push(msg!("manifest.env_name_invalid", key = key));
             }
         }
 
