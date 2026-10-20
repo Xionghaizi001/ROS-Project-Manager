@@ -30,7 +30,7 @@ dependencies:
   - numpy
 ```
 
-`apply --dry-run` 展示规范化定义与创建命令；`apply` 自动准备 `<项目目录>/.rospm/conda/env`，随后继续原有系统依赖与源码还原；`build` 使用该 prefix，不会自行创建环境。同名项目位于不同目录时不会共用环境。Conda 须已在 `PATH` 中，自动安装由下一项任务实现。
+`apply --dry-run` 展示规范化定义与创建命令；`apply` 自动准备 `<项目目录>/.rospm/conda/env`，随后继续原有系统依赖与源码还原；`build` 使用该 prefix，不会自行创建环境。同名项目位于不同目录时不会共用环境。`PATH` 中没有 24.3 或更新版本的 Conda 时，`apply` 自动下载固定版本的 Miniforge，校验 SHA256 后安装到 `~/.local/share/rospm/conda/`（无需 sudo，不修改 shell 启动文件），再继续还原；`build` 随后使用同一个 Conda。
 
 外部已有环境缺失时会明确报错，rospm 不会修改它。受管环境创建完成后才写入完成记录；定义相同的完整环境可以复用，已有目录与记录不匹配时会报错并要求先移走目录，自动恢复与更新留待后续任务。Python 版本和 channels 可声明在清单中，环境文件内若有冲突则报错；文件中的名称和 prefix 不决定受管环境位置。
 

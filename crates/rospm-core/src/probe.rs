@@ -397,6 +397,41 @@ pub fn ros_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".ros"))
 }
 
+/// Conda facts that need no subprocess: a `conda` executable on PATH (the
+/// shell function from `conda init` is not visible here) and the per-user
+/// directories rospm owns for its own Miniforge and downloads.
+#[derive(Debug, Clone)]
+pub struct CondaHost {
+    pub on_path: Option<PathBuf>,
+    /// `$XDG_DATA_HOME/rospm`, default `~/.local/share/rospm`.
+    pub data_dir: PathBuf,
+    /// `$XDG_CACHE_HOME/rospm`, default `~/.cache/rospm`.
+    pub cache_dir: PathBuf,
+}
+
+impl CondaHost {
+    pub fn probe() -> CondaHost {
+        CondaHost {
+            on_path: which::which("conda").ok(),
+            data_dir: xdg_dir("XDG_DATA_HOME", ".local/share").join("rospm"),
+            cache_dir: xdg_dir("XDG_CACHE_HOME", ".cache").join("rospm"),
+        }
+    }
+}
+
+/// An absolute `$var`, else `~/<default>` (relative XDG values are invalid
+/// per the base directory specification and are ignored).
+fn xdg_dir(var: &str, default: &str) -> PathBuf {
+    if let Some(dir) = std::env::var_os(var).map(PathBuf::from) {
+        if dir.is_absolute() {
+            return dir;
+        }
+    }
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(default))
+        .unwrap_or_else(|| PathBuf::from(default))
+}
+
 /// ROS distros installed under `/opt/ros` (directories with a `setup.bash`).
 pub fn installed_ros_distros(opt_ros: &Path) -> Vec<String> {
     let mut out: Vec<String> = fs::read_dir(opt_ros)
@@ -542,6 +577,8 @@ pub struct Host {
     /// install / removal. `lock` takes the Ubuntu snapshot at this instant:
     /// what the host installed from the live archive was available then.
     pub dpkg_changed_at: Option<u64>,
+    /// Where Conda can come from for a managed environment.
+    pub conda: CondaHost,
 }
 
 impl Host {
@@ -572,6 +609,7 @@ impl Host {
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
+            conda: CondaHost::probe(),
         }
     }
 
@@ -590,6 +628,11 @@ impl Host {
             tools: TOOLS.iter().map(|(t, _)| (t.to_string(), None)).collect(),
             packages: PackageDb::Unavailable,
             dpkg_changed_at: None,
+            conda: CondaHost {
+                on_path: None,
+                data_dir: PathBuf::from("/nonexistent/.local/share/rospm"),
+                cache_dir: PathBuf::from("/nonexistent/.cache/rospm"),
+            },
         }
     }
 

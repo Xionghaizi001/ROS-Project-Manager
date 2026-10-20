@@ -145,7 +145,7 @@ impl Command {
 pub enum Step {
     Run(Command),
     /// Check an existing Conda environment or prepare a project-owned one.
-    Conda(crate::conda::CondaStep),
+    Conda(Box<crate::conda::CondaStep>),
     WriteFile {
         path: PathBuf,
         contents: String,

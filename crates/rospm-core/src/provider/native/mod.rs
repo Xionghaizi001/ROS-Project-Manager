@@ -459,10 +459,16 @@ impl Provider for Native {
         }
 
         if let Some(conda) = &m.build.conda {
-            plan.steps
-                .push(crate::plan::Step::Conda(crate::conda::CondaStep::new(
-                    conda, ctx.root, true, ctx.locked,
-                )?));
+            plan.steps.push(crate::plan::Step::Conda(Box::new(
+                crate::conda::CondaStep::new(
+                    conda,
+                    ctx.root,
+                    &host.conda,
+                    ctx.platform,
+                    true,
+                    ctx.locked,
+                )?,
+            )));
         }
 
         let others: Vec<_> = host
@@ -890,12 +896,22 @@ impl Provider for Native {
             name = m.project.name,
             order = targets.join(" -> ")
         ));
-        if let Some(conda) = &m.build.conda {
-            plan.steps
-                .push(crate::plan::Step::Conda(crate::conda::CondaStep::new(
-                    conda, ctx.root, false, false,
-                )?));
-        }
+        let conda = match &m.build.conda {
+            Some(conda) => {
+                let step = crate::conda::CondaStep::new(
+                    conda,
+                    ctx.root,
+                    &ctx.host.conda,
+                    ctx.platform,
+                    false,
+                    false,
+                )?;
+                plan.steps
+                    .push(crate::plan::Step::Conda(Box::new(step.clone())));
+                Some(step)
+            }
+            None => None,
+        };
         for name in &targets {
             let ws = &m.workspaces[name];
             let ws_path = ctx.root.join(&ws.path);
@@ -915,13 +931,12 @@ impl Provider for Native {
             for line in source_lines(ctx, &underlays, Shell::Bash) {
                 cmd = cmd.preamble(line);
             }
-            if let Some(conda) = &m.build.conda {
-                conda.validate()?;
+            if let Some(conda) = &conda {
                 // Activate Conda before sourcing ROS/underlays. Do not let a
                 // caller's shell startup files select another environment.
                 let cwd = cmd.cwd.take().expect("workspace directory is set");
                 let script = format!("set -e\n{}", cmd.render());
-                cmd = crate::conda::Selection::from_config(conda, ctx.root)?.command();
+                cmd = conda.command();
                 cmd = cmd
                     .args(["bash", "--noprofile", "--norc", "-c", &script])
                     .cwd(cwd);

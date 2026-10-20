@@ -158,13 +158,20 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
     fs::write(dir.join("rospm.toml"), &text).unwrap();
     let nested = dir.join("nested");
     fs::create_dir(&nested).unwrap();
-    for (lang, expected) in [
-        ("en", "prepare project Conda environment"),
-        ("zh", "准备项目专用 Conda 环境"),
+    let user = dir.join("user");
+    for (lang, expected, bootstrap) in [
+        (
+            "en",
+            "prepare project Conda environment",
+            "otherwise download Miniforge 26.7.2-0",
+        ),
+        ("zh", "准备项目专用 Conda 环境", "下载 Miniforge 26.7.2-0"),
     ] {
         let out = rospm()
             .current_dir(&nested)
             .env("PATH", "")
+            .env("XDG_DATA_HOME", user.join("data"))
+            .env("XDG_CACHE_HOME", user.join("cache"))
             .args(["--lang", lang, "apply", "--dry-run"])
             .output()
             .unwrap();
@@ -179,8 +186,39 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
         assert!(preview.contains(dir.join(".rospm/conda/env").to_str().unwrap()));
         assert!(preview.contains("python=3.12") && preview.contains("numpy"));
         assert!(!preview.contains("/ignored-prefix"));
+        // The bootstrap is described in full but nothing is downloaded.
+        assert!(preview.contains(bootstrap), "{preview}");
+        assert!(
+            preview.contains("281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05")
+                || preview
+                    .contains("89b786c8d2c8b0fda7553914c1314ae4ddaa094503802f279377b19ac4463cb2")
+        );
+        assert!(preview.contains(
+            user.join("data/rospm/conda/miniforge3-26.7.2-0")
+                .to_str()
+                .unwrap()
+        ));
+        assert!(preview.contains(user.join("cache/rospm/downloads").to_str().unwrap()));
     }
-    assert!(!dir.join(".rospm").exists());
+    assert!(!dir.join(".rospm").exists() && !user.exists());
+    for (lang, expected) in [
+        ("en", "run `rospm apply` to install Conda"),
+        ("zh", "请执行 `rospm apply` 安装 Conda"),
+    ] {
+        let out = rospm()
+            .current_dir(&nested)
+            .env("PATH", "")
+            .env("XDG_DATA_HOME", user.join("data"))
+            .env("XDG_CACHE_HOME", user.join("cache"))
+            .args(["--lang", lang, "build"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        let error = String::from_utf8(out.stderr).unwrap();
+        assert!(error.contains(expected), "{error}");
+    }
+    assert!(!dir.join(".rospm").exists() && !user.exists());
+    assert!(!dir.join("ws/build").exists());
     let build = preview(&nested, &[]);
     assert!(build.contains(&format!(
         "conda run --no-capture-output -p {}",

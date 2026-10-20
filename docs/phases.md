@@ -48,7 +48,7 @@
 
 ## Phase 3.5 — Conda 自动配置与一键还原（约 2–3 周）
 
-状态：**进行中**（2026-10-20，已完成项目级 Conda 配置、CLI 覆盖及已有 / 受管环境区分；受管环境可由 `apply` 使用已有 Conda 创建）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
+状态：**进行中**（2026-10-20，已完成项目级 Conda 配置、CLI 覆盖、已有 / 受管环境区分及 Conda 自动引导；未安装 Conda 时 `apply` 可自动安装 Miniforge 并创建受管环境）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
 
 需求与合理性：项目可能依赖只安装在特定 Conda 环境中的 Python 包或工具，显式选择环境能避免依赖用户当前终端的激活状态，并让本地与 CI 的构建入口一致。但仅激活环境不足以保证成功：colcon 自身的解释器、CMake 缓存的 Python 路径，以及 ROS Python 扩展的 ABI 都可能仍指向系统环境。尤其是 apt 安装的 ROS 与 Conda Python 不一定兼容，因此需要在编译前检查并明确报告冲突，不能承诺任意环境均可编译。
 
@@ -56,7 +56,10 @@
 
 - [x] 定义可选的项目级 Conda 构建配置及 CLI 覆盖：native 清单 `[build.conda]` 必须且只能设置 `name` / `prefix`，`build --conda-env <name>` / `--conda-prefix <path>` 互斥并覆盖整个默认选择，不写回清单；清单相对路径以清单目录为基准，CLI 相对路径以当前目录为基准。配置后通过 `conda run` 构建，未配置时保持原构建方式；已同步 `spec.md`、Rust manifest schema、`examples/conda`、双语模板与中英文帮助。回归覆盖配置校验与序列化、覆盖优先级、相对 / 绝对 / 含空格路径、拓扑与 colcon 参数保留、预览无写入、Conda 子进程调用及失败状态；环境准备与兼容性检查仍由后续项完成。
 - [x] 区分“使用已有环境”与“由 rospm 管理环境”：新增 `[build.conda.managed]`，与已有环境的 `name` / `prefix` 互斥，必填 Python 版本与 channels，可选 `environment_file` / `lock_file` 引用，相对路径以清单目录为基准。受管 prefix 固定为项目的 `.rospm/conda/env`；`apply` 使用已有 Conda 创建环境后继续原还原流程，`build` 只检查和使用已准备环境；已有环境缺失时明确报错且不修改外部环境。创建成功才写定义摘要完成记录，匹配时复用，不接管已有目录或未完成环境。已同步 schema、规格、双语模板与示例；测试覆盖互斥与序列化、路径解析、项目隔离、创建 / 复用 / 失败、只读检查、预览无写入及中英文错误。Conda 自动安装由下一项实现；锁文件引用目前明确拒绝执行，精确重放由第 4 项实现；自动恢复与更新由幂等性任务完善。
-- [ ] Conda 自动引导：探测并复用兼容的已有 Conda；没有时按主机操作系统 / 架构选择固定版本的 Miniforge 安装器，从官方来源下载并校验 SHA256，非交互安装到 rospm 管理的用户目录。该步骤无需 sudo，不修改 `.bashrc` 等 shell 启动文件、不执行全局 `conda init`；安装完成后在同一次还原中继续执行。安装器版本、来源与摘要应由受信任的配置固定，摘要不符时拒绝执行。
+- [x] Conda 自动引导：探测并复用兼容的已有 Conda；没有时按主机操作系统 / 架构选择固定版本的 Miniforge 安装器，从官方来源下载并校验 SHA256，非交互安装到 rospm 管理的用户目录。该步骤无需 sudo，不修改 `.bashrc` 等 shell 启动文件、不执行全局 `conda init`；安装完成后在同一次还原中继续执行。安装器版本、来源与摘要应由受信任的配置固定，摘要不符时拒绝执行。
+  - [x] 内置表 `crates/rospm-core/data/miniforge.toml` 固定 Miniforge `26.7.2-0`（conda-forge GitHub Release），x86_64 / aarch64 的 SHA256 经本机下载 `sha256sum` 与官方 `.sha256` 双重核对；最低兼容 conda 24.3。受管模式的 Conda 选择顺序：rospm 已就绪的 Miniforge → `PATH` 中版本合格的 `conda` → `apply` 自动安装（`build` 只报错并提示 `apply`）；已有环境模式不自动安装。规划阶段只读文件，不启动子进程、不下载。
+  - [x] 安装器缓存于 `~/.cache/rospm/downloads`，`.part` 校验通过才改名，摘要不符删除并拒绝；摘要一致的缓存离线复用，损坏缓存重新下载；下载有超时与重试。`bash --noprofile --norc <安装器> -b -p ~/.local/share/rospm/conda/miniforge3-<版本>`，`conda --version` 合格后才写 `.ready`；无记录的安装目录视为中断，重跑时删除重装。`--dry-run` 展示选择顺序、版本、URL、摘要、缓存与安装位置。中英文消息、`spec.md` 同步。
+  - [x] 测试：单元测试覆盖内置表、版本比较、缺失 / 版本过低时引导、引导后 `apply` / `build` 使用安装的 conda、摘要不符拒绝且不留文件、损坏缓存替换、离线无缓存报错、安装中断后离线从缓存重装；CLI 测试覆盖预览不写文件及 `build` 中英文提示。真实验收（2026-10-20，Docker `ubuntu:22.04`、uid 1000、无 Conda）：`tests/conda_bootstrap.rs`（`--ignored`）真实下载 / 缓存校验、批处理安装、以安装的 conda 创建含 numpy 的环境，`conda run` 使用环境内解释器，删除就绪记录后从缓存重装，`.bashrc` 未变（Conda 自身仅新增 `~/.conda`、`~/.cache`）。本机网络对 conda.anaconda.org 多次断流，环境创建经清华 conda-forge 镜像完成。aarch64 安装器的真实执行留给干净机一键验收。
 - [ ] 环境创建与依赖安装：调用 Conda 按项目定义创建环境并安装构建依赖；先支持本机平台的精确锁定重放，定义锁文件引用、摘要及 Conda / pip 依赖覆盖规则。`apply --locked` 必须使用完整的目标平台锁记录，缺失时明确失败，不重新求解；外部已有环境只做检查，不自动获得可重放保证。后续 Phase 8 继续提供基于 `pixi.lock` 的多平台环境管理。
 - [ ] 定义一键还原入口（拟 `apply --build`，与 `--locked` 组合）：自动准备 Conda 工具与项目环境，继续完成系统依赖安装、源码还原、按拓扑顺序编译及清单声明的验证命令。普通 `apply` 仍负责环境与源码准备；`build` 使用已准备好的环境。用户无需手动激活环境或在安装 Conda 后重新发起还原。
 - [ ] 安装与还原步骤幂等：复用已校验的工具、下载缓存和符合定义 / 锁记录的项目环境，失败后重跑可继续；未完成的工具或环境不得标记为就绪，不修改外部已有环境。`--dry-run` 展示安装器版本、工具与环境位置、依赖输入及后续命令，不下载或写文件；下载、校验、安装失败时报告具体步骤，离线且无所需缓存时明确报错。

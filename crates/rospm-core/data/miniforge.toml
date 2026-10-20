@@ -1,0 +1,20 @@
+# Trusted Miniforge installers for the managed Conda bootstrap (docs/spec.md
+# §2.2). Only this bundled table decides what is downloaded and executed; a
+# digest is never taken from the download source at run time.
+#
+# Update procedure: pick a conda-forge/miniforge release, download each
+# installer, compare `sha256sum` with the release's `.sha256` asset, and
+# record both here. Digests below were checked that way on 2026-10-20.
+schema_version = 1
+version = "26.7.2-0"
+# An existing `conda` on PATH older than this is not reused
+# (`conda env create --yes` requires 24.3).
+minimum_conda = "24.3"
+
+[installer.linux-x86_64]
+url = "https://github.com/conda-forge/miniforge/releases/download/26.7.2-0/Miniforge3-26.7.2-0-Linux-x86_64.sh"
+sha256 = "281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05"
+
+[installer.linux-aarch64]
+url = "https://github.com/conda-forge/miniforge/releases/download/26.7.2-0/Miniforge3-26.7.2-0-Linux-aarch64.sh"
+sha256 = "89b786c8d2c8b0fda7553914c1314ae4ddaa094503802f279377b19ac4463cb2"
