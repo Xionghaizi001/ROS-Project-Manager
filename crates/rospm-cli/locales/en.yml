@@ -422,6 +422,7 @@ native:
     dpkg_unavailable: "dpkg-query is unavailable, cannot list the installed ROS packages"
     nothing_installed: "no %{prefix}* packages are installed; nothing to remove"
     removing: "removing %{count} %{prefix}* packages (listed below)"
+    autoremove_hint: "apt autoremove is not run, since it would also remove unrelated packages not listed here; review and run `sudo apt autoremove` yourself if wanted"
     tooling_kept: "python3-rosdep, python3-vcstool and python3-colcon-common-extensions are left installed (shared tooling); remove them by hand if unwanted"
     files_may_remain: "files apt does not own may remain under %{dir}; remove the directory by hand after checking it"
     no_source: "no ROS apt source configured; nothing to remove"

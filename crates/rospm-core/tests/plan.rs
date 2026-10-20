@@ -357,7 +357,11 @@ fn native_uninstall_names_every_package_and_removes_the_source() {
     );
     assert!(!rendered.contains("ros-humble-rclcpp"), "{rendered}");
     assert!(!rendered.contains("remove -y python3"), "{rendered}");
-    assert!(rendered.contains("sudo apt-get autoremove -y"));
+    assert!(!rendered.contains("autoremove -y"), "{rendered}");
+    assert!(
+        rendered.contains("native.uninstall.autoremove_hint"),
+        "{rendered}"
+    );
     assert!(
         rendered.contains(&format!("sudo rm -f {ROS_APT_LIST} {ROS_APT_KEYRING}")),
         "{rendered}"

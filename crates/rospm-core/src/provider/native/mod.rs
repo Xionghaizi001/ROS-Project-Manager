@@ -796,7 +796,8 @@ impl Provider for Native {
                     .args(packages)
                     .sudo(),
             );
-            plan.run(Command::new("apt-get").args(["autoremove", "-y"]).sudo());
+            // No autoremove: it would also purge unrelated packages the user never saw in the plan.
+            plan.note(msg!("native.uninstall.autoremove_hint"));
         }
         plan.note(msg!("native.uninstall.tooling_kept"));
         if host.has_ros_distro(distro.as_str()) {

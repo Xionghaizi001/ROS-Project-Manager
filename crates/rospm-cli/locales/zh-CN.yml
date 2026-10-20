@@ -417,6 +417,7 @@ native:
     dpkg_unavailable: "dpkg-query 不可用，无法列出已安装的 ROS 包"
     nothing_installed: "未安装任何 %{prefix}* 包；无需卸载"
     removing: "将卸载 %{count} 个 %{prefix}* 包（见下方列表）"
+    autoremove_hint: "不会运行 apt autoremove，它还会删除此处未列出的无关包；如需清理，请检查后自行运行 `sudo apt autoremove`"
     tooling_kept: "python3-rosdep、python3-vcstool 与 python3-colcon-common-extensions 保留不卸（共用工具）；不需要请手动删除"
     files_may_remain: "%{dir} 下可能残留 apt 未管理的文件；确认后请手动删除该目录"
     no_source: "未配置 ROS apt 源；无需删除"
