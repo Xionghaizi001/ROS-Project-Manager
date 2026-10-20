@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::message::Message;
 use crate::msg;
-use crate::plan::fingerprints;
+use crate::plan::{fingerprints, is_only_key};
 
 /// Root of the ROS snapshot service (no trailing slash).
 pub const ROS_SNAPSHOT_ROOT: &str = "http://snapshots.ros.org";
@@ -491,10 +491,7 @@ fn verify_ros_signature(
         .output()
         .map_err(|e| Message::text(format!("gpg: {e}")))?;
     let found = fingerprints(&String::from_utf8_lossy(&shown.stdout));
-    if !found
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case(ROS_SNAPSHOT_KEY_FINGERPRINT))
-    {
+    if !is_only_key(&found, ROS_SNAPSHOT_KEY_FINGERPRINT) {
         return Err(msg!(
             "snapshot.key_fingerprint_mismatch",
             url = key_url,

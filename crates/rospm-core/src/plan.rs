@@ -461,7 +461,7 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         )));
     }
     let found = fingerprints(&String::from_utf8_lossy(&gpg.stdout));
-    if !found.iter().any(|f| f.eq_ignore_ascii_case(fingerprint)) {
+    if !is_only_key(&found, fingerprint) {
         return Err(Error::Host(msg!(
             "plan.key_fingerprint_mismatch",
             url = url,
@@ -528,6 +528,13 @@ pub fn is_ascii_armored(bytes: &[u8]) -> bool {
         .position(|b| !b.is_ascii_whitespace())
         .unwrap_or(bytes.len());
     bytes[start..].starts_with(b"-----BEGIN PGP")
+}
+
+/// True when the key file holds exactly one primary key and it is `expected`.
+/// Any extra key would be trusted by apt too, so a mirror could smuggle its
+/// own signing key next to the real one.
+pub fn is_only_key(found: &[String], expected: &str) -> bool {
+    matches!(found, [only] if only.eq_ignore_ascii_case(expected))
 }
 
 /// Primary-key fingerprints (`fpr:` records that follow a `pub:` record) from
@@ -613,7 +620,7 @@ pub fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_key, fingerprints, is_ascii_armored};
+    use super::{fetch_key, fingerprints, is_ascii_armored, is_only_key};
 
     const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";
     const ROS_KEY_FINGERPRINT: &str = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654";
@@ -716,5 +723,15 @@ fpr:::::::::0000000000000000000000000000000000000000:
         );
         assert!(fingerprints("").is_empty());
         assert!(fingerprints("<html>not a key</html>\n").is_empty());
+    }
+
+    #[test]
+    fn is_only_key_rejects_a_smuggled_extra_key() {
+        let real = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654".to_string();
+        let evil = "0000000000000000000000000000000000000000".to_string();
+        assert!(is_only_key(&[real.clone()], &real.to_ascii_lowercase()));
+        assert!(!is_only_key(&[real.clone(), evil.clone()], &real));
+        assert!(!is_only_key(&[evil, real.clone()], &real));
+        assert!(!is_only_key(&[], &real));
     }
 }
