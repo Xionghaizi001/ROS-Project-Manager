@@ -1051,8 +1051,9 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
                 )
             );
             let mut answer = String::new();
-            stdin.read_line(&mut answer)?;
-            if matches!(answer.trim(), "" | "y" | "Y" | "yes") {
+            // EOF (Ctrl-D) reads 0 bytes and must not count as the empty "yes".
+            let got_line = stdin.read_line(&mut answer)? > 0;
+            if got_line && matches!(answer.trim(), "" | "y" | "Y" | "yes") {
                 println!(
                     "{}",
                     msg!(
