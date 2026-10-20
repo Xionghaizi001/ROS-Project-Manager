@@ -90,6 +90,51 @@ fn conda_build_rejects_ambiguous_empty_and_unknown_configuration() {
 }
 
 #[test]
+fn managed_conda_schema_is_explicit_exclusive_and_roundtrips_references() {
+    let config = r#"
+[build.conda.managed]
+python = "3.12"
+channels = ["conda-forge"]
+environment_file = "config/environment.yml"
+lock_file = "locks/conda-linux-64.lock"
+"#;
+    let m = parse(&format!("{MINIMAL}\n{config}")).unwrap();
+    let m = parse(&m.to_toml().unwrap()).unwrap();
+    let managed = m.build.conda.unwrap().managed.unwrap();
+    assert_eq!(managed.python, "3.12");
+    assert_eq!(managed.channels, ["conda-forge"]);
+    assert_eq!(
+        managed.environment_file.as_deref(),
+        Some(Path::new("config/environment.yml"))
+    );
+    assert_eq!(
+        managed.lock_file.as_deref(),
+        Some(Path::new("locks/conda-linux-64.lock"))
+    );
+
+    for invalid in [
+        config.replace("python = \"3.12\"", "python = \"\""),
+        config.replace("python = \"3.12\"", "python = \">=3.12\""),
+        config.replace("channels = [\"conda-forge\"]", "channels = []"),
+        config.replace(
+            "channels = [\"conda-forge\"]",
+            "channels = [\"nodefaults\"]",
+        ),
+        config.replace("channels = [\"conda-forge\"]", "channels = [\"  \"]"),
+        config.replace("config/environment.yml", ""),
+        config.replace("locks/conda-linux-64.lock", ""),
+        config.replace("environment_file =", "environmnt_file ="),
+        format!("[build.conda]\nname = 'external'\n{config}"),
+        format!("[build.conda]\nprefix = 'external'\n{config}"),
+    ] {
+        assert!(
+            parse(&format!("{MINIMAL}\n{invalid}")).is_err(),
+            "accepted {invalid}"
+        );
+    }
+}
+
+#[test]
 fn build_order_puts_underlays_first() {
     let m = parse(FULL).unwrap();
     assert_eq!(m.build_order().unwrap(), vec!["deps", "main"]);

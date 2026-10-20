@@ -53,6 +53,12 @@ ros_base = "ros-jazzy-ros-base"            # 底包：ros-base（精简）或 de
 # [build.conda]
 # name = "robot-dev"                       # 已有环境名称；与 prefix 二选一
 # prefix = ".conda/robot-dev"               # 或已有环境路径，相对于清单目录
+# 或改用受管环境，不能与上面的 name / prefix 共存：
+# [build.conda.managed]
+# python = "3.12"
+# channels = ["conda-forge"]
+# environment_file = "config/environment.yml" # 可选，Conda 环境定义
+# lock_file = "locks/conda-linux-64.lock"     # 可选引用；精确重放尚未实现，配置后 apply 明确拒绝
 
 # ---------- workspace 与叠加顺序 ----------
 [workspaces.deps]
@@ -120,7 +126,8 @@ sign = false
 | `project.ros_distro` | 是 | 枚举，见决策 #5 |
 | `project.platforms` | 是 | 至少一项；`lock` 按每个平台分别解析 |
 | `environment.provider` | 是 | 只允许存在对应的 `environment.<provider>` 子表，多余子表报错 |
-| `build.conda` | 否 | 当前仅用于 native；表存在时必须且只能设置 `name`（已有环境名称）或 `prefix`（已有环境路径）；空值、未知字段报错；省略此表保持原构建方式 |
+| `build.conda` | 否 | 当前仅用于 native；表存在时必须且只能设置 `name`（已有环境名称）、`prefix`（已有环境路径）或 `managed` 子表；空值、未知字段报错；省略此表保持原构建方式 |
+| `build.conda.managed` | 否 | 必填 `python`（数字 `major.minor[.patch]`）和非空 `channels` 列表；可选 `environment_file` / `lock_file` 路径，以清单目录为基准；不允许自定义名称或 prefix |
 | `workspaces.<name>` | 至少一个 | `path` 相对于清单所在目录；`sources` 可省略（纯本地源码） |
 | `workspaces.<name>.underlays` | 否 | 引用的 workspace 必须存在；整体必须是 DAG |
 | `dependencies.pip` | 否 | 只记录，`apply` 不执行 |
@@ -129,7 +136,17 @@ sign = false
 
 `build.conda` 是所有 workspace 共用的默认选择。`name` 不能包含空白、`/`、`\`、`:`、`#` 或 NUL，不能以 `-` 开头，也不能为 `.` 或 `..`；`prefix` 允许空格，但不能是空白字符串或包含 NUL。清单中的相对 `prefix` 从清单所在目录解析；CLI 的相对 `--conda-prefix` 从调用时的当前目录解析；绝对路径直接使用。不展开 `~` 或环境变量，也不要求预览时路径已存在。
 
-`build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括另一种选择方式），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再加载 ROS 与 underlay 并执行 colcon；`--dry-run` 展示该完整命令且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。此配置只选择已有环境，不代表依赖版本已锁定；Conda 须可从 `PATH` 调用，环境须已准备。自动安装、受管环境、构建前的工具 / Python ABI / CMake 缓存检查以及 `env` / `shell` 对接见 Phase 3.5 后续任务。
+`build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括受管环境选择），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再加载 ROS 与 underlay 并执行 colcon；`--dry-run` 展示该完整命令且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。
+
+已有环境模式下，`apply` / `build` 在执行系统安装或编译之前查询 Conda 并检查环境是否存在，缺失时明确报错；不会创建、更新或接管外部环境。名称或路径本身不锁定包版本。
+
+受管模式下，环境固定为 `<清单目录>/.rospm/conda/env`，不使用 Conda 的全局同名环境；两个同名项目位于不同目录时拥有不同 prefix。`apply` 在系统安装步骤之前准备环境；`build` 只检查环境和完成记录，缺失或定义变化时提示先执行 `apply`。实际执行仍要求 Conda 已在 `PATH` 中；自动安装 Conda 由下一项任务实现。环境创建命令为 `conda env create --yes --prefix <项目 prefix> --file <生成的定义>`，工作目录为清单目录，不执行 `conda init` 或修改 shell 启动文件。
+
+`environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理，不合并 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
+
+规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`；完成记录匹配当前规范化定义时复用。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
+
+`lock_file` 目前只定义引用字段及路径规则；配置此字段的受管 `apply`、以及受管 `apply --locked` 均明确失败，不静默重新求解。锁记录格式、摘要与目标平台验证及精确重放由 Phase 3.5 第 4 项实现。构建工具 / Python ABI / CMake 缓存检查及 `env` / `shell` 对接仍见后续任务。
 
 ### 2.3 叠加顺序的推导
 

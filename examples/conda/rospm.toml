@@ -14,6 +14,13 @@ name = "robot-dev"
 # To select by path, replace name above with:
 # prefix = ".conda/robot-dev"             # relative to this manifest
 
+# Or remove name above and use a project-managed environment:
+# [build.conda.managed]
+# python = "3.12"
+# channels = ["conda-forge"]
+# environment_file = "environment.yml"   # optional; relative to this manifest
+# lock_file = "conda.lock"               # optional reference; replay is pending
+
 [workspaces.main]
 path = "ws"                              # place local ROS packages in ws/src
 

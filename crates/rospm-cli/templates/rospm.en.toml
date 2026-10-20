@@ -18,6 +18,12 @@ provider = "native"                      # native | pixi | docker
 # name = "robot-dev"                     # choose name OR prefix, never both
 # prefix = ".conda/robot-dev"             # relative to this manifest
 # Override once: rospm build --conda-env other / --conda-prefix /path/to/env
+# Or replace name/prefix with a project-managed environment (`apply` prepares it):
+# [build.conda.managed]
+# python = "3.12"                        # example for Jazzy; match your ROS Python ABI
+# channels = ["conda-forge"]
+# environment_file = "environment.yml"   # optional; relative to this manifest
+# lock_file = "conda.lock"               # optional reference; replay is not implemented yet
 
 [workspaces.main]
 path = "ws"

@@ -99,7 +99,7 @@ cli:
     manifest_line: "manifest    %{path}"
     lock_line: "lock        %{path}"
   apply:
-    about: "Set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
+    about: "Prepare declared Conda environments, set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
     distro: "Select humble | jazzy | rolling and save it to the manifest (dry-run only previews)"
     locked_distro_conflict: "--locked cannot change the manifest distribution; run `rospm apply --distro <name>` first, then `rospm lock`"
     locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
@@ -236,7 +236,9 @@ package_xml:
   missing_name: "missing <name>"
 
 manifest:
-  conda_selector_required: "build.conda must set exactly one of name or prefix"
+  conda_selector_required: "build.conda must set exactly one of name or prefix or the managed table"
+  conda_python_invalid: "build.conda.managed.python must be a numeric major.minor or major.minor.patch version"
+  conda_channels_invalid: "build.conda.managed.channels must list at least one non-empty channel, without leading/trailing whitespace, NUL or newlines"
   conda_name_invalid: "Conda environment name must be non-empty, must not start with '-', must not be '.' or '..', and must not contain whitespace or / \\ : # NUL"
   conda_prefix_invalid: "Conda environment prefix must be non-empty and must not contain NUL"
   conda_native_only: "build.conda is currently supported only with environment.provider = \"native\""
@@ -251,6 +253,23 @@ manifest:
   target_unknown_platform: "target.%{key}: unknown platform (expected one of: linux-x86_64, linux-aarch64)"
   env_reserved: "env.%{key} is derived from the workspace overlay order and must not be set manually"
   underlay_cycle: "underlay cycle detected among workspaces: %{workspaces}"
+
+conda:
+  check: "check existing Conda environment %{selection} (read-only)"
+  require_ready: "require managed environment completion record %{path}"
+  prepare: "prepare project Conda environment %{prefix} from %{source}; reuse only when the completed definition matches"
+  definition: "normalized environment definition: %{path}"
+  reused: "reuse prepared Conda environment %{prefix}"
+  lock_replay_pending: "Managed Conda lock replay is not implemented yet (Phase 3.5 environment locks; reference: %{path}); refusing --locked or lock_file instead of re-solving"
+  managed_not_ready: "Managed Conda environment %{prefix} is missing, incomplete or out of date; run `rospm apply` first"
+  managed_conflict: "Managed Conda prefix %{prefix} already exists without a matching completion record; it will not be overwritten. Move this directory aside, then run `rospm apply` again"
+  existing_missing: "Existing Conda environment %{selection} was not found; create it externally or select a managed environment, then run `rospm apply`; rospm will not create or modify external environments"
+  tool_missing: "Conda could not be started: %{error}; install Conda on PATH, then run `rospm apply` (automatic bootstrap is pending in Phase 3.5)"
+  query_failed: "Conda environment query failed (%{status}): %{error}"
+  query_invalid: "Conda returned invalid environment information: %{error}"
+  definition_invalid: "Invalid Conda environment definition %{path}: %{error}"
+  channels_conflict: "Environment file channels conflict with build.conda.managed.channels; omit the file channels or make the ordered lists match"
+  python_conflict: "Environment file Python specification %{found} conflicts with %{expected}; omit the file Python specification or use the exact manifest specification"
 
 plan:
   title: "plan: %{title}"

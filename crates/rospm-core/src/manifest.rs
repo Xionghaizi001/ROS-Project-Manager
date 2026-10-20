@@ -108,7 +108,7 @@ impl Build {
     }
 }
 
-/// Select an existing Conda environment. Exactly one selector is required.
+/// Select an existing Conda environment or a project-managed environment.
 /// A manifest prefix is relative to the manifest directory.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,10 +117,67 @@ pub struct CondaBuild {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed: Option<ManagedConda>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedConda {
+    /// Numeric major.minor[.patch]; emitted as a Conda `python=...` spec.
+    pub python: String,
+    pub channels: Vec<String>,
+    /// Conda environment YAML, relative to the manifest directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_file: Option<PathBuf>,
+    /// Reserved reference for exact replay, implemented in a later task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lock_file: Option<PathBuf>,
 }
 
 impl CondaBuild {
     pub fn validate(&self) -> Result<()> {
+        if let Some(managed) = &self.managed {
+            if self.name.is_some() || self.prefix.is_some() {
+                return Err(Error::Validation(vec![msg!(
+                    "manifest.conda_selector_required"
+                )]));
+            }
+            let components: Vec<_> = managed.python.split('.').collect();
+            if !(2..=3).contains(&components.len())
+                || components
+                    .iter()
+                    .any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()))
+            {
+                return Err(Error::Validation(vec![msg!(
+                    "manifest.conda_python_invalid"
+                )]));
+            }
+            if !managed.channels.iter().any(|c| c != "nodefaults")
+                || managed.channels.iter().any(|c| {
+                    c.trim().is_empty()
+                        || c.trim() != c
+                        || c.starts_with('-')
+                        || c.contains(['\0', '\n', '\r'])
+                })
+            {
+                return Err(Error::Validation(vec![msg!(
+                    "manifest.conda_channels_invalid"
+                )]));
+            }
+            for path in [&managed.environment_file, &managed.lock_file]
+                .into_iter()
+                .flatten()
+            {
+                if path.to_string_lossy().trim().is_empty() || path.to_string_lossy().contains('\0')
+                {
+                    return Err(Error::Validation(vec![msg!(
+                        "manifest.conda_prefix_invalid"
+                    )]));
+                }
+            }
+            return Ok(());
+        }
         let message = match (&self.name, &self.prefix) {
             (Some(name), None)
                 if !name.is_empty()

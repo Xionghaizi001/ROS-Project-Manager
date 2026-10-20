@@ -18,6 +18,12 @@ provider = "native"                      # native | pixi | docker
 # name = "robot-dev"                     # name 与 prefix 二选一，不能同时设置
 # prefix = ".conda/robot-dev"             # 相对于此清单
 # 单次覆盖：rospm build --conda-env other / --conda-prefix /path/to/env
+# 或用以下受管环境替换 name/prefix（由 `apply` 准备）：
+# [build.conda.managed]
+# python = "3.12"                        # Jazzy 示例；须与 ROS 的 Python ABI 匹配
+# channels = ["conda-forge"]
+# environment_file = "environment.yml"   # 可选；相对于清单目录
+# lock_file = "conda.lock"               # 可选引用；精确重放尚未实现
 
 [workspaces.main]
 path = "ws"

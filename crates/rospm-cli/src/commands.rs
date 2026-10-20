@@ -1150,6 +1150,7 @@ pub fn build(
         let mut conda = CondaBuild {
             name: conda_env,
             prefix: conda_prefix,
+            managed: None,
         };
         // Validate before resolving: an empty CLI path must not become cwd.
         conda.validate()?;

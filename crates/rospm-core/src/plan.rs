@@ -144,6 +144,8 @@ impl Command {
 #[derive(Debug, Clone)]
 pub enum Step {
     Run(Command),
+    /// Check an existing Conda environment or prepare a project-owned one.
+    Conda(crate::conda::CondaStep),
     WriteFile {
         path: PathBuf,
         contents: String,
@@ -258,6 +260,9 @@ impl Plan {
         for (i, step) in self.steps.iter().enumerate() {
             let n = i + 1;
             match step {
+                Step::Conda(step) => {
+                    let _ = writeln!(out, "[{n}] {}", step.render());
+                }
                 Step::Run(c) => {
                     let _ = writeln!(out, "[{n}] $ {}", c.render());
                 }
@@ -328,6 +333,11 @@ impl Plan {
         let stdout = || PathBuf::from("<stdout>");
         for (i, step) in self.steps.iter().enumerate() {
             match step {
+                Step::Conda(step) => {
+                    writeln!(out, "==> [{}] {}", i + 1, step.render())
+                        .map_err(|e| Error::io(stdout(), e))?;
+                    step.perform(out)?;
+                }
                 Step::Run(c) => {
                     writeln!(out, "==> [{}] {}", i + 1, c.render())
                         .map_err(|e| Error::io(stdout(), e))?;

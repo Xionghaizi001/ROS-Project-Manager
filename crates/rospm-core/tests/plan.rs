@@ -439,7 +439,7 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         let plan = provider::for_manifest(&m)
             .plan_build(&ctx(&m, &host), None)
             .unwrap();
-        assert_eq!(plan.action_count(), 2);
+        assert_eq!(plan.action_count(), 3);
         let commands: Vec<_> = plan
             .steps
             .iter()
@@ -469,6 +469,39 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         assert!(main_script.contains("deps_ws/install/setup.bash"));
         assert!(main_script.contains("--mixin release ccache --symlink-install"));
     }
+}
+
+#[test]
+fn managed_conda_is_prepared_before_apply_mutations_and_build_only_checks() {
+    let text =
+        format!("{FULL}\n[build.conda.managed]\npython = '3.12'\nchannels = ['conda-forge']\n");
+    let m = Manifest::parse(&text, Path::new("t")).unwrap();
+    let host = ready_host();
+    let context = ctx(&m, &host);
+    let provider = provider::for_manifest(&m);
+    let apply = provider.plan_apply(&context).unwrap();
+    let first_action = apply
+        .steps
+        .iter()
+        .find(|s| !matches!(s, Step::Note(_)))
+        .unwrap();
+    assert!(matches!(first_action, Step::Conda(_)));
+    let preview = apply.render();
+    assert!(preview.contains("/proj/.rospm/conda/env"));
+    assert!(preview.contains("conda env create --yes --prefix"));
+    assert!(preview.contains("python=3.12"));
+    let build = provider.plan_build(&context, Some("main")).unwrap();
+    assert!(matches!(&build.steps[0], Step::Conda(_)));
+    assert!(build
+        .render()
+        .contains("conda run --no-capture-output -p /proj/.rospm/conda/env"));
+    assert!(!build.render().contains("conda env create"));
+
+    let mut locked = context;
+    locked.locked = true;
+    // No system plan can be executed without a complete lock; both the
+    // existing native guard and managed environment guard refuse it.
+    assert!(provider.plan_apply(&locked).is_err());
 }
 
 #[test]

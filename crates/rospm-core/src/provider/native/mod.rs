@@ -458,6 +458,13 @@ impl Provider for Native {
             }
         }
 
+        if let Some(conda) = &m.build.conda {
+            plan.steps
+                .push(crate::plan::Step::Conda(crate::conda::CondaStep::new(
+                    conda, ctx.root, true, ctx.locked,
+                )?));
+        }
+
         let others: Vec<_> = host
             .ros_distros
             .iter()
@@ -883,6 +890,12 @@ impl Provider for Native {
             name = m.project.name,
             order = targets.join(" -> ")
         ));
+        if let Some(conda) = &m.build.conda {
+            plan.steps
+                .push(crate::plan::Step::Conda(crate::conda::CondaStep::new(
+                    conda, ctx.root, false, false,
+                )?));
+        }
         for name in &targets {
             let ws = &m.workspaces[name];
             let ws_path = ctx.root.join(&ws.path);
@@ -908,12 +921,7 @@ impl Provider for Native {
                 // caller's shell startup files select another environment.
                 let cwd = cmd.cwd.take().expect("workspace directory is set");
                 let script = format!("set -e\n{}", cmd.render());
-                cmd = Command::new("conda").args(["run", "--no-capture-output"]);
-                if let Some(name) = &conda.name {
-                    cmd = cmd.args(["-n", name]);
-                } else if let Some(prefix) = &conda.prefix {
-                    cmd = cmd.arg("-p").arg(ctx.root.join(prefix).to_string_lossy());
-                }
+                cmd = crate::conda::Selection::from_config(conda, ctx.root)?.command();
                 cmd = cmd
                     .args(["bash", "--noprofile", "--norc", "-c", &script])
                     .cwd(cwd);

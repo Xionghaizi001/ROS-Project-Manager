@@ -94,7 +94,7 @@ cli:
     manifest_line: "清单        %{path}"
     lock_line: "锁文件      %{path}"
   apply:
-    about: "配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
+    about: "准备清单声明的 Conda 环境、配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
     distro: "选择 humble | jazzy | rolling 并写回清单（dry-run 只预览）"
     locked_distro_conflict: "--locked 不能更改清单的发行版；请先运行 `rospm apply --distro <名>`，再运行 `rospm lock`"
     locked: "遵循 rospm.lock（快照仓库、固定版本）"
@@ -231,7 +231,9 @@ package_xml:
   missing_name: "缺少 <name>"
 
 manifest:
-  conda_selector_required: "build.conda 必须且只能设置 name 或 prefix 中的一项"
+  conda_selector_required: "build.conda 必须且只能设置 name、prefix 或 managed 子表中的一项"
+  conda_python_invalid: "build.conda.managed.python 必须是数字版本号 major.minor 或 major.minor.patch"
+  conda_channels_invalid: "build.conda.managed.channels 必须至少列出一个非空 channel，不能包含首尾空白、NUL 或换行"
   conda_name_invalid: "Conda 环境名称不能为空、不能以 '-' 开头、不能为 '.' 或 '..'，且不能包含空白或 / \\ : # NUL"
   conda_prefix_invalid: "Conda 环境路径不能为空，且不能包含 NUL"
   conda_native_only: "build.conda 当前仅支持 environment.provider = \"native\""
@@ -246,6 +248,23 @@ manifest:
   target_unknown_platform: "target.%{key}：未知平台（可选：linux-x86_64、linux-aarch64）"
   env_reserved: "env.%{key} 由 workspace 叠加顺序推导，不能手动设置"
   underlay_cycle: "workspace 之间存在 underlay 循环：%{workspaces}"
+
+conda:
+  check: "检查已有 Conda 环境 %{selection}（只读）"
+  require_ready: "要求存在受管环境完成记录 %{path}"
+  prepare: "从 %{source} 准备项目专用 Conda 环境 %{prefix}；仅复用已完成且定义一致的环境"
+  definition: "规范化环境定义：%{path}"
+  reused: "复用已准备的 Conda 环境 %{prefix}"
+  lock_replay_pending: "受管 Conda 锁定重放尚未实现（Phase 3.5 环境锁任务；引用：%{path}）；拒绝 --locked 或 lock_file，不重新求解"
+  managed_not_ready: "受管 Conda 环境 %{prefix} 缺失、未完成或定义已变化；请先执行 `rospm apply`"
+  managed_conflict: "受管 Conda 路径 %{prefix} 已存在，但没有匹配的完成记录；不会覆盖。请先移走此目录，再执行 `rospm apply`"
+  existing_missing: "未找到已有 Conda 环境 %{selection}；请自行创建，或改用受管环境，再执行 `rospm apply`；rospm 不会创建或修改外部环境"
+  tool_missing: "无法启动 Conda：%{error}；请将已安装的 Conda 加入 PATH，再执行 `rospm apply`（自动引导由 Phase 3.5 后续任务实现）"
+  query_failed: "Conda 环境查询失败（%{status}）：%{error}"
+  query_invalid: "Conda 返回的环境信息无效：%{error}"
+  definition_invalid: "Conda 环境定义 %{path} 无效：%{error}"
+  channels_conflict: "环境定义文件的 channels 与 build.conda.managed.channels 冲突；请省略文件中的 channels，或保持列表及顺序一致"
+  python_conflict: "环境定义文件中的 Python 约束 %{found} 与 %{expected} 冲突；请省略文件中的 Python 约束，或与清单完全一致"
 
 plan:
   title: "计划：%{title}"
