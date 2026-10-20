@@ -19,7 +19,7 @@ CLI 选项互斥，并覆盖清单中的整个选择，不写回清单。CLI 相
 python = "3.12"
 channels = ["conda-forge"]
 # environment_file = "environment.yml"  # 可选，路径以清单目录为基准
-# lock_file = "conda.lock"              # 仅定义引用；配置后 apply 暂时明确拒绝
+# lock_file = "conda-{platform}.lock"   # 默认值；`rospm lock` 写入，`apply --locked` 重放
 ```
 
 如果需要额外依赖，可在此目录创建 `environment.yml`，并启用 `environment_file`：
@@ -34,4 +34,6 @@ dependencies:
 
 外部已有环境缺失时会明确报错，rospm 不会修改它。受管环境创建完成后才写入完成记录；定义相同的完整环境可以复用，已有目录与记录不匹配时会报错并要求先移走目录，自动恢复与更新留待后续任务。Python 版本和 channels 可声明在清单中，环境文件内若有冲突则报错；文件中的名称和 prefix 不决定受管环境位置。
 
-名称、路径及完成记录不锁定包版本，也不保证 apt ROS 与 Conda Python 的 ABI 兼容。精确锁定重放、构建前兼容性诊断、`env` / `shell` 对接属于 Phase 3.5 后续任务。
+`apply` 之后执行 `rospm lock`，会把受管环境写成本平台的显式锁 `conda-linux-64.lock`（`conda list --explicit --sha256`），并在 `rospm.lock` 中记录其摘要与环境定义摘要；两个文件一起提交。另一台机器上 `rospm apply --locked` 用 `conda create --file` 按锁文件精确安装，不重新求解；缺少本平台记录、定义已变化或摘要不符时直接报错。`environment.yml` 中的 pip 依赖须全部写成 `name==version`（包括传递依赖），重放时以 `--no-deps` 安装。
+
+外部已有环境（`name` / `prefix`）只检查存在，不记录锁，也没有可重放保证。完成记录与锁都不保证 apt ROS 与 Conda Python 的 ABI 兼容；构建前兼容性诊断、`env` / `shell` 对接属于 Phase 3.5 后续任务。

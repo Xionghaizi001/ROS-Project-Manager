@@ -459,6 +459,10 @@ impl Provider for Native {
         }
 
         if let Some(conda) = &m.build.conda {
+            let lock = locked_native.map(|(lock, _)| lock);
+            if lock.is_some() && conda.managed.is_none() {
+                plan.note(msg!("native.apply.locked_conda_external"));
+            }
             plan.steps.push(crate::plan::Step::Conda(Box::new(
                 crate::conda::CondaStep::new(
                     conda,
@@ -466,7 +470,7 @@ impl Provider for Native {
                     &host.conda,
                     ctx.platform,
                     true,
-                    ctx.locked,
+                    lock,
                 )?,
             )));
         }
@@ -904,7 +908,7 @@ impl Provider for Native {
                     &ctx.host.conda,
                     ctx.platform,
                     false,
-                    false,
+                    None,
                 )?;
                 plan.steps
                     .push(crate::plan::Step::Conda(Box::new(step.clone())));

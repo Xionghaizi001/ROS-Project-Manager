@@ -94,6 +94,14 @@ pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
     let apt = resolve_apt(ctx, &mut notes)?;
     let pip = resolve_pip(host, &m.dependencies.pip, &mut notes);
     let native = resolve_snapshots(ctx, fetch, &apt, &mut notes);
+    let conda = match &m.build.conda {
+        Some(conda) => {
+            crate::conda::resolve_lock(conda, ctx.root, &host.conda, ctx.platform, &mut notes)?
+                .into_iter()
+                .collect()
+        }
+        None => Vec::new(),
+    };
 
     let manifest_text = std::fs::read_to_string(ctx.root.join(crate::manifest::MANIFEST_FILE))
         .or_else(|_| {
@@ -115,6 +123,7 @@ pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
         sources,
         apt,
         pip,
+        conda,
     };
     Ok(Resolution { lock, notes })
 }

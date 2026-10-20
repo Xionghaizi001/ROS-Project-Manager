@@ -660,6 +660,7 @@ fn locked(ros_snapshot: Option<&str>, ubuntu_snapshot: Option<&str>) -> Lock {
             },
         ],
         pip: vec![],
+        conda: vec![],
     }
 }
 

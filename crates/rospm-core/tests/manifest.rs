@@ -135,6 +135,27 @@ lock_file = "locks/conda-linux-64.lock"
 }
 
 #[test]
+fn several_platforms_need_a_per_platform_conda_lock_file() {
+    let both = MINIMAL.replace(
+        "platforms = [\"linux-x86_64\"]",
+        "platforms = [\"linux-x86_64\", \"linux-aarch64\"]",
+    );
+    assert_ne!(both, MINIMAL);
+    let managed = "[build.conda.managed]\npython = '3.12'\nchannels = ['conda-forge']\n";
+    assert!(parse(&format!("{both}\n{managed}")).is_ok());
+    assert!(parse(&format!(
+        "{both}\n{managed}lock_file = 'locks/conda-{{platform}}.lock'\n"
+    ))
+    .is_ok());
+    assert!(
+        validation_errors(&format!("{both}\n{managed}lock_file = 'conda.lock'\n"))
+            .iter()
+            .any(|m| m == "manifest.conda_lock_platform_required")
+    );
+    assert!(parse(&format!("{MINIMAL}\n{managed}lock_file = 'conda.lock'\n")).is_ok());
+}
+
+#[test]
 fn build_order_puts_underlays_first() {
     let m = parse(FULL).unwrap();
     assert_eq!(m.build_order().unwrap(), vec!["deps", "main"]);

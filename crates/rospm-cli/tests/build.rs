@@ -226,6 +226,8 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
     )));
     assert!(!build.contains("conda env create"));
     assert!(preview(&nested, &["--conda-env", "external"]).contains("-n external"));
+    // The lock reference alone changes nothing: plain apply still solves the
+    // definition; only `apply --locked` replays (tests/apply_locked.rs).
     let locked = text + "lock_file = 'locks/explicit.lock'\n";
     fs::write(dir.join("rospm.toml"), &locked).unwrap();
     let out = rospm()
@@ -233,11 +235,19 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
         .args(["apply", "--dry-run"])
         .output()
         .unwrap();
-    assert!(!out.status.success());
-    let error = String::from_utf8(out.stderr).unwrap();
-    assert!(error.contains("refusing --locked or lock_file"), "{error}");
-    assert!(error.contains(dir.join("locks/explicit.lock").to_str().unwrap()));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let preview = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        preview.contains("conda env create --yes --prefix"),
+        "{preview}"
+    );
+    assert!(!preview.contains("explicit.lock"), "{preview}");
     assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), locked);
+    assert!(!dir.join("locks").exists());
     assert!(!dir.join(".rospm").exists());
 }
 

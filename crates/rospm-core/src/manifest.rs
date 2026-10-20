@@ -130,7 +130,9 @@ pub struct ManagedConda {
     /// Conda environment YAML, relative to the manifest directory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_file: Option<PathBuf>,
-    /// Reserved reference for exact replay, implemented in a later task.
+    /// Explicit Conda lock written by `lock` and replayed by `apply --locked`,
+    /// relative to the manifest directory; `{platform}` expands to the Conda
+    /// subdir (`linux-64`). Defaults to `conda-{platform}.lock`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock_file: Option<PathBuf>,
 }
@@ -454,6 +456,12 @@ impl Manifest {
             }
             if self.environment.provider != ProviderKind::Native {
                 errs.push(msg!("manifest.conda_native_only"));
+            }
+            let lock_file = conda.managed.as_ref().and_then(|m| m.lock_file.as_ref());
+            if self.project.platforms.len() > 1
+                && lock_file.is_some_and(|p| !p.to_string_lossy().contains("{platform}"))
+            {
+                errs.push(msg!("manifest.conda_lock_platform_required"));
             }
         }
 

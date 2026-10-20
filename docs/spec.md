@@ -58,7 +58,7 @@ ros_base = "ros-jazzy-ros-base"            # 底包：ros-base（精简）或 de
 # python = "3.12"
 # channels = ["conda-forge"]
 # environment_file = "config/environment.yml" # 可选，Conda 环境定义
-# lock_file = "locks/conda-linux-64.lock"     # 可选引用；精确重放尚未实现，配置后 apply 明确拒绝
+# lock_file = "locks/conda-{platform}.lock"   # 可选，显式锁路径；默认 conda-{platform}.lock
 
 # ---------- workspace 与叠加顺序 ----------
 [workspaces.deps]
@@ -127,7 +127,7 @@ sign = false
 | `project.platforms` | 是 | 至少一项；`lock` 按每个平台分别解析 |
 | `environment.provider` | 是 | 只允许存在对应的 `environment.<provider>` 子表，多余子表报错 |
 | `build.conda` | 否 | 当前仅用于 native；表存在时必须且只能设置 `name`（已有环境名称）、`prefix`（已有环境路径）或 `managed` 子表；空值、未知字段报错；省略此表保持原构建方式 |
-| `build.conda.managed` | 否 | 必填 `python`（数字 `major.minor[.patch]`）和非空 `channels` 列表；可选 `environment_file` / `lock_file` 路径，以清单目录为基准；不允许自定义名称或 prefix |
+| `build.conda.managed` | 否 | 必填 `python`（数字 `major.minor[.patch]`）和非空 `channels` 列表；可选 `environment_file` / `lock_file` 路径，以清单目录为基准；`lock_file` 中的 `{platform}` 展开为 Conda 平台名（`linux-64` / `linux-aarch64`），默认 `conda-{platform}.lock`；`project.platforms` 多于一项时显式的 `lock_file` 必须含 `{platform}`；不允许自定义名称或 prefix |
 | `workspaces.<name>` | 至少一个 | `path` 相对于清单所在目录；`sources` 可省略（纯本地源码） |
 | `workspaces.<name>.underlays` | 否 | 引用的 workspace 必须存在；整体必须是 DAG |
 | `dependencies.pip` | 否 | 只记录，`apply` 不执行 |
@@ -138,7 +138,7 @@ sign = false
 
 `build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括受管环境选择），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再加载 ROS 与 underlay 并执行 colcon；`--dry-run` 展示该完整命令且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。
 
-已有环境模式下，`apply` / `build` 在执行系统安装或编译之前查询 Conda 并检查环境是否存在，缺失时明确报错；不会创建、更新或接管外部环境。名称或路径本身不锁定包版本。
+已有环境模式下，`apply` / `build` 在执行系统安装或编译之前查询 Conda 并检查环境是否存在，缺失时明确报错；不会创建、更新或接管外部环境。名称或路径本身不锁定包版本：`lock` 不为外部环境写锁记录并说明，`apply --locked` 对它仍只检查存在并在计划中说明没有可重放保证。
 
 受管模式下，环境固定为 `<清单目录>/.rospm/conda/env`，不使用 Conda 的全局同名环境；两个同名项目位于不同目录时拥有不同 prefix。`apply` 在系统安装步骤之前准备环境；`build` 只检查环境和完成记录，缺失或定义变化时提示先执行 `apply`。环境创建命令为 `conda env create --yes --prefix <项目 prefix> --file <生成的定义>`，工作目录为清单目录，不执行 `conda init` 或修改 shell 启动文件。
 
@@ -152,11 +152,21 @@ sign = false
 
 安装以当前用户执行 `bash --noprofile --norc <安装器> -b -p <安装目录>`：`-b` 为批处理模式，不提示、不修改 `.bashrc` 等 shell 启动文件；rospm 不执行 `conda init`，不需要 sudo。安装后 `<安装目录>/bin/conda --version` 满足最低版本才写入同级的 `miniforge3-<版本>.ready`（内容为安装器摘要）。没有该记录的安装目录视为中断的 rospm 安装，下次 `apply` 删除后重装；该目录专属 rospm，不涉及用户自行安装的 Conda。同一份 Miniforge 由该用户的所有项目共用，`uninstall` 不删除它。Conda 自身仍会写入 `~/.conda/environments.txt` 等运行记录。`--dry-run` 展示上述选择顺序、安装器版本、URL、摘要、缓存与安装位置，不下载、不写文件。已有环境模式（`name` / `prefix`）不自动安装 Conda。
 
-`environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理，不合并 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
+`environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理（`dependencies` 中的 `pip:` 子列表由 Conda 调用 pip 安装），不合并清单的 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
 
-规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`；完成记录匹配当前规范化定义时复用。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
+规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要，按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
 
-`lock_file` 目前只定义引用字段及路径规则；配置此字段的受管 `apply`、以及受管 `apply --locked` 均明确失败，不静默重新求解。锁记录格式、摘要与目标平台验证及精确重放由 Phase 3.5 第 4 项实现。构建工具 / Python ABI / CMake 缓存检查及 `env` / `shell` 对接仍见后续任务。
+#### 受管环境的锁定与重放
+
+锁记录分两层（决策 #4 的引用方式）：每个平台一份 Conda 显式锁（`conda list --explicit --sha256` 格式：`# platform: <subdir>`、`@EXPLICIT`，每行为带 MD5 / SHA256 摘要的包 URL），路径由 `lock_file` 决定，与清单一起提交；`rospm.lock` 的 `[[conda]]` 只记录平台、锁文件相对路径、锁文件摘要及规范化定义摘要，不复制包列表。普通 `apply` 始终按定义求解，不读取锁文件。
+
+`rospm lock` 只为本机平台记录受管环境：要求环境存在且完成记录第一行与当前定义一致（否则说明并不记录，提示先 `apply`）；用选定的 Conda 执行 `conda list --explicit --sha256 --prefix <prefix>`，校验平台与摘要后写入锁文件（内容不变则不重写），随后在完成记录中补写锁文件摘要，使本机随后的 `apply --locked` 直接复用该环境。其它平台的 `[[conda]]` 记录与 apt 一样原样保留。
+
+覆盖规则：显式锁只包含 Conda 包。定义中的 PyPI 依赖（`pip:` 子列表）必须全部写成 `name==version`（不接受范围、通配、URL、extras 或环境标记），重放时以 `pip install --no-deps` 安装，因此传递依赖也必须逐个固定；`lock` 用 `conda list --json` 核对环境中 channel 为 `pypi` 的包与这些固定完全一致（PEP 503 规范化名称），有未固定、多余或版本不同的包时不记录并列出。定义中的 `variables` 在重放后以 `conda env config vars set --prefix` 写入环境。
+
+`apply --locked` 在规划阶段（不写文件、不启动子进程）检查：`rospm.lock` 有本机平台的 `[[conda]]` 记录；记录的定义摘要与当前规范化定义一致；锁文件存在且摘要一致；锁文件为本机平台、含 `@EXPLICIT` 且每个包都有摘要；锁覆盖定义中的每个 Conda 依赖名称、`python` 版本与清单一致，有 pip 依赖时含 `pip`；pip 依赖全部为精确固定。任一不满足即失败并提示在该平台 `apply` 后重新 `lock`，从不退回求解。执行时依次运行 `conda create --yes --prefix <prefix> --file <锁文件>`（显式文件不经求解器，Conda 校验包摘要）、写入变量、`conda run --no-capture-output -p <prefix> python -m pip install --no-deps --no-input --disable-pip-version-check <固定>`，全部成功后才写入两行完成记录。已有但完成记录不匹配锁的目录（例如此前按定义求解创建）不会被覆盖，仍提示先移走目录。
+
+构建工具 / Python ABI / CMake 缓存检查及 `env` / `shell` 对接仍见后续任务。
 
 ### 2.3 叠加顺序的推导
 
@@ -218,6 +228,13 @@ sha256 = "…"
 [[pip]]
 name = "numpy"
 version = "1.26.4"
+
+# ---------- 受管 Conda 环境（按平台，只记引用与哈希，§2 受管环境的锁定与重放） ----------
+[[conda]]
+platform = "linux-x86_64"
+lock = "conda-linux-64.lock"               # conda list --explicit --sha256，与清单一起提交
+lock_sha256 = "sha256:…"
+definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 ```
 
 ### 3.2 锁定严格度与降级
@@ -229,6 +246,7 @@ version = "1.26.4"
 | pixi | `pixi.lock` 哈希 | 无 | — |
 | docker | digest | 无 | — |
 | pip | 无 | 始终仅记录 | — |
+| 受管 Conda | 显式锁（每包摘要）+ 锁文件哈希 + 定义哈希 | 无：缺记录、摘要或定义不符直接失败，不重新求解 | — |
 
 **`apply --locked` 的做法（P2）**：
 
@@ -250,6 +268,7 @@ version = "1.26.4"
 | apt | 本机 dpkg：全部已安装的 `ros-<distro>-*`、底包、平台覆盖后的额外 apt 包、`python3-rosdep` / `python3-vcstool` / `python3-colcon-common-extensions`，按名字排序；`.deb` 的 sha256 尽力从 `apt-cache show <名>=<版本>` 取，取不到留空 | 底包 / 额外包 / 工具未安装 → 不记录并说明；`dpkg-query` 不可用 → 报错；主机 Ubuntu 与清单不符 → 报错（与 `apply` 同一规则，否则记录的版本对不上快照） |
 | 快照 | ROS：GET `snapshots.ros.org/<distro>/` 目录索引，取最新的日期，读其 `dists/<codename>/Release` 核对 `Suite` / `Architectures` 含本机架构，下载 `main/binary-<arch>/Packages.gz` 核对本机全部锁定的 `ros-<distro>-*` 版本都在其中，再用 keyserver 取得并按指纹 `4B63…CBF125EA` 核验的密钥 `gpgv` 验证 `Release.gpg`；最新的三个日期依次尝试，都不含锁定版本（本机在最新快照之后从实时源安装）则不记录 ROS 快照并列出缺失的版本，提示下一个快照发布后重新 `lock`。Ubuntu：取本机 `/var/lib/dpkg/status` 的修改时间（最后一次装 / 卸包，此时本机装的版本都在实时源中；重复 `lock` 不变，保持幂等），取不到才退回 ROS 快照 `Release` 的 `Date:`，换算成 `YYYYMMDDTHHMMSSZ`，GET `snapshot.ubuntu.com/ubuntu/<ts>/dists/<codename>/InRelease` 须 200，并用 `/usr/share/keyrings/ubuntu-archive-keyring.gpg` 验签（无该文件则跳过并说明）。gpg / gpgv 缺失时记录日期但说明"签名未检查"；签名**失败**则不记录该日期。之后其余锁定包（不在 ROS 快照索引中的）逐个在 Ubuntu 快照的 `<codename>-security` / `-updates` / `<codename>` × `main universe restricted multiverse` 索引中查找（找齐即停，`universe` 索引有数十 MB），仍找不到的列出数量与示例；索引下载失败则说明未能核对 | 任一层失败 → 该字段为空 + `DEGRADED` 说明（`apply --locked` 用实时源）；`ROSPM_NO_NETWORK=1` 跳过整层并说明 |
 | pip | `python3 -m pip list --format=freeze`，只记录 `[dependencies].pip` 里点名的包（PEP 503 规范化名字） | pip 不可用或包未装 → 不记录并说明（决策 #6） |
+| 受管 Conda | 已就绪的受管环境：`conda list --explicit --sha256` 写入 `lock_file`，记录其哈希与定义哈希（§2 受管环境的锁定与重放） | 未就绪、PyPI 包未精确固定或与固定不一致、Conda 查询失败 → 不记录并说明（`apply --locked` 在该平台失败）；外部环境 → 不记录并说明 |
 
 - 只能解析本机平台：`--platform` 与本机不同直接报错（P5 起查仓库索引）。已有锁文件中**其它平台**的 apt 记录原样保留，本平台的记录整体替换，因此一份锁文件可由多台机器各自 `lock` 累积。
 - 幂等：解析结果与现有文件除 `generated_at` 外完全一致时不重写文件、`generated_at` 保持，输出 `unchanged`。apt 按（平台，名字）排序，源码按叠加顺序与 `.repos` 顺序。
@@ -277,9 +296,9 @@ version = "1.26.4"
 |---|---|---|---|
 | `init [--from-env] [--distro <名>] [--base ros-base\|desktop]` | 写项目文件 / 幂等 | 生成清单模板；`--distro humble\|jazzy\|rolling` 指定模板发行版，不指定时 Ubuntu 22.04 → Humble、24.04 → Jazzy，无法识别时 → Jazzy；`--from-env` 尽力探测（决策 #3），不与 `--distro` 同用；`--base` 选底包元包（默认 `ros-base`，`desktop` 含 RViz / demos），写入 `environment.native.ros_base`；已存在不覆盖，需 `--force` | — |
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；显式 `--target` 查询 apt / conda 目标仓库索引，跨架构时跳过主机探测；默认只报告（退出码 0），`--strict` 在所执行的检查有缺失或未知项时退出 1 | — |
-| `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
+| `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期、受管 Conda 环境的显式锁（写入 `lock_file`）；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 与 Conda 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
 | `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
-| `apply [--distro <名>] [--locked] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
+| `apply [--distro <名>] [--locked] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2），受管 Conda 环境按本平台显式锁重放、缺记录即失败（§2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`，`autoremove`；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>] [--conda-env <name> \| --conda-prefix <path>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置；可覆盖项目默认的 Conda 环境选择 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |

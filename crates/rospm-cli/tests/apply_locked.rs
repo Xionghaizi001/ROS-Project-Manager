@@ -7,7 +7,9 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rospm_core::lock::{sha256_hex, Lock, LockedApt, LockedNative, LockedProvider, LockedSource};
+use rospm_core::lock::{
+    sha256_hex, Lock, LockedApt, LockedConda, LockedNative, LockedProvider, LockedSource,
+};
 use rospm_core::manifest::ProviderKind;
 use rospm_core::platform::Platform;
 
@@ -115,6 +117,7 @@ fn write_lock(
             sha256: None,
         }],
         pip: vec![],
+        conda: vec![],
     };
     lock.save(&dir.join("rospm.lock")).unwrap();
 }
@@ -258,4 +261,78 @@ fn apply_locked_reports_a_missing_lock_in_chinese() {
         stderr.contains("rospm.lock") && stderr.contains("rospm lock"),
         "{stderr}"
     );
+}
+
+#[test]
+fn apply_locked_replays_the_managed_conda_lock_or_refuses_without_a_record() {
+    let Some((ubuntu, distro, ros_base)) = host_distro() else {
+        eprintln!("skipping: host is neither 22.04 nor 24.04");
+        return;
+    };
+    let dir = fixture_dir("conda-lock", ubuntu, distro, ros_base);
+    let manifest_path = dir.join("rospm.toml");
+    let text = fs::read_to_string(&manifest_path).unwrap()
+        + "\n[build.conda.managed]\npython = '3.12'\nchannels = ['conda-forge']\nlock_file = 'locks/conda-{platform}.lock'\n";
+    fs::write(&manifest_path, &text).unwrap();
+    write_lock(&dir, ros_base, None, None);
+    let manifest = manifest_path.to_string_lossy().into_owned();
+    let run = |lang: &str| {
+        rospm()
+            .env("PATH", "")
+            .env("XDG_DATA_HOME", dir.join("user/data"))
+            .env("XDG_CACHE_HOME", dir.join("user/cache"))
+            .args([
+                "--lang",
+                lang,
+                "--manifest",
+                &manifest,
+                "apply",
+                "--locked",
+                "--dry-run",
+            ])
+            .output()
+            .unwrap()
+    };
+    for (lang, expected) in [
+        ("en", "no managed Conda lock record for linux-x86_64"),
+        ("zh", "没有 linux-x86_64 的受管 Conda 锁记录"),
+    ] {
+        let out = run(lang);
+        assert!(!out.status.success());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(stderr.contains(&dir.join("locks/conda-linux-64.lock").display().to_string()));
+    }
+
+    let explicit = "# platform: linux-64\n@EXPLICIT\nhttps://conda.anaconda.org/conda-forge/linux-64/python-3.12.7-hc5c86c4_0_cpython.conda#0123456789abcdef0123456789abcdef\n";
+    fs::create_dir(dir.join("locks")).unwrap();
+    fs::write(dir.join("locks/conda-linux-64.lock"), explicit).unwrap();
+    let mut lock = Lock::load(&dir.join("rospm.lock")).unwrap();
+    let parsed = rospm_core::manifest::Manifest::load(&manifest_path).unwrap();
+    let managed = parsed.build.conda.unwrap().managed.unwrap();
+    lock.conda.push(LockedConda {
+        platform: Platform::LinuxX86_64,
+        lock: "locks/conda-linux-64.lock".into(),
+        lock_sha256: sha256_hex(explicit),
+        definition_sha256: rospm_core::conda::definition_sha256(&managed, &dir).unwrap(),
+    });
+    lock.save(&dir.join("rospm.lock")).unwrap();
+    let out = run("en");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("without solving"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "conda create --yes --prefix {} --file {}",
+            dir.join(".rospm/conda/env").display(),
+            dir.join("locks/conda-linux-64.lock").display()
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("conda env create"), "{stdout}");
+    assert!(!dir.join(".rospm").exists() && !dir.join("user").exists());
 }

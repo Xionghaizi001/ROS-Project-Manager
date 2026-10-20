@@ -34,6 +34,10 @@ pub struct Lock {
     /// Recorded for `verify` only; never reinstalled (decision #6).
     #[serde(default)]
     pub pip: Vec<LockedPip>,
+    /// Managed Conda environments, one per platform; the package list lives
+    /// in the referenced explicit lock file, recorded here by hash only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conda: Vec<LockedConda>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +112,19 @@ pub struct LockedPip {
     pub version: String,
 }
 
+/// A `conda list --explicit --sha256` file for one platform. Replay installs
+/// exactly its packages without solving; `definition_sha256` is the
+/// normalized environment definition the environment was created from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedConda {
+    pub platform: Platform,
+    /// Relative to the manifest directory.
+    pub lock: String,
+    pub lock_sha256: String,
+    pub definition_sha256: String,
+}
+
 impl Lock {
     pub fn parse(text: &str, path: &Path) -> Result<Lock> {
         let lock: Lock = toml::from_str(text).map_err(|source| Error::LockParse {
@@ -167,6 +184,20 @@ impl Lock {
         self.apt.retain(|a| a.platform == resolved);
         self.apt.extend(carried);
         sort_apt(&mut self.apt);
+        let carried: Vec<LockedConda> = previous
+            .conda
+            .iter()
+            .filter(|c| c.platform != resolved)
+            .cloned()
+            .collect();
+        self.conda.retain(|c| c.platform == resolved);
+        self.conda.extend(carried);
+        self.conda
+            .sort_by_key(|c| Platform::ALL.iter().position(|p| *p == c.platform));
+    }
+
+    pub fn conda_for(&self, platform: Platform) -> Option<&LockedConda> {
+        self.conda.iter().find(|c| c.platform == platform)
     }
 
     /// Entries for one platform, in file order.
@@ -265,6 +296,7 @@ mod tests {
             sources: Vec::new(),
             apt: apt_entries,
             pip: Vec::new(),
+            conda: Vec::new(),
         }
     }
 
@@ -289,6 +321,36 @@ mod tests {
             ]
         );
         assert_eq!(fresh.apt_for(Platform::LinuxAarch64).len(), 1);
+    }
+
+    #[test]
+    fn merge_carries_conda_records_of_other_platforms() {
+        let record = |platform, digest: &str| LockedConda {
+            platform,
+            lock: format!("conda-{platform}.lock"),
+            lock_sha256: digest.into(),
+            definition_sha256: sha256_hex("d"),
+        };
+        let mut previous = lock(Vec::new());
+        previous.conda = vec![
+            record(Platform::LinuxX86_64, "old"),
+            record(Platform::LinuxAarch64, "arm"),
+        ];
+        let mut fresh = lock(Vec::new());
+        fresh.conda = vec![record(Platform::LinuxX86_64, "new")];
+        fresh.merge_other_platforms(&previous, Platform::LinuxX86_64);
+        assert_eq!(
+            fresh.conda_for(Platform::LinuxX86_64).unwrap().lock_sha256,
+            "new"
+        );
+        assert_eq!(
+            fresh.conda_for(Platform::LinuxAarch64).unwrap().lock_sha256,
+            "arm"
+        );
+        let text = fresh.to_toml().unwrap();
+        assert_eq!(Lock::parse(&text, Path::new("rospm.lock")).unwrap(), fresh);
+        // Locks without Conda keep their exact previous serialization.
+        assert!(!lock(Vec::new()).to_toml().unwrap().contains("conda"));
     }
 
     #[test]

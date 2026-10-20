@@ -622,6 +622,7 @@ pub fn lock(global: &Global, platform: Option<Platform>) -> Result<()> {
         apt: l.apt_for(platform).len(),
         apt_other_platforms: l.apt.len() - l.apt_for(platform).len(),
         pip: l.pip.len(),
+        conda: l.conda_for(platform).is_some(),
         ros_snapshot: native.and_then(|n| n.ros_snapshot.clone()),
         ubuntu_snapshot: native.and_then(|n| n.ubuntu_snapshot.clone()),
         notes: resolution.notes.iter().map(ToString::to_string).collect(),
@@ -680,6 +681,8 @@ struct LockReport {
     apt: usize,
     apt_other_platforms: usize,
     pip: usize,
+    /// Whether this platform's managed Conda environment was recorded.
+    conda: bool,
     ros_snapshot: Option<String>,
     ubuntu_snapshot: Option<String>,
     notes: Vec<String>,

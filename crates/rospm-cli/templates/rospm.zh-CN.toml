@@ -23,7 +23,7 @@ provider = "native"                      # native | pixi | docker
 # python = "3.12"                        # Jazzy 示例；须与 ROS 的 Python ABI 匹配
 # channels = ["conda-forge"]
 # environment_file = "environment.yml"   # 可选；相对于清单目录
-# lock_file = "conda.lock"               # 可选引用；精确重放尚未实现
+# lock_file = "conda-{platform}.lock"    # 默认值；由 `rospm lock` 写入，`apply --locked` 精确重放
 
 [workspaces.main]
 path = "ws"

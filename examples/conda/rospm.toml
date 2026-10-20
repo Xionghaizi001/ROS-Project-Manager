@@ -19,7 +19,7 @@ name = "robot-dev"
 # python = "3.12"
 # channels = ["conda-forge"]
 # environment_file = "environment.yml"   # optional; relative to this manifest
-# lock_file = "conda.lock"               # optional reference; replay is pending
+# lock_file = "conda-{platform}.lock"    # default; written by `rospm lock`
 
 [workspaces.main]
 path = "ws"                              # place local ROS packages in ws/src

@@ -23,7 +23,7 @@ provider = "native"                      # native | pixi | docker
 # python = "3.12"                        # example for Jazzy; match your ROS Python ABI
 # channels = ["conda-forge"]
 # environment_file = "environment.yml"   # optional; relative to this manifest
-# lock_file = "conda.lock"               # optional reference; replay is not implemented yet
+# lock_file = "conda-{platform}.lock"    # default; written by `rospm lock`, replayed by `apply --locked`
 
 [workspaces.main]
 path = "ws"
