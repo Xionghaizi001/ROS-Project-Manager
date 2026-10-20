@@ -55,7 +55,8 @@ fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<Strin
         let ws = &ctx.manifest.workspaces[name];
         let setup = ws_setup_file(ctx.root, &ws.path, shell);
         let q = shell_quote(&setup.to_string_lossy());
-        lines.push(format!("[ -f {q} ] && source {q}"));
+        // `[ -f X ] && source X` would fail the whole `&&` chain when X is missing.
+        lines.push(format!("[ ! -f {q} ] || source {q}"));
     }
     lines
 }

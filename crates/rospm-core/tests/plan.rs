@@ -471,6 +471,16 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         assert!(deps_script.contains("COLCON_DEFAULTS_FILE=/proj/colcon/deps.defaults.yaml"));
         let main_script = &commands[1].args[8];
         assert!(main_script.contains("deps_ws/install/setup.bash"));
+        // A not-yet-built underlay must not stop the `&&` chain before colcon.
+        let guard = main_script
+            .split(" && ")
+            .find(|l| l.contains("deps_ws/install/setup.bash"))
+            .unwrap();
+        let ran = std::process::Command::new("bash")
+            .args(["-c", &format!("set -e\n{guard} && echo colcon")])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "colcon\n", "{guard}");
         assert!(main_script.contains("--mixin release ccache --symlink-install"));
     }
 }
