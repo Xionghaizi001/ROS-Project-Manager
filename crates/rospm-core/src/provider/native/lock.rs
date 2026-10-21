@@ -97,17 +97,12 @@ pub fn resolve(ctx: &Context, fetch: Option<&dyn Fetch>) -> Result<Resolution> {
         None => Vec::new(),
     };
 
-    let manifest_text = std::fs::read_to_string(ctx.root.join(crate::manifest::MANIFEST_FILE))
-        .or_else(|_| {
-            // `--manifest` may point elsewhere; the CLI fixes the hash up in
-            // that case. Fall back to re-serialising the parsed manifest.
-            m.to_toml()
-        })?;
-
     let lock = Lock {
         schema_version: SUPPORTED_SCHEMA_VERSION,
         generated_at: lock::now_rfc3339(),
-        manifest_sha256: lock::sha256_hex(&manifest_text),
+        // Hashed by the caller from the file it loaded (`--manifest` may
+        // name any file), the one place that knows it.
+        manifest_sha256: String::new(),
         provider: LockedProvider {
             kind: ProviderKind::Native,
             native: Some(native),

@@ -1037,7 +1037,6 @@ mod tests {
         /// rospm's per-user directories, inside the temporary project.
         fn host(&self) -> CondaHost {
             CondaHost {
-                on_path: None,
                 data_dir: self.0.join("user/data"),
                 cache_dir: self.0.join("user/cache"),
             }

@@ -13,7 +13,7 @@
 //! to `<workspace>/src`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -54,14 +54,6 @@ impl ReposFile {
     pub fn load(path: &Path) -> Result<ReposFile> {
         let text = fs::read_to_string(path).map_err(|e| Error::io(path, e))?;
         ReposFile::parse(&text, path)
-    }
-
-    /// Where `vcs import` would place each repository under `src_dir`.
-    pub fn checkout_dirs(&self, src_dir: &Path) -> Vec<(String, PathBuf)> {
-        self.repositories
-            .keys()
-            .map(|rel| (rel.clone(), src_dir.join(rel)))
-            .collect()
     }
 }
 
@@ -112,8 +104,6 @@ repositories:
         assert_eq!(demos.kind, "git");
         assert_eq!(demos.version.as_deref(), Some("jazzy"));
         assert!(f.repositories["ros2/examples"].version.is_none());
-        let dirs = f.checkout_dirs(Path::new("/ws/src"));
-        assert_eq!(dirs[0].1, PathBuf::from("/ws/src/ros2/demos"));
     }
 
     #[test]

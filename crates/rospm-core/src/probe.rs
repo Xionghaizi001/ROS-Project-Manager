@@ -34,8 +34,6 @@ pub const NATIVE_CORE_TOOLS: &[&str] = &["git", "vcs", "colcon", "rosdep"];
 /// rosdep's default sources list, written by `sudo rosdep init`.
 pub const ROSDEP_DEFAULT_LIST: &str = "/etc/ros/rosdep/sources.list.d/20-default.list";
 
-/// The official ROS 2 apt repository (live; snapshots arrive in P2; mirrors in [`crate::mirror`]).
-pub const ROS_APT_URL: &str = crate::mirror::OFFICIAL_ROS_APT;
 /// Substring that identifies the ROS 2 repository in any apt source file,
 /// whatever its form (`ros2.list` written by hand or by rospm, `ros2.sources`
 /// written by the `ros2-apt-source` package).
@@ -44,9 +42,6 @@ pub const ROS_APT_NEEDLE: &str = "packages.ros.org/ros2";
 pub const ROS_APT_KEYRING: &str = "/usr/share/keyrings/ros-archive-keyring.gpg";
 /// Where rospm writes the source entry (same path as the official guide).
 pub const ROS_APT_LIST: &str = "/etc/apt/sources.list.d/ros2.list";
-/// Signing key for `packages.ros.org` (dearmored; the snapshot key differs, see P2).
-/// Mirrors serve the same file under `<rosdistro>/ros.key` ([`crate::mirror::Mirror::ros_key_url`]).
-pub const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";
 /// Full fingerprint of the Open Robotics signing key (`info@osrfoundation.org`,
 /// RSA 4096, created 2019-05-30, valid until 2030-06-01). `apply` refuses a
 /// downloaded `ros.key` whose fingerprint differs.
@@ -250,15 +245,6 @@ fn extract_url_containing(text: &str, needle: &str) -> Option<String> {
         })
 }
 
-/// Whether an apt source file (one-line or deb822) has a non-comment line
-/// containing `needle`.
-pub fn source_text_mentions(text: &str, needle: &str) -> bool {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.starts_with('#'))
-        .any(|l| l.contains(needle))
-}
-
 /// Whether an apt source file enables the `universe` component, in either
 /// the one-line (`deb … main universe`) or deb822 (`Components: main universe`) form.
 pub fn source_text_enables_universe(text: &str) -> bool {
@@ -402,7 +388,6 @@ pub fn ros_home() -> PathBuf {
 /// directories rospm owns for its own Miniforge and downloads.
 #[derive(Debug, Clone)]
 pub struct CondaHost {
-    pub on_path: Option<PathBuf>,
     /// `$XDG_DATA_HOME/rospm`, default `~/.local/share/rospm`.
     pub data_dir: PathBuf,
     /// `$XDG_CACHE_HOME/rospm`, default `~/.cache/rospm`.
@@ -412,7 +397,6 @@ pub struct CondaHost {
 impl CondaHost {
     pub fn probe() -> CondaHost {
         CondaHost {
-            on_path: which::which("conda").ok(),
             data_dir: xdg_dir("XDG_DATA_HOME", ".local/share").join("rospm"),
             cache_dir: xdg_dir("XDG_CACHE_HOME", ".cache").join("rospm"),
         }
@@ -629,7 +613,6 @@ impl Host {
             packages: PackageDb::Unavailable,
             dpkg_changed_at: None,
             conda: CondaHost {
-                on_path: None,
                 data_dir: PathBuf::from("/nonexistent/.local/share/rospm"),
                 cache_dir: PathBuf::from("/nonexistent/.cache/rospm"),
             },
@@ -983,11 +966,6 @@ mod tests {
     #[test]
     fn apt_source_text_detection() {
         let one_line = "# comment packages.ros.org/ros2\ndeb [arch=amd64 signed-by=/k.gpg] http://packages.ros.org/ros2/ubuntu noble main\n";
-        assert!(source_text_mentions(one_line, ROS_APT_NEEDLE));
-        assert!(!source_text_mentions(
-            "# packages.ros.org/ros2 only in a comment\n",
-            ROS_APT_NEEDLE
-        ));
         assert!(!source_text_enables_universe(one_line));
 
         let ubuntu_deb822 = "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe restricted\n";

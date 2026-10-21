@@ -45,14 +45,6 @@ impl Platform {
             Platform::LinuxAarch64 => "arm64",
         }
     }
-
-    /// Platform string as used by `docker buildx --platform`.
-    pub fn docker_platform(&self) -> &'static str {
-        match self {
-            Platform::LinuxX86_64 => "linux/amd64",
-            Platform::LinuxAarch64 => "linux/arm64",
-        }
-    }
 }
 
 impl fmt::Display for Platform {
@@ -109,11 +101,6 @@ impl RosDistro {
             RosDistro::Humble => "22.04",
             RosDistro::Jazzy | RosDistro::Rolling => "24.04",
         }
-    }
-
-    /// Whether this distro is a rolling target (CI smoke only, decision #5).
-    pub fn is_rolling(&self) -> bool {
-        matches!(self, RosDistro::Rolling)
     }
 }
 

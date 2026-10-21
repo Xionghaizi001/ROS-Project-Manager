@@ -54,7 +54,6 @@ fn installs_pinned_miniforge_without_conda_and_reuses_it() {
     )
     .unwrap();
     let host = CondaHost {
-        on_path: None,
         data_dir: root.join("user/data"),
         cache_dir: std::env::var_os("ROSPM_TEST_CACHE_DIR")
             .map(PathBuf::from)
@@ -158,7 +157,6 @@ fn locks_and_replays_a_real_environment() {
         .unwrap();
     }
     let host = CondaHost {
-        on_path: which::which("conda").ok(),
         data_dir: base.join("user/data"),
         cache_dir: base.join("user/cache"),
     };

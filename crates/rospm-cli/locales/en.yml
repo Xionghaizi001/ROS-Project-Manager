@@ -349,7 +349,6 @@ snapshot:
   index_empty: "no snapshot dates listed for %{distro}"
   no_usable_date: "no usable snapshot date for %{distro}"
   release_mismatch: "%{url} does not serve %{codename}/%{arch} (Suite: %{suite}, Architectures: %{architectures})"
-  release_date_unparseable: "Release `Date:` header not understood: %{date}"
   keyserver_failed: "%{url}: HTTP %{status} (snapshot signing key not available from the keyserver)"
   key_fingerprint_mismatch: "key from %{url} has fingerprint %{found}, expected %{expected}; not used"
   sig_failed: "signature of %{url} did not verify: %{error}"

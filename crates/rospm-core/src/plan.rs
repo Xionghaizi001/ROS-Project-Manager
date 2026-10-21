@@ -195,21 +195,7 @@ impl Plan {
         self
     }
 
-    pub fn write_file(
-        &mut self,
-        path: impl Into<PathBuf>,
-        contents: impl Into<String>,
-    ) -> &mut Self {
-        self.steps.push(Step::WriteFile {
-            path: path.into(),
-            contents: contents.into(),
-            sudo: false,
-        });
-        self
-    }
-
-    /// Like [`Plan::write_file`], but the file is owned by root and written
-    /// through `sudo tee`. Contents are shown in full by `--dry-run`.
+    /// A root-owned file, written through `sudo tee`. Contents are shown in full by `--dry-run`.
     pub fn write_file_sudo(
         &mut self,
         path: impl Into<PathBuf>,
@@ -758,7 +744,10 @@ fpr:::::::::0000000000000000000000000000000000000000:
     fn is_only_key_rejects_a_smuggled_extra_key() {
         let real = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654".to_string();
         let evil = "0000000000000000000000000000000000000000".to_string();
-        assert!(is_only_key(&[real.clone()], &real.to_ascii_lowercase()));
+        assert!(is_only_key(
+            std::slice::from_ref(&real),
+            &real.to_ascii_lowercase()
+        ));
         assert!(!is_only_key(&[real.clone(), evil.clone()], &real));
         assert!(!is_only_key(&[evil, real.clone()], &real));
         assert!(!is_only_key(&[], &real));

@@ -52,10 +52,6 @@ pub struct DepsReport {
 /// index.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CheckOutcome {
-    /// True when rosdep printed "All system dependencies have been satisfied".
-    pub satisfied: bool,
-    /// `(installer, package)` pairs from the "not been satisfied" block.
-    pub missing: Vec<(String, String)>,
     /// Keys rosdep could not resolve at all (the "could not have their
     /// rosdep keys resolved" error block).
     pub unresolved_keys: Vec<String>,
@@ -64,36 +60,6 @@ pub struct CheckOutcome {
 /// Parse `rosdep check`'s stdout/stderr.
 pub fn parse_rosdep_check(stdout: &str, stderr: &str) -> CheckOutcome {
     let mut out = CheckOutcome::default();
-
-    if stdout.contains("All system dependencies have been satisfied") {
-        out.satisfied = true;
-    }
-
-    let mut in_missing = false;
-    for line in stdout.lines() {
-        if line.contains("System dependencies have not been satisfied") {
-            in_missing = true;
-            continue;
-        }
-        if !in_missing {
-            continue;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            in_missing = false;
-            continue;
-        }
-        match trimmed
-            .split_once('\t')
-            .or_else(|| trimmed.split_once(char::is_whitespace))
-        {
-            Some((installer, pkg)) => {
-                out.missing
-                    .push((installer.trim().to_string(), pkg.trim().to_string()));
-            }
-            None => in_missing = false,
-        }
-    }
 
     for text in [stdout, stderr] {
         let mut in_error = false;
@@ -449,36 +415,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_satisfied_check_output() {
-        let out = parse_rosdep_check(
-            "#All required rosdeps installed successfully\nAll system dependencies have been satisfied\n",
-            "",
-        );
-        assert!(out.satisfied);
-        assert!(out.missing.is_empty());
-        assert!(out.unresolved_keys.is_empty());
-    }
-
-    #[test]
-    fn parses_unsatisfied_check_output() {
-        let stdout =
-            "System dependencies have not been satisfied:\napt\tlibopencv-dev\napt\tlibfoo-dev\n";
-        let out = parse_rosdep_check(stdout, "");
-        assert!(!out.satisfied);
-        assert_eq!(
-            out.missing,
-            vec![
-                ("apt".to_string(), "libopencv-dev".to_string()),
-                ("apt".to_string(), "libfoo-dev".to_string()),
-            ]
-        );
-    }
-
-    #[test]
     fn parses_unresolvable_key_error() {
         let stderr = "ERROR: the following packages/stacks could not have their rosdep keys resolved\nto arbitrary os-specific keys:\n\tunknown_key\n";
         let out = parse_rosdep_check("", stderr);
-        assert!(!out.satisfied);
         assert_eq!(out.unresolved_keys, vec!["unknown_key".to_string()]);
     }
 

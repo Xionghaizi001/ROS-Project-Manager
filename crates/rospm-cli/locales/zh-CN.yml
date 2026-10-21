@@ -344,7 +344,6 @@ snapshot:
   index_empty: "%{distro} 没有列出任何快照日期"
   no_usable_date: "%{distro} 没有可用的快照日期"
   release_mismatch: "%{url} 不提供 %{codename}/%{arch}（Suite: %{suite}，Architectures: %{architectures}）"
-  release_date_unparseable: "无法理解 Release 的 `Date:` 头：%{date}"
   keyserver_failed: "%{url}：HTTP %{status}（keyserver 上取不到快照签名密钥）"
   key_fingerprint_mismatch: "从 %{url} 取得的密钥指纹为 %{found}，预期 %{expected}；未使用"
   sig_failed: "%{url} 的签名验证失败：%{error}"
