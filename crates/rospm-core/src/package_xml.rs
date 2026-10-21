@@ -51,9 +51,55 @@ pub struct Dependency {
     /// rosdep key (a ROS package name or a system key such as `libopencv-dev`).
     pub name: String,
     pub kind: DependKind,
-    /// REP 149 `condition="..."` attribute, kept verbatim; rospm does not evaluate it.
+    /// REP 149 `condition="..."` attribute, kept verbatim; see [`Dependency::applies`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
+}
+
+impl Dependency {
+    /// Whether the REP 149 condition holds for ROS 2 `ros_distro`.
+    ///
+    /// shortcut: only `a == b` / `a != b` joined by `and` / `or` (no
+    /// parentheses); anything else, or an unknown `$VAR`, keeps the
+    /// dependency, as before. Upgrade to a real parser if packages need more.
+    pub fn applies(&self, ros_distro: &str) -> bool {
+        let Some(condition) = self
+            .condition
+            .as_deref()
+            .filter(|c| !c.contains(['(', ')']))
+        else {
+            return true;
+        };
+        let value = |token: &str| match token.strip_prefix('$') {
+            Some("ROS_VERSION") => Some("2".to_string()),
+            Some("ROS_DISTRO") => Some(ros_distro.to_string()),
+            Some("ROS_PYTHON_VERSION") => Some("3".to_string()),
+            Some(_) => None,
+            None => Some(token.trim_matches(|c| c == '"' || c == '\'').to_string()),
+        };
+        let compare = |term: &str| -> Option<bool> {
+            let words: Vec<&str> = term.split_whitespace().collect();
+            let [a, op, b] = words[..] else { return None };
+            let (a, b) = (value(a)?, value(b)?);
+            match op {
+                "==" => Some(a == b),
+                "!=" => Some(a != b),
+                _ => None,
+            }
+        };
+        // `and` binds tighter than `or`, as in Python (catkin_pkg evaluates it so).
+        let result: Option<bool> = condition
+            .split(" or ")
+            .map(|any| {
+                any.split(" and ")
+                    .map(compare)
+                    .collect::<Option<Vec<bool>>>()
+            })
+            .map(|all| all.map(|v| v.iter().all(|b| *b)))
+            .collect::<Option<Vec<bool>>>()
+            .map(|v| v.iter().any(|b| *b));
+        result.unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,5 +355,31 @@ mod tests {
             vec!["ament_cmake", "rclcpp"]
         );
         assert_eq!(keys["rclcpp"].len(), 2);
+    }
+
+    #[test]
+    fn rep149_conditions_are_evaluated_for_ros2_and_the_distro() {
+        let dep = |c: &str| Dependency {
+            name: "x".into(),
+            kind: DependKind::Depend,
+            condition: Some(c.into()),
+        };
+        let holds = |c: &str| dep(c).applies("jazzy");
+        assert!(!holds("$ROS_VERSION == 1"));
+        assert!(holds("$ROS_VERSION == 2"));
+        assert!(holds("$ROS_VERSION != 1"));
+        assert!(!holds("$ROS_DISTRO == humble"));
+        assert!(holds("$ROS_DISTRO == 'jazzy'"));
+        assert!(holds("$ROS_PYTHON_VERSION == 3"));
+        assert!(holds("$ROS_VERSION == 1 or $ROS_DISTRO == jazzy"));
+        assert!(!holds("$ROS_VERSION == 2 and $ROS_DISTRO == humble"));
+        // Not understood: kept, as before.
+        assert!(holds("$OTHER == 1"));
+        assert!(holds("($ROS_VERSION == 1)"));
+        let none = Dependency {
+            condition: None,
+            ..dep("")
+        };
+        assert!(none.applies("jazzy"));
     }
 }

@@ -172,7 +172,12 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
     for (name, pkgs) in &scans {
         let mut ws_keys: BTreeSet<String> = BTreeSet::new();
         for p in &pkgs.packages {
-            for d in &p.depends {
+            // rosdep skips dependencies whose REP 149 condition is false.
+            for d in p
+                .depends
+                .iter()
+                .filter(|d| d.applies(m.project.ros_distro.as_str()))
+            {
                 ws_keys.insert(d.name.clone());
             }
         }
