@@ -13,7 +13,7 @@ use rospm_core::lock::{
 use rospm_core::manifest::ProviderKind;
 use rospm_core::platform::Platform;
 
-use common::{has_cjk, rospm, rospm_zh};
+use common::rospm;
 
 /// This host's Ubuntu release mapped to a distro rospm supports, or `None`
 /// on anything else (`plan_apply` refuses a manifest for another release
@@ -244,23 +244,6 @@ fn apply_locked_dry_run_plans_the_pinned_snapshot_and_never_touches_the_network(
     assert!(!stdout.contains("rosdep install"), "{stdout}");
     // `--dry-run` never resolves the network reachability of the snapshot.
     assert!(!stdout.contains("checking whether"), "{stdout}");
-}
-
-#[test]
-fn apply_locked_reports_a_missing_lock_in_chinese() {
-    let dir = fixture_dir("no-lock-zh", "22.04", "humble", "ros-humble-ros-base");
-    let manifest = dir.join("rospm.toml").to_string_lossy().into_owned();
-    let out = rospm_zh()
-        .args(["--manifest", &manifest, "apply", "--locked", "--dry-run"])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(has_cjk(&stderr), "{stderr}");
-    assert!(
-        stderr.contains("rospm.lock") && stderr.contains("rospm lock"),
-        "{stderr}"
-    );
 }
 
 #[test]

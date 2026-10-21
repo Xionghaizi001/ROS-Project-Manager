@@ -179,14 +179,25 @@ pub fn probe(endpoints: &[Endpoint], timeout: Duration) -> Vec<ProbeResult> {
         .collect()
 }
 
-fn fetch(endpoint: Endpoint, timeout: Duration) -> ProbeResult {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        .http_status_as_error(false)
+/// ureq settings every rospm request shares.
+pub(crate) fn agent_config() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
+    ureq::Agent::config_builder()
         .max_redirects(5)
         .user_agent(concat!("rospm/", env!("CARGO_PKG_VERSION")))
+}
+
+/// An agent for small GETs within `timeout` that returns HTTP error
+/// statuses as responses instead of errors.
+pub(crate) fn agent(timeout: Duration) -> ureq::Agent {
+    agent_config()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
         .build()
-        .into();
+        .into()
+}
+
+fn fetch(endpoint: Endpoint, timeout: Duration) -> ProbeResult {
+    let agent = agent(timeout);
     let start = Instant::now();
     let outcome = match agent.get(&endpoint.url).call() {
         Ok(mut resp) => {
@@ -211,7 +222,7 @@ fn fetch(endpoint: Endpoint, timeout: Duration) -> ProbeResult {
     ProbeResult { endpoint, outcome }
 }
 
-fn short_error(e: &ureq::Error, timeout: Duration) -> Message {
+pub(crate) fn short_error(e: &ureq::Error, timeout: Duration) -> Message {
     match e {
         ureq::Error::Timeout(_) => msg!("net.timeout", secs = timeout.as_secs()),
         ureq::Error::Io(io) => Message::text(format!("{}", io.kind()).replace('_', " ")),

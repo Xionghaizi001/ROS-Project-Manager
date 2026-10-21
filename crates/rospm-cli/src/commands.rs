@@ -503,11 +503,22 @@ fn print_env_report(r: &EnvReport, platform: &str) {
 }
 
 fn print_check_report(r: &EnvReport, platform: &str, repositories: bool) {
-    let header = if repositories {
-        msg!("repository.header", platform = platform)
+    if repositories {
+        let header = msg!("repository.header", platform = platform);
+        print_report(r, header, "repository.ready", "repository.not_ready");
     } else {
-        msg!("cli.check.env_header", platform = platform)
-    };
+        let header = msg!("cli.check.env_header", platform = platform);
+        print_report(r, header, "cli.check.ready", "cli.check.not_ready");
+    }
+}
+
+/// Header, one aligned row per item, then the ready / not-ready summary.
+fn print_report(
+    r: &EnvReport,
+    header: impl std::fmt::Display,
+    ready: &'static str,
+    not_ready: &'static str,
+) {
     println!("{header}");
     let subjects: Vec<String> = r.items.iter().map(|i| i.subject.to_string()).collect();
     let width = subjects
@@ -536,14 +547,7 @@ fn print_check_report(r: &EnvReport, platform: &str, repositories: bool) {
     let problems = r.problems();
     let unknown = r.unknown();
     if r.ready() {
-        println!(
-            "{}",
-            tr(if repositories {
-                "repository.ready"
-            } else {
-                "cli.check.ready"
-            })
-        );
+        println!("{}", tr(ready));
     } else {
         let mut parts = Vec::new();
         if problems == 1 {
@@ -554,14 +558,8 @@ fn print_check_report(r: &EnvReport, platform: &str, repositories: bool) {
         if unknown > 0 {
             parts.push(msg!("cli.check.undetermined", count = unknown).to_string());
         }
-        println!(
-            "{}",
-            if repositories {
-                msg!("repository.not_ready", summary = parts.join(", "))
-            } else {
-                msg!("cli.check.not_ready", summary = parts.join(", "))
-            }
-        );
+        let summary = rospm_core::message::Message::key(not_ready).arg("summary", parts.join(", "));
+        println!("{summary}");
     }
 }
 
@@ -1212,51 +1210,17 @@ fn join_or_none<'a>(keys: impl IntoIterator<Item = &'a String>) -> String {
 }
 
 fn print_deps_environment(r: &EnvReport) {
-    println!("{}", tr("cli.deps.env_header"));
     if r.items.is_empty() {
+        println!("{}", tr("cli.deps.env_header"));
         println!("{}", tr("cli.deps.env_empty"));
         return;
     }
-    let subjects: Vec<String> = r.items.iter().map(|i| i.subject.to_string()).collect();
-    let width = subjects
-        .iter()
-        .map(|s| i18n::display_width(s))
-        .max()
-        .unwrap_or(0)
-        .min(48);
-    for (item, subject) in r.items.iter().zip(&subjects) {
-        let mark = match item.status {
-            Status::Ok => tr("cli.status.ok"),
-            Status::Missing => tr("cli.status.missing"),
-            Status::Mismatch => tr("cli.status.mismatch"),
-            Status::Unknown => tr("cli.status.unknown"),
-            Status::Info => tr("cli.status.info"),
-        };
-        println!(
-            "  {} {:<8} {}  {}  |  {}",
-            i18n::pad(&mark, 8),
-            item.area,
-            i18n::pad(subject, width),
-            item.expected,
-            item.actual
-        );
-    }
-    let problems = r.problems();
-    let unknown = r.unknown();
-    if r.ready() {
-        println!("{}", tr("cli.deps.ready"));
-    } else {
-        let mut parts = Vec::new();
-        if problems == 1 {
-            parts.push(tr("cli.check.problems_one"));
-        } else if problems > 1 {
-            parts.push(msg!("cli.check.problems_many", count = problems).to_string());
-        }
-        if unknown > 0 {
-            parts.push(msg!("cli.check.undetermined", count = unknown).to_string());
-        }
-        println!("{}", msg!("cli.deps.not_ready", summary = parts.join(", ")));
-    }
+    print_report(
+        r,
+        tr("cli.deps.env_header"),
+        "cli.deps.ready",
+        "cli.deps.not_ready",
+    );
 }
 
 /// `rospm deps check`: rosdep keys of every workspace versus the installed set.

@@ -84,7 +84,8 @@ pub fn generate(m: &Manifest) -> Result<String> {
     Ok(out)
 }
 
-fn quote(s: &str) -> String {
+/// `s` as a TOML string literal.
+pub(crate) fn quote(s: &str) -> String {
     Value::String(s.to_owned()).to_string()
 }
 

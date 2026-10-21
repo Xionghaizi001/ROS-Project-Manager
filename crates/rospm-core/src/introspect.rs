@@ -25,6 +25,7 @@ use crate::manifest::{Manifest, ProviderKind, RESERVED_ENV};
 use crate::message::Message;
 use crate::msg;
 use crate::package_xml::WorkspacePackages;
+use crate::pixi::quote;
 use crate::platform::{ubuntu_codename, Platform, RosDistro};
 use crate::probe::{Host, OsRelease, PackageDb};
 use crate::repos::ReposFile;
@@ -813,18 +814,18 @@ fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
 
 // ---------------------------------------------------------------- rendering
 
-fn q(s: &str) -> String {
-    toml::Value::String(s.to_string()).to_string()
-}
-
 fn qp(p: &Path) -> String {
-    q(&p.to_string_lossy())
+    quote(&p.to_string_lossy())
 }
 
 fn list(items: &[String]) -> String {
     format!(
         "[{}]",
-        items.iter().map(|s| q(s)).collect::<Vec<_>>().join(", ")
+        items
+            .iter()
+            .map(|s| quote(s))
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -838,11 +839,11 @@ impl Draft {
         o.push_str("schema_version = 1\n\n");
 
         o.push_str("[project]\n");
-        o.push_str(&format!("name = {}\n", q(&self.name)));
+        o.push_str(&format!("name = {}\n", quote(&self.name)));
         match self.ros_distro {
             Some(d) => o.push_str(&format!(
                 "ros_distro = {:<24} # humble | jazzy | rolling\n",
-                q(d.as_str())
+                quote(d.as_str())
             )),
             None => o.push_str(&format!(
                 "ros_distro = \"jazzy\"                  # TODO: {}; humble | jazzy | rolling\n",
@@ -859,7 +860,7 @@ impl Draft {
         o.push_str("[environment]\n");
         o.push_str(&format!(
             "provider = {:<26} # native | pixi | docker\n\n",
-            q(self.provider.as_str())
+            quote(self.provider.as_str())
         ));
         match self.provider {
             ProviderKind::Pixi => {
@@ -875,7 +876,7 @@ impl Draft {
             ProviderKind::Native => {
                 o.push_str("[environment.native]\n");
                 match &self.ubuntu {
-                    Some(u) => o.push_str(&format!("ubuntu = {}\n", q(u))),
+                    Some(u) => o.push_str(&format!("ubuntu = {}\n", quote(u))),
                     None => o.push_str(&format!(
                         "# ubuntu = \"24.04\"                     # TODO: {}; {}\n",
                         msg!("draft.not_detected"),
@@ -883,7 +884,7 @@ impl Draft {
                     )),
                 }
                 match &self.ros_base {
-                    Some(b) => o.push_str(&format!("ros_base = {}\n", q(b))),
+                    Some(b) => o.push_str(&format!("ros_base = {}\n", quote(b))),
                     None => o.push_str(&format!(
                         "# ros_base = \"ros-<distro>-ros-base\"    # TODO: {}; {}\n",
                         msg!("draft.not_detected"),
@@ -960,7 +961,7 @@ impl Draft {
             ));
         }
         for (k, v) in &self.env {
-            o.push_str(&format!("{k} = {}\n", q(v)));
+            o.push_str(&format!("{k} = {}\n", quote(v)));
         }
         o.push('\n');
 

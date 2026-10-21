@@ -484,21 +484,8 @@ impl PackageDb {
         let found: BTreeMap<String, PackageStatus> = match self {
             PackageDb::Unavailable => return None,
             PackageDb::Static(map) => map.clone(),
-            PackageDb::DpkgQuery(bin) => {
-                if names.is_empty() {
-                    return Some(BTreeMap::new());
-                }
-                // Exit status is non-zero when any package is unknown, but the
-                // known ones are still printed, so only the output matters.
-                let output = process::Command::new(bin)
-                    .arg("-W")
-                    .arg("-f=${binary:Package}\t${db:Status-Status}\t${Version}\n")
-                    .args(names)
-                    .stderr(process::Stdio::null())
-                    .output()
-                    .ok()?;
-                parse_dpkg_query(&String::from_utf8_lossy(&output.stdout))
-            }
+            PackageDb::DpkgQuery(_) if names.is_empty() => return Some(BTreeMap::new()),
+            PackageDb::DpkgQuery(bin) => dpkg_query(bin, names)?,
         };
         Some(
             names
@@ -520,16 +507,7 @@ impl PackageDb {
         let found: BTreeMap<String, PackageStatus> = match self {
             PackageDb::Unavailable => return None,
             PackageDb::Static(map) => map.clone(),
-            PackageDb::DpkgQuery(bin) => {
-                let output = process::Command::new(bin)
-                    .arg("-W")
-                    .arg("-f=${binary:Package}\t${db:Status-Status}\t${Version}\n")
-                    .arg(format!("{prefix}*"))
-                    .stderr(process::Stdio::null())
-                    .output()
-                    .ok()?;
-                parse_dpkg_query(&String::from_utf8_lossy(&output.stdout))
-            }
+            PackageDb::DpkgQuery(bin) => dpkg_query(bin, &[format!("{prefix}*")])?,
         };
         Some(
             found
@@ -539,6 +517,20 @@ impl PackageDb {
                 .collect(),
         )
     }
+}
+
+/// `dpkg-query -W` for `patterns` (names or globs). Its exit status is
+/// non-zero when any package is unknown, but the known ones are still
+/// printed, so only the output matters.
+fn dpkg_query(bin: &Path, patterns: &[String]) -> Option<BTreeMap<String, PackageStatus>> {
+    let output = process::Command::new(bin)
+        .arg("-W")
+        .arg("-f=${binary:Package}\t${db:Status-Status}\t${Version}\n")
+        .args(patterns)
+        .stderr(process::Stdio::null())
+        .output()
+        .ok()?;
+    Some(parse_dpkg_query(&String::from_utf8_lossy(&output.stdout)))
 }
 
 /// Snapshot of the host, gathered once per command.
@@ -662,36 +654,29 @@ impl Host {
 
     /// `git -C <dir> remote get-url origin`, if git is available and `dir` is a checkout.
     pub fn git_remote_url(&self, dir: &Path) -> Option<String> {
-        let git = self.tool("git")?;
-        let out = process::Command::new(git)
-            .arg("-C")
-            .arg(dir)
-            .args(["remote", "get-url", "origin"])
-            .stderr(process::Stdio::null())
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (!url.is_empty()).then_some(url)
+        self.git_line(dir, &["remote", "get-url", "origin"])
     }
 
     /// `git -C <dir> rev-parse HEAD`.
     pub fn git_head(&self, dir: &Path) -> Option<String> {
+        self.git_line(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// Trimmed stdout of a successful, non-empty `git -C <dir> <args>`.
+    fn git_line(&self, dir: &Path, args: &[&str]) -> Option<String> {
         let git = self.tool("git")?;
         let out = process::Command::new(git)
             .arg("-C")
             .arg(dir)
-            .args(["rev-parse", "HEAD"])
+            .args(args)
             .stderr(process::Stdio::null())
             .output()
             .ok()?;
         if !out.status.success() {
             return None;
         }
-        let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (!sha.is_empty()).then_some(sha)
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!line.is_empty()).then_some(line)
     }
 }
 

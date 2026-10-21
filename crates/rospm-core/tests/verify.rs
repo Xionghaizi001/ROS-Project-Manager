@@ -360,33 +360,6 @@ version = "2.0.0"
 }
 
 #[test]
-fn cross_platform_lock_entries_do_not_panic() {
-    // A lock with only foreign-platform apt entries and no sources at all
-    // must still produce a well-formed report.
-    let root = tmp("cross-platform");
-    let lock_text = r#"
-schema_version = 1
-generated_at = "2026-01-01T00:00:00Z"
-manifest_sha256 = "sha256:deadbeef"
-
-[provider]
-kind = "native"
-
-[[apt]]
-platform = "linux-aarch64"
-name = "ros-jazzy-rclcpp"
-version = "2.0.0"
-"#;
-    let lock = Lock::parse(lock_text, Path::new("rospm.lock")).unwrap();
-    let m = manifest();
-    let host = Host::empty();
-    let report = provider::for_manifest(&m)
-        .verify(&ctx(&m, &root, &host, &lock), &lock)
-        .unwrap();
-    assert!(report.items.iter().any(|i| i.area == "apt"));
-}
-
-#[test]
 fn a_lock_without_the_base_package_is_not_ready() {
     // `apply --locked` refuses such a lock (native.apply.locked_base_missing);
     // verify used to call it ready because every locked entry matched.

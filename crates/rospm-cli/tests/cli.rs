@@ -551,22 +551,17 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
 }
 
 #[test]
-fn language_overrides_follow_the_documented_order() {
+fn language_overrides_reach_detection() {
     let manifest = "/nonexistent";
     let run = |c: &mut Command| {
         let out = c.args(["check", "--manifest", manifest]).output().unwrap();
         assert!(!out.status.success());
         String::from_utf8_lossy(&out.stderr).into_owned()
     };
-    // --lang beats ROSPM_LANG beats the locale.
+    // Precedence itself is unit-tested in i18n.rs; this only checks the flag
+    // and the variable reach `detect`.
     assert!(run(rospm_zh().arg("--lang=en")).starts_with("error:"));
-    assert!(run(rospm().args(["--lang", "zh"])).starts_with("错误："));
     assert!(run(rospm().env("ROSPM_LANG", "zh")).starts_with("错误："));
-    assert!(run(rospm_zh().env("ROSPM_LANG", "en")).starts_with("error:"));
-    // LANGUAGE is a list: the first usable entry wins over LANG.
-    assert!(run(rospm_zh().env("LANGUAGE", "en:zh")).starts_with("error:"));
-    assert!(run(rospm().env("LANGUAGE", "zh:en")).starts_with("错误："));
-    assert!(run(rospm().env("LC_ALL", "zh_TW")).starts_with("错误："));
     // English output stays English under C.
     assert!(run(&mut rospm()).starts_with("error: I/O error on /nonexistent"));
 }

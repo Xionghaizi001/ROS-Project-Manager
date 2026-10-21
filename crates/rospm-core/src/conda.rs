@@ -803,12 +803,10 @@ impl System for Real {
     /// Streams to `dest` with bounded connect / response waits and retries
     /// transient failures; HTTP errors other than 5xx fail at once.
     fn download(&self, url: &str, dest: &Path) -> Result<()> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        let agent: ureq::Agent = crate::net::agent_config()
             .timeout_connect(Some(Duration::from_secs(30)))
             .timeout_recv_response(Some(Duration::from_secs(60)))
             .timeout_global(Some(Duration::from_secs(30 * 60)))
-            .max_redirects(5)
-            .user_agent(concat!("rospm/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
         let mut last = String::new();

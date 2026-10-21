@@ -124,14 +124,11 @@ impl Fetch for Http {
 
 impl Http {
     fn get_with_timeout(&self, url: &str, timeout: Duration) -> Result<(u16, Vec<u8>), Message> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(timeout))
-            .http_status_as_error(false)
-            .max_redirects(5)
-            .user_agent(concat!("rospm/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .into();
-        let mut resp = agent.get(url).call().map_err(|e| net_error(&e, timeout))?;
+        let agent = crate::net::agent(timeout);
+        let mut resp = agent
+            .get(url)
+            .call()
+            .map_err(|e| crate::net::short_error(&e, timeout))?;
         let status = resp.status().as_u16();
         // ureq caps `read_to_vec` at 10 MB; `universe` indexes are larger.
         let body = resp
@@ -139,19 +136,8 @@ impl Http {
             .with_config()
             .limit(256 * 1024 * 1024)
             .read_to_vec()
-            .map_err(|e| net_error(&e, timeout))?;
+            .map_err(|e| crate::net::short_error(&e, timeout))?;
         Ok((status, body))
-    }
-}
-
-fn net_error(e: &ureq::Error, timeout: Duration) -> Message {
-    match e {
-        ureq::Error::Timeout(_) => msg!("net.timeout", secs = timeout.as_secs()),
-        ureq::Error::Io(io) => Message::text(format!("{}", io.kind()).replace('_', " ")),
-        other => {
-            let s = other.to_string();
-            Message::text(s.split(": ").next().unwrap_or(&s).to_string())
-        }
     }
 }
 
