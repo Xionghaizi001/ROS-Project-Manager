@@ -189,7 +189,7 @@ impl Lock {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let text = self.to_toml()?;
-        fs::write(path, text).map_err(|e| Error::io(path, e))
+        crate::plan::write_atomic(path, text.as_bytes()).map_err(|e| Error::io(path, e))
     }
 
     /// Whether `manifest_text` is the manifest this lock was generated from.

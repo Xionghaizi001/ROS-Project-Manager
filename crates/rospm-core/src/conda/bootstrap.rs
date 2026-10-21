@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use super::System;
 use crate::error::{Error, Result};
 use crate::msg;
+use crate::pixi::conda_platform;
 use crate::plan::Command;
 use crate::platform::Platform;
 use crate::probe::CondaHost;
@@ -87,7 +88,8 @@ impl Bootstrap {
     pub fn new(host: &CondaHost, platform: Platform) -> Option<Self> {
         let table = miniforge();
         let installer = table.installer.get(&platform)?;
-        let name = format!("miniforge3-{}", table.version);
+        // Per subdir: a shared (e.g. NFS) home serves hosts of several architectures.
+        let name = format!("miniforge3-{}-{}", table.version, conda_platform(platform));
         let file = installer.url.rsplit('/').next().expect("installer file");
         Some(Self {
             version: &table.version,

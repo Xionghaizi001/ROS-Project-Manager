@@ -144,17 +144,17 @@ sign = false
 
 受管模式所用的 Conda 按以下顺序确定（自动引导）：
 
-1. rospm 此前已安装并标记就绪的 Miniforge（`$XDG_DATA_HOME/rospm/conda/miniforge3-<版本>/bin/conda`，默认 `~/.local/share/rospm/...`）。规划阶段只读文件即可确定；此后 `apply` 与 `build` 都使用它，保证创建与运行环境的是同一个 Conda。
+1. rospm 此前已安装并标记就绪的 Miniforge（`$XDG_DATA_HOME/rospm/conda/miniforge3-<版本>-<subdir>/bin/conda`，默认 `~/.local/share/rospm/...`）。规划阶段只读文件即可确定；此后 `apply` 与 `build` 都使用它，保证创建与运行环境的是同一个 Conda。
 2. 否则使用 `PATH` 中的 `conda`，执行时以 `conda --version` 检查，需不低于内置表的 `minimum_conda`（当前 24.3，`conda env create --yes` 所需）。`conda init` 生成的 shell 函数不可见，只认可执行文件。
 3. 都不可用时，`apply` 自动安装固定版本的 Miniforge 后在同一次还原中继续；`build` 不安装，报错并提示先执行 `apply`。
 
 安装器版本、下载地址和 SHA256 只来自随 rospm 编译的 [`crates/rospm-core/data/miniforge.toml`](../crates/rospm-core/data/miniforge.toml)（当前 Miniforge `26.7.2-0`，conda-forge 官方 GitHub Release，x86_64 / aarch64 各一项），运行时不从下载源读取摘要；按本机平台选择安装器，表中没有的平台只能使用 `PATH` 中的 Conda。安装器下载到 `$XDG_CACHE_HOME/rospm/downloads/`（默认 `~/.cache/rospm/downloads/`），先写 `.part`，摘要一致才改名为缓存文件；摘要不符时删除下载文件并拒绝执行。已缓存且摘要一致的安装器直接复用，因此离线时只要缓存存在即可安装；摘要不符的缓存视为损坏，删除后重新下载。下载有连接 / 响应超时并对网络错误及 5xx 重试，失败时报告 URL 和缓存路径。
 
-安装以当前用户执行 `bash --noprofile --norc <安装器> -b -p <安装目录>`：`-b` 为批处理模式，不提示、不修改 `.bashrc` 等 shell 启动文件；rospm 不执行 `conda init`，不需要 sudo。安装后 `<安装目录>/bin/conda --version` 满足最低版本才写入同级的 `miniforge3-<版本>.ready`（内容为安装器摘要）。没有该记录的安装目录视为中断的 rospm 安装，下次 `apply` 删除后重装；该目录专属 rospm，不涉及用户自行安装的 Conda。同一份 Miniforge 由该用户的所有项目共用，`uninstall` 不删除它。Conda 自身仍会写入 `~/.conda/environments.txt` 等运行记录。`--dry-run` 展示上述选择顺序、安装器版本、URL、摘要、缓存与安装位置，不下载、不写文件。已有环境模式（`name` / `prefix`）不自动安装 Conda。
+安装以当前用户执行 `bash --noprofile --norc <安装器> -b -p <安装目录>`：`-b` 为批处理模式，不提示、不修改 `.bashrc` 等 shell 启动文件；rospm 不执行 `conda init`，不需要 sudo。安装后 `<安装目录>/bin/conda --version` 满足最低版本才写入同级的 `miniforge3-<版本>-<subdir>.ready`（内容为安装器摘要）。没有该记录的安装目录视为中断的 rospm 安装，下次 `apply` 删除后重装；该目录专属 rospm，不涉及用户自行安装的 Conda。同一份 Miniforge 由该用户的所有项目共用，`uninstall` 不删除它。Conda 自身仍会写入 `~/.conda/environments.txt` 等运行记录。`--dry-run` 展示上述选择顺序、安装器版本、URL、摘要、缓存与安装位置，不下载、不写文件。已有环境模式（`name` / `prefix`）不自动安装 Conda。
 
 `environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理（`dependencies` 中的 `pip:` 子列表由 Conda 调用 pip 安装），不合并清单的 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
 
-规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要，按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
+规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要加 Conda subdir（如 `linux-aarch64`，从其它架构拷来的 prefix 因此不会被当作就绪），按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
 
 #### 受管环境的锁定与重放
 

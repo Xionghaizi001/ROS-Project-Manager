@@ -4,6 +4,7 @@
 *.rospm.tar
 *.rospm.tar.zst
 /.tools/
+.vscode/
 
 
 # example projects: sources are fetched, not committed

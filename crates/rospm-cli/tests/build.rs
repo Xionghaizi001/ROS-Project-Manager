@@ -194,7 +194,7 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
                     .contains("89b786c8d2c8b0fda7553914c1314ae4ddaa094503802f279377b19ac4463cb2")
         );
         assert!(preview.contains(
-            user.join("data/rospm/conda/miniforge3-26.7.2-0")
+            user.join("data/rospm/conda/miniforge3-26.7.2-0-linux-64")
                 .to_str()
                 .unwrap()
         ));

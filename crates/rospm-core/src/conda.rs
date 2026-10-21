@@ -96,6 +96,7 @@ struct Preparation {
     ready: PathBuf,
     contents: String,
     fingerprint: String,
+    platform: Platform,
     source: Option<PathBuf>,
     variables: IndexMap<String, String>,
     /// `apply --locked`: install from the lock instead of solving.
@@ -114,9 +115,10 @@ impl Preparation {
     /// Completion record: the definition digest, followed by the lock digest
     /// when the environment was replayed from a lock.
     fn stamp(&self) -> String {
+        let head = stamp_head(&self.fingerprint, self.platform);
         match &self.replay {
-            Some(replay) => format!("{}\n{}", self.fingerprint, replay.lock_sha256),
-            None => self.fingerprint.clone(),
+            Some(replay) => format!("{head}\n{}", replay.lock_sha256),
+            None => head,
         }
     }
 
@@ -129,9 +131,15 @@ impl Preparation {
         self.prefix.join("conda-meta/history").is_file()
             && match &self.replay {
                 Some(_) => ready == self.stamp(),
-                None => ready.lines().next() == Some(self.fingerprint.as_str()),
+                None => ready.lines().next() == Some(&stamp_head(&self.fingerprint, self.platform)),
             }
     }
+}
+
+/// First line of the completion record: the definition digest and the Conda
+/// subdir, so a prefix copied from another architecture is never reused.
+fn stamp_head(fingerprint: &str, platform: Platform) -> String {
+    format!("{fingerprint} {}", conda_platform(platform))
 }
 
 /// Subprocesses and downloads, replaced by fakes in tests.
@@ -189,6 +197,7 @@ impl CondaStep {
                 definition: root.join(DEFINITION),
                 ready: root.join(READY),
                 fingerprint,
+                platform,
                 contents: definition.contents,
                 source: managed.environment_file.as_ref().map(|p| root.join(p)),
                 variables: definition.variables,
@@ -647,7 +656,7 @@ fn resolve_lock_with(
     };
     let ready = fs::read_to_string(root.join(READY)).unwrap_or_default();
     if !prefix.join("conda-meta/history").is_file()
-        || ready.lines().next() != Some(fingerprint.as_str())
+        || ready.lines().next() != Some(&stamp_head(&fingerprint, platform))
     {
         return skipped(
             notes,
@@ -718,12 +727,12 @@ fn resolve_lock_with(
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
-        fs::write(&path, &text).map_err(|e| Error::io(&path, e))?;
+        crate::plan::write_atomic(&path, text.as_bytes()).map_err(|e| Error::io(&path, e))?;
     }
     // The environment is what the lock describes, so `apply --locked` on
     // this host reuses it instead of refusing to touch the prefix.
     let lock_sha256 = sha256_hex(&text);
-    let stamp = format!("{fingerprint}\n{lock_sha256}");
+    let stamp = format!("{}\n{lock_sha256}", stamp_head(&fingerprint, platform));
     if ready != stamp {
         let ready = root.join(READY);
         fs::write(&ready, stamp).map_err(|e| Error::io(&ready, e))?;
@@ -1181,6 +1190,17 @@ mod tests {
         step.perform_with(&mut Vec::new(), &fake).unwrap();
         assert!(project.0.join(READY).is_file());
         step.perform_with(&mut Vec::new(), &fake).unwrap();
+        // The same prefix (e.g. copied to a Jetson) is not ready for aarch64.
+        let arm = CondaStep::new(
+            &config,
+            &project.0,
+            &project.host(),
+            Platform::LinuxAarch64,
+            false,
+            None,
+        )
+        .unwrap();
+        assert!(!arm.managed.as_ref().unwrap().is_ready());
         // A compatible conda on PATH is used as is; nothing is installed.
         assert_eq!(*fake.creates.borrow(), ["conda"]);
         assert_eq!(fake.downloads.get() + fake.installs.get(), 0);
@@ -1468,7 +1488,10 @@ mod tests {
         assert!(replayer.creates.borrow().is_empty(), "replay never solves");
         assert_eq!(
             fs::read_to_string(clean.0.join(READY)).unwrap(),
-            format!("{}\n{}", record.definition_sha256, record.lock_sha256)
+            format!(
+                "{} linux-64\n{}",
+                record.definition_sha256, record.lock_sha256
+            )
         );
         // Replayed: reused by locked apply, plain apply and build alike.
         locked_step(&clean, &config, &lock)
@@ -1737,7 +1760,7 @@ mod tests {
             .perform_with(&mut Vec::new(), &old)
             .unwrap();
         assert_eq!(old.installs.get(), 1);
-        assert!(old.creates.borrow()[0].ends_with("miniforge3-26.7.2-0/bin/conda"));
+        assert!(old.creates.borrow()[0].ends_with("miniforge3-26.7.2-0-linux-64/bin/conda"));
     }
 
     #[test]

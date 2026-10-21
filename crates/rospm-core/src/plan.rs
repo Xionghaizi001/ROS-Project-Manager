@@ -370,7 +370,7 @@ impl Plan {
                         if let Some(parent) = path.parent() {
                             std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
                         }
-                        std::fs::write(path, contents).map_err(|e| Error::io(path, e))?;
+                        write_atomic(path, contents.as_bytes()).map_err(|e| Error::io(path, e))?;
                     }
                 }
                 Step::FetchKey {
@@ -570,40 +570,69 @@ impl Drop for RemoveOnDrop {
     }
 }
 
-/// `sudo mkdir -p <parent> && printf … | sudo tee <path>`; the contents go
-/// through stdin so they never appear on a command line.
-fn write_file_sudo(path: &PathBuf, contents: &str) -> Result<()> {
+/// `<path>.tmp`: the temporary sibling an atomic write renames over `path`.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+
+/// Write `<path>.tmp`, flush it to disk, then rename it over `path`: an
+/// interruption or a full disk leaves the old file intact, never half of it.
+pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let tmp = tmp_sibling(path);
+    let written = std::fs::File::create(&tmp)
+        .and_then(|mut f| f.write_all(contents).and_then(|()| f.sync_all()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// `sudo mkdir -p <parent>`, `sudo tee <path>.tmp` (contents through stdin, so
+/// they never appear on a command line), then `sudo mv -f` it over `path`.
+fn write_file_sudo(path: &Path, contents: &str) -> Result<()> {
     let failed = |program: &str, status: process::ExitStatus| Error::CommandFailed {
         command: format!("sudo {program} {}", path.display()),
         status: status.to_string(),
     };
-    if let Some(parent) = path.parent() {
-        let status = process::Command::new("sudo")
-            .args(["mkdir", "-p"])
-            .arg(parent)
+    let sudo = |args: &[&std::ffi::OsStr]| {
+        process::Command::new("sudo")
+            .args(args)
             .status()
-            .map_err(|e| Error::io("sudo", e))?;
+            .map_err(|e| Error::io("sudo", e))
+    };
+    if let Some(parent) = path.parent() {
+        let status = sudo(&["mkdir".as_ref(), "-p".as_ref(), parent.as_ref()])?;
         if !status.success() {
             return Err(failed("mkdir -p", status));
         }
     }
+    let tmp = tmp_sibling(path);
     let mut child = process::Command::new("sudo")
         .arg("tee")
-        .arg(path)
+        .arg(&tmp)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
         .map_err(|e| Error::io("sudo", e))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(contents.as_bytes())
-            .map_err(|e| Error::io(path, e))?;
-    }
+    // Close stdin (end of input) before waiting, and wait even if writing failed.
+    let written = child
+        .stdin
+        .take()
+        .map_or(Ok(()), |mut stdin| stdin.write_all(contents.as_bytes()));
     let status = child.wait().map_err(|e| Error::io("sudo", e))?;
-    if !status.success() {
-        return Err(failed("tee", status));
-    }
-    Ok(())
+    let result = match written {
+        Err(e) => Err(Error::io(&tmp, e)),
+        Ok(()) if !status.success() => Err(failed("tee", status)),
+        Ok(()) => match sudo(&["mv".as_ref(), "-f".as_ref(), tmp.as_ref(), path.as_ref()])? {
+            s if s.success() => return Ok(()),
+            s => Err(failed("mv -f", s)),
+        },
+    };
+    let _ = sudo(&["rm".as_ref(), "-f".as_ref(), tmp.as_ref()]);
+    result
 }
 
 /// Minimal POSIX single-quote escaping.
@@ -620,7 +649,7 @@ pub fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_key, fingerprints, is_ascii_armored, is_only_key};
+    use super::{fetch_key, fingerprints, is_ascii_armored, is_only_key, write_atomic};
 
     const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";
     const ROS_KEY_FINGERPRINT: &str = "C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654";
@@ -733,5 +762,26 @@ fpr:::::::::0000000000000000000000000000000000000000:
         assert!(!is_only_key(&[real.clone(), evil.clone()], &real));
         assert!(!is_only_key(&[evil, real.clone()], &real));
         assert!(!is_only_key(&[], &real));
+    }
+
+    #[test]
+    fn write_atomic_replaces_whole_files_and_leaves_no_temporary() {
+        let dir = std::env::temp_dir().join(format!("rospm-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("rospm.lock");
+        write_atomic(&file, b"old").unwrap();
+        write_atomic(&file, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+        // A failed rename (target is a directory) keeps the target and drops the temporary.
+        let blocked = dir.join("blocked");
+        std::fs::create_dir_all(blocked.join("inside")).unwrap();
+        assert!(write_atomic(&blocked, b"x").is_err());
+        assert!(blocked.join("inside").is_dir());
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
