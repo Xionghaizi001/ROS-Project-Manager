@@ -599,6 +599,7 @@ fn exact_pins(pip: &[String]) -> std::result::Result<Vec<(String, String)>, Vec<
         let pinned = requirement
             .trim()
             .split_once("==")
+            .map(|(name, version)| (name.trim(), version.trim()))
             .filter(|(name, version)| {
                 !name.is_empty()
                     && name
@@ -1711,6 +1712,10 @@ mod tests {
         assert_eq!(
             exact_pins(&["Foo_Bar==1.0.post1".into()]).unwrap(),
             [("foo-bar".to_string(), "1.0.post1".to_string())]
+        );
+        assert_eq!(
+            exact_pins(&["requests == 2.32.3".into()]).unwrap(),
+            [("requests".to_string(), "2.32.3".to_string())]
         );
         for loose in [
             "foo",
