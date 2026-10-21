@@ -238,11 +238,26 @@ pub enum Verdict {
     NothingReachable { failed: Vec<String> },
 }
 
+/// The endpoints of `mirror` a run needs. `ros_apt` is false when apt
+/// installs from a ROS snapshot, so the ROS apt repository is never used.
+pub fn needed(mirror: &Mirror, codename: &str, ros_apt: bool) -> Vec<Endpoint> {
+    let mut out = endpoints_for(mirror, codename);
+    if !ros_apt {
+        out.retain(|e| e.role != Role::RosApt);
+    }
+    out
+}
+
 /// Whether `mirror` answered on every endpoint it needs (apt + the rosdistro
 /// tree it resolves to). `None` if a needed endpoint was not probed.
-pub fn mirror_ok(results: &[ProbeResult], mirror: &Mirror, codename: &str) -> Option<bool> {
+pub fn mirror_ok(
+    results: &[ProbeResult],
+    mirror: &Mirror,
+    codename: &str,
+    ros_apt: bool,
+) -> Option<bool> {
     let mut ok = true;
-    for e in endpoints_for(mirror, codename) {
+    for e in needed(mirror, codename, ros_apt) {
         let r = results.iter().find(|r| r.endpoint.url == e.url)?;
         ok &= r.ok();
     }
@@ -250,23 +265,28 @@ pub fn mirror_ok(results: &[ProbeResult], mirror: &Mirror, codename: &str) -> Op
 }
 
 /// Total latency of the endpoints `mirror` needs; `None` if any failed.
-fn mirror_latency(results: &[ProbeResult], mirror: &Mirror, codename: &str) -> Option<u64> {
+fn mirror_latency(
+    results: &[ProbeResult],
+    mirror: &Mirror,
+    codename: &str,
+    ros_apt: bool,
+) -> Option<u64> {
     let mut total = 0;
-    for e in endpoints_for(mirror, codename) {
+    for e in needed(mirror, codename, ros_apt) {
         total += results.iter().find(|r| r.endpoint.url == e.url)?.millis()?;
     }
     Some(total)
 }
 
-pub fn verdict(results: &[ProbeResult], codename: &str) -> Verdict {
-    if mirror_ok(results, &mirror::OFFICIAL, codename) == Some(true) {
+pub fn verdict(results: &[ProbeResult], codename: &str, ros_apt: bool) -> Verdict {
+    if mirror_ok(results, &mirror::OFFICIAL, codename, ros_apt) == Some(true) {
         return Verdict::OfficialOk;
     }
     let failed: Vec<String> = results
         .iter()
         .filter(|r| r.endpoint.role != Role::GitHost && !r.ok())
         .filter(|r| {
-            endpoints_for(&mirror::OFFICIAL, codename)
+            needed(&mirror::OFFICIAL, codename, ros_apt)
                 .iter()
                 .any(|e| e.url == r.endpoint.url)
         })
@@ -274,7 +294,7 @@ pub fn verdict(results: &[ProbeResult], codename: &str) -> Verdict {
         .collect();
     let mut candidates: Vec<(u64, Mirror)> = mirror::MIRRORS
         .iter()
-        .filter_map(|m| mirror_latency(results, m, codename).map(|ms| (ms, *m)))
+        .filter_map(|m| mirror_latency(results, m, codename, ros_apt).map(|ms| (ms, *m)))
         .collect();
     candidates.sort_by_key(|(ms, _)| *ms);
     if candidates.is_empty() {
@@ -372,7 +392,7 @@ mod tests {
         let ali_apt = mirror::ALIYUN.apt_inrelease_url(c);
 
         let all_good = vec![ok(&off_apt, 400), ok(&off_idx, 500), ok(&tuna_apt, 100)];
-        assert_eq!(verdict(&all_good, c), Verdict::OfficialOk);
+        assert_eq!(verdict(&all_good, c, true), Verdict::OfficialOk);
 
         // GitHub down: aliyun (apt only) needs the official rosdistro, so it is
         // not a candidate; ustc is faster than tuna.
@@ -385,7 +405,7 @@ mod tests {
             ok(&ustc_idx, 150),
             ok(&ali_apt, 50),
         ];
-        match verdict(&github_down, c) {
+        match verdict(&github_down, c, true) {
             Verdict::UseMirror { failed, candidates } => {
                 assert_eq!(failed, vec![off_idx.clone()]);
                 assert_eq!(
@@ -396,9 +416,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
 
+        // Locked to a ROS snapshot: a blocked packages.ros.org does not matter.
+        let apt_blocked = vec![fail(&off_apt), ok(&off_idx, 500)];
+        assert_eq!(verdict(&apt_blocked, c, false), Verdict::OfficialOk);
+        assert_ne!(verdict(&apt_blocked, c, true), Verdict::OfficialOk);
+
         let nothing = vec![fail(&off_apt), fail(&off_idx), fail(&tuna_apt)];
         assert!(matches!(
-            verdict(&nothing, c),
+            verdict(&nothing, c, true),
             Verdict::NothingReachable { .. }
         ));
     }

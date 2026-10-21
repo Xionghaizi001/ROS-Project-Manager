@@ -756,6 +756,15 @@ pub fn apply(
     let host = Host::probe();
     let manifest_update = prepare_distro(&mut loaded, &host, distro)?;
     let requested = requested_mirror(mirror)?;
+    // Snapshot dates roll off the snapshot services over time (P0 finding):
+    // a real run checks the recorded snapshot is still online and, if not,
+    // degrades to the live repositories (announced, never silent) instead of
+    // failing outright. `--dry-run` never touches the network here — the
+    // printed plan already shows exactly what the lock says.
+    let lock = match lock {
+        Some(l) if !dry_run => Some(degrade_unreachable_snapshots(&loaded, l)),
+        other => other,
+    };
     let sources = if dry_run || offline {
         let m = requested.unwrap_or(mirror::OFFICIAL);
         println!(
@@ -768,16 +777,13 @@ pub fn apply(
         );
         m
     } else {
-        select_sources(&loaded, requested)?
-    };
-    // Snapshot dates roll off the snapshot services over time (P0 finding):
-    // a real run checks the recorded snapshot is still online and, if not,
-    // degrades to the live repositories (announced, never silent) instead of
-    // failing outright. `--dry-run` never touches the network here — the
-    // printed plan already shows exactly what the lock says.
-    let lock = match lock {
-        Some(l) if !dry_run => Some(degrade_unreachable_snapshots(&loaded, l)),
-        other => other,
+        // With a reachable ROS snapshot, apt never downloads from the ROS
+        // repository, so its reachability must not decide anything.
+        let ros_snapshot = lock
+            .as_ref()
+            .and_then(|l| l.provider.native.as_ref())
+            .is_some_and(|n| n.ros_snapshot.is_some());
+        select_sources(&loaded, requested, ros_snapshot)?
     };
     let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
@@ -944,7 +950,11 @@ fn probe_snapshot(base: &str, codename: &str) -> bool {
 /// Probe the sources `apply` is about to download from and pick one
 /// (decision #17). Never switches silently: a mirror is used only when the
 /// user passed `--mirror` / `ROSPM_MIRROR` or confirmed the prompt.
-fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> {
+fn select_sources(
+    loaded: &Loaded,
+    requested: Option<Mirror>,
+    ros_snapshot: bool,
+) -> Result<Mirror> {
     let m = &loaded.manifest;
     let ubuntu = m.ubuntu();
     let Some(codename) = ubuntu_codename(&ubuntu) else {
@@ -953,9 +963,12 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
     };
     let git_urls = repos_urls(loaded);
     let mut endpoints = match requested {
-        Some(mr) => net::endpoints_for(&mr, codename),
+        Some(mr) => net::needed(&mr, codename, !ros_snapshot),
         None => net::all_endpoints(codename, &git_urls),
     };
+    if ros_snapshot {
+        endpoints.retain(|e| e.role != Role::RosApt);
+    }
     if requested.is_some() {
         endpoints.extend(
             net::all_endpoints(codename, &git_urls)
@@ -985,7 +998,7 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
     }
 
     if let Some(mr) = requested {
-        return match net::mirror_ok(&results, &mr, codename) {
+        return match net::mirror_ok(&results, &mr, codename, !ros_snapshot) {
             Some(true) => {
                 println!(
                     "{}",
@@ -1008,7 +1021,7 @@ fn select_sources(loaded: &Loaded, requested: Option<Mirror>) -> Result<Mirror> 
         };
     }
 
-    match net::verdict(&results, codename) {
+    match net::verdict(&results, codename, !ros_snapshot) {
         Verdict::OfficialOk => {
             println!(
                 "{}",
