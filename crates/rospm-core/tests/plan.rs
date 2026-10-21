@@ -917,6 +917,33 @@ fn native_uninstall_removes_orphaned_snapshot_leftovers_without_a_ros_source() {
         .plan_uninstall(&ctx(&m, &host), true)
         .unwrap();
     assert_eq!(kept.action_count(), 0, "{}", kept.render());
+
+    // A foreign ROS source (e.g. `ros2-apt-source`) stays, rospm's snapshot files go.
+    host.apt_sources.ros2 = Some(PathBuf::from("/etc/apt/sources.list.d/ros2.sources"));
+    let rendered = provider::for_manifest(&m)
+        .plan_uninstall(&ctx(&m, &host), false)
+        .unwrap()
+        .render();
+    assert!(
+        rendered.contains("native.uninstall.source_not_ours"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!(
+            "sudo rm -f /usr/share/keyrings/ros2-snapshots-archive-keyring.gpg {UBUNTU_SNAPSHOT_LIST}"
+        )),
+        "{rendered}"
+    );
+    assert!(
+        !rendered
+            .lines()
+            .any(|l| l.contains("rm -f") && l.contains("ros2.sources")),
+        "{rendered}"
+    );
+    let kept = provider::for_manifest(&m)
+        .plan_uninstall(&ctx(&m, &host), true)
+        .unwrap();
+    assert_eq!(kept.action_count(), 0, "{}", kept.render());
 }
 
 #[test]

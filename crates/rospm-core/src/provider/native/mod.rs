@@ -61,6 +61,29 @@ fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<Strin
     lines
 }
 
+/// `rm -f` rospm's own snapshot keyring and Ubuntu snapshot list (only rospm
+/// writes these paths) when `ros2.list` is not rospm's: without this they
+/// outlive every uninstall, since only the `ros2.list` branch removed them.
+fn remove_snapshot_leftovers(plan: &mut Plan, host: &probe::Host) {
+    let mut rm = Command::new("rm").arg("-f").sudo();
+    let mut any = false;
+    if host.apt_sources.snapshot_keyring {
+        rm = rm.arg(crate::snapshot::ROS_SNAPSHOT_KEYRING);
+        any = true;
+    }
+    let ubuntu_list = host.apt_sources.ubuntu_snapshot.is_some();
+    if ubuntu_list {
+        rm = rm.arg(probe::UBUNTU_SNAPSHOT_LIST);
+        any = true;
+    }
+    if any {
+        plan.run(rm);
+    }
+    if ubuntu_list {
+        plan.run(Command::new("apt-get").arg("update").sudo());
+    }
+}
+
 /// Whether the snapshot `ros2.list` must be (re)written: it is rospm's own
 /// file (or absent) and does not already point at `base` with a usable keyring.
 /// Returns `(is_own_file, is_foreign_file, need_source)`.
@@ -821,27 +844,8 @@ impl Provider for Native {
         match (&host.apt_sources.ros2, keep_source) {
             (None, keep) => {
                 plan.note(msg!("native.uninstall.no_source"));
-                // Leftovers of an interrupted `apply --locked` (only rospm
-                // writes these two paths): without this they outlive every
-                // later uninstall, since the branch below needs `ros2.list`.
                 if !keep {
-                    let mut rm = Command::new("rm").arg("-f").sudo();
-                    let mut any = false;
-                    if host.apt_sources.snapshot_keyring {
-                        rm = rm.arg(crate::snapshot::ROS_SNAPSHOT_KEYRING);
-                        any = true;
-                    }
-                    let ubuntu_list = host.apt_sources.ubuntu_snapshot.is_some();
-                    if ubuntu_list {
-                        rm = rm.arg(probe::UBUNTU_SNAPSHOT_LIST);
-                        any = true;
-                    }
-                    if any {
-                        plan.run(rm);
-                    }
-                    if ubuntu_list {
-                        plan.run(Command::new("apt-get").arg("update").sudo());
-                    }
+                    remove_snapshot_leftovers(&mut plan, host);
                 }
             }
             (Some(_), true) => {
@@ -879,6 +883,8 @@ impl Provider for Native {
                     "native.uninstall.source_not_ours",
                     file = file.display()
                 ));
+                // The foreign source uses neither of rospm's snapshot files.
+                remove_snapshot_leftovers(&mut plan, host);
             }
         }
         Ok(plan)
