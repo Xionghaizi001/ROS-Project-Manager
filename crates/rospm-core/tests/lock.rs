@@ -430,3 +430,47 @@ version = "1.0 -oAPT::x=y"
         ]
     );
 }
+
+#[test]
+fn relock_keeps_the_recorded_deb_digest_of_an_unchanged_version() {
+    // The synthetic host has no apt-cache index, like a repository that has
+    // dropped the installed version: the digest can only come from the old lock.
+    let (root, _) = project("keep-sha", true);
+    let m = Manifest::load(&root.join("rospm.toml")).unwrap();
+    let host = synthetic_host();
+    let mut previous = provider::for_manifest(&m)
+        .resolve_lock(&ctx(&m, &root, &host), None)
+        .unwrap()
+        .lock;
+    for a in previous.apt.iter_mut() {
+        a.sha256 = Some(format!("sha256:{}", a.name));
+    }
+    previous
+        .apt
+        .iter_mut()
+        .find(|a| a.name == "curl")
+        .unwrap()
+        .version = "8.4.0-1".into();
+    let mut c = ctx(&m, &root, &host);
+    c.lock = Some(&previous);
+    let res = provider::for_manifest(&m).resolve_lock(&c, None).unwrap();
+    let sha = |name: &str| {
+        res.lock
+            .apt
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap()
+            .sha256
+            .clone()
+    };
+    assert_eq!(
+        sha("ros-jazzy-rclcpp").as_deref(),
+        Some("sha256:ros-jazzy-rclcpp")
+    );
+    assert_eq!(
+        sha("curl"),
+        None,
+        "a different version never inherits a digest"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}

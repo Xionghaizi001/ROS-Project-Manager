@@ -292,12 +292,27 @@ fn resolve_apt(ctx: &Context, notes: &mut Vec<Message>) -> Result<Vec<LockedApt>
     if !missing.is_empty() {
         notes.push(msg!("lock.apt_missing", packages = missing.join(" ")));
     }
-    if let Some(sums) = apt_cache_sha256(host, &entries) {
-        for e in entries.iter_mut() {
-            e.sha256 = sums.get(&(e.name.clone(), e.version.clone())).cloned();
-        }
-    } else if !entries.is_empty() {
+    let sums = apt_cache_sha256(host, &entries);
+    if sums.is_none() && !entries.is_empty() {
         notes.push(msg!("lock.apt_cache_unavailable"));
+    }
+    // The index forgets superseded versions: keep the digest the previous
+    // lock recorded for the same version, so an unchanged host relocks to
+    // an unchanged file (spec §3.3).
+    let previous = ctx
+        .lock
+        .map(|l| l.apt_for(ctx.platform))
+        .unwrap_or_default();
+    for e in entries.iter_mut() {
+        e.sha256 = sums
+            .as_ref()
+            .and_then(|s| s.get(&(e.name.clone(), e.version.clone())).cloned())
+            .or_else(|| {
+                previous
+                    .iter()
+                    .find(|p| p.name == e.name && p.version == e.version)
+                    .and_then(|p| p.sha256.clone())
+            });
     }
     lock::sort_apt(&mut entries);
     Ok(entries)
