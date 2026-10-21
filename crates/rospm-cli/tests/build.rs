@@ -357,3 +357,36 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     assert!(args.contains("colcon build"));
     assert!(String::from_utf8_lossy(&out.stderr).contains("19"));
 }
+
+#[test]
+fn apply_build_previews_preparation_then_build_and_verify_without_writing() {
+    let dir = fixture("apply-build-preview");
+    // init picks the host's distro, which apply requires.
+    assert!(rospm()
+        .current_dir(&dir)
+        .arg("init")
+        .status()
+        .unwrap()
+        .success());
+    let base = fs::read_to_string(dir.join("rospm.toml")).unwrap();
+    let text = format!("{base}\n[build]\nverify = ['ros2 pkg list']\n");
+    fs::write(dir.join("rospm.toml"), &text).unwrap();
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["apply", "--build", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let plan = String::from_utf8(out.stdout).unwrap();
+    let build = plan.find("colcon build").expect(&plan);
+    let verify = plan.rfind("ros2 pkg list").expect(&plan);
+    assert!(build < verify, "{plan}");
+    // Plain `build` never runs the verify commands.
+    assert!(!preview(&dir, &[]).contains("ros2 pkg list"));
+    assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), text);
+    assert!(!dir.join(".rospm").exists());
+}

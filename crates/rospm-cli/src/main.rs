@@ -90,6 +90,8 @@ enum Cmd {
         distro: Option<RosDistro>,
         #[arg(long, help = tr("cli.apply.locked"))]
         locked: bool,
+        #[arg(long, help = tr("cli.apply.build"))]
+        build: bool,
         #[arg(long, help = tr("cli.apply.offline"))]
         offline: bool,
         #[arg(long, value_name = "NAME", help = tr("cli.apply.mirror"), hide_possible_values = true, value_parser = clap::builder::PossibleValuesParser::new(rospm_core::mirror::NAMES))]
@@ -265,6 +267,7 @@ fn main() -> ExitCode {
         Cmd::Apply {
             distro,
             locked,
+            build,
             offline,
             mirror,
             dry_run,
@@ -272,7 +275,7 @@ fn main() -> ExitCode {
             let mirror = mirror
                 .as_deref()
                 .map(|m| m.parse::<Mirror>().expect("validated by clap"));
-            commands::apply(&global, locked, offline, dry_run, mirror, distro)
+            commands::apply(&global, locked, build, offline, dry_run, mirror, distro)
         }
         Cmd::Uninstall {
             keep_source,

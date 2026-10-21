@@ -13,6 +13,11 @@ provider = "native"                      # native | pixi | docker
 # ubuntu = "@UBUNTU@"                       # defaults to the distro's release
 # ros_base = "ros-@DISTRO@-ros-base"        # or ros-@DISTRO@-desktop; `rospm init --base desktop` sets it
 
+# Optional: checks `rospm apply --build` runs after building every workspace
+# (ROS, all workspaces, [env] and the Conda environment loaded).
+# [build]
+# verify = ["ros2 pkg list"]
+
 # Optional: select an existing Conda environment for all workspace builds (native).
 # [build.conda]
 # name = "robot-dev"                     # choose name OR prefix, never both

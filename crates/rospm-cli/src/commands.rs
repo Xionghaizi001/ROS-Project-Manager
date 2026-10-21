@@ -734,6 +734,7 @@ fn requested_mirror(flag: Option<Mirror>) -> Result<Option<Mirror>> {
 pub fn apply(
     global: &Global,
     locked: bool,
+    build: bool,
     offline: bool,
     dry_run: bool,
     mirror: Option<Mirror>,
@@ -806,6 +807,11 @@ pub fn apply(
                 .context(tr("cli.apply.official_failed_hint")))
         }
         Err(e) => Err(e.into()),
+        Ok(()) if build => {
+            // Re-probe: apply may just have installed ROS or Miniforge.
+            let host = if dry_run { host } else { Host::probe() };
+            run_build(&loaded, &host, None, true, dry_run)
+        }
         Ok(()) => Ok(()),
     }
 }
@@ -1179,9 +1185,18 @@ pub fn build(
         loaded.manifest.build.conda = Some(conda);
         loaded.manifest.validate()?;
     }
-    let host = Host::probe();
-    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
-    let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace)?;
+    run_build(&loaded, &Host::probe(), workspace, false, dry_run)
+}
+
+fn run_build(
+    loaded: &Loaded,
+    host: &Host,
+    workspace: Option<&str>,
+    verify: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let ctx = context(loaded, host, false, None, false, mirror::OFFICIAL)?;
+    let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
     let mut out = std::io::stdout().lock();
     plan.execute(dry_run, &mut out)?;
     out.flush()?;

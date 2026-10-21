@@ -13,6 +13,11 @@ provider = "native"                      # native | pixi | docker
 # ubuntu = "@UBUNTU@"                       # 默认为该发行版对应的 Ubuntu 版本
 # ros_base = "ros-@DISTRO@-ros-base"        # 或 ros-@DISTRO@-desktop；`rospm init --base desktop` 会设置它
 
+# 可选：`rospm apply --build` 编译全部 workspace 后执行的验证命令
+# （已加载 ROS、全部 workspace、[env] 与 Conda 环境）。
+# [build]
+# verify = ["ros2 pkg list"]
+
 # 可选：为所有 workspace 的构建选择已有 Conda 环境（native）。
 # [build.conda]
 # name = "robot-dev"                     # name 与 prefix 二选一，不能同时设置

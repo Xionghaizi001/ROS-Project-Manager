@@ -413,7 +413,7 @@ fn native_build_plan_sources_underlays_first() {
     let m = Manifest::parse(FULL, Path::new("t")).unwrap();
     let host = bare_host();
     let plan = provider::for_manifest(&m)
-        .plan_build(&ctx(&m, &host), Some("main"))
+        .plan_build(&ctx(&m, &host), Some("main"), false)
         .unwrap();
     assert_eq!(plan.action_count(), 1);
     match &plan.steps[0] {
@@ -425,6 +425,50 @@ fn native_build_plan_sources_underlays_first() {
         }
         other => panic!("unexpected step {other:?}"),
     }
+}
+
+#[test]
+fn build_verify_runs_after_full_build_with_project_environment() {
+    let text = format!("{FULL}\n[build]\nverify = ['ros2 pkg list']\n");
+    let m = Manifest::parse(&text, Path::new("t")).unwrap();
+    let host = bare_host();
+    let provider = provider::for_manifest(&m);
+    let plain = provider.plan_build(&ctx(&m, &host), None, false).unwrap();
+    let plan = provider.plan_build(&ctx(&m, &host), None, true).unwrap();
+    assert_eq!(plan.action_count(), plain.action_count() + 1);
+    match plan.steps.last().unwrap() {
+        Step::Run(c) => {
+            assert_eq!(c.program, "bash");
+            assert_eq!(c.cwd.as_deref(), Some(Path::new("/proj")));
+            let script = c.args.last().unwrap();
+            assert!(script.starts_with("set -e\n"));
+            assert!(script.contains("ws/install/setup.bash"));
+            assert!(script.ends_with("ros2 pkg list"));
+        }
+        other => panic!("unexpected step {other:?}"),
+    }
+
+    let conda = Manifest::parse(
+        &format!("{text}\n[build.conda]\nname = 'robot-dev'\n"),
+        Path::new("t"),
+    )
+    .unwrap();
+    let plan = provider::for_manifest(&conda)
+        .plan_build(&ctx(&conda, &host), None, true)
+        .unwrap();
+    match plan.steps.last().unwrap() {
+        Step::Run(c) => {
+            assert_eq!(c.program, "conda");
+            assert_eq!(c.args[4..8], ["bash", "--noprofile", "--norc", "-c"]);
+        }
+        other => panic!("unexpected step {other:?}"),
+    }
+
+    let bad = Manifest::parse(
+        &format!("{FULL}\n[build]\nverify = [' ']\n"),
+        Path::new("t"),
+    );
+    assert!(bad.is_err());
 }
 
 #[test]
@@ -441,7 +485,7 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         .unwrap();
         let host = bare_host();
         let plan = provider::for_manifest(&m)
-            .plan_build(&ctx(&m, &host), None)
+            .plan_build(&ctx(&m, &host), None, false)
             .unwrap();
         assert_eq!(plan.action_count(), 3);
         let commands: Vec<_> = plan
@@ -504,7 +548,7 @@ fn managed_conda_is_prepared_before_apply_mutations_and_build_only_checks() {
     assert!(preview.contains("/proj/.rospm/conda/env"));
     assert!(preview.contains("conda env create --yes --prefix"));
     assert!(preview.contains("python=3.12"));
-    let build = provider.plan_build(&context, Some("main")).unwrap();
+    let build = provider.plan_build(&context, Some("main"), false).unwrap();
     assert!(matches!(&build.steps[0], Step::Conda(_)));
     assert!(build
         .render()

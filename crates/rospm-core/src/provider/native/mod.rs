@@ -866,7 +866,7 @@ impl Provider for Native {
         Ok(plan)
     }
 
-    fn plan_build(&self, ctx: &Context, only: Option<&str>) -> Result<Plan> {
+    fn plan_build(&self, ctx: &Context, only: Option<&str>, verify: bool) -> Result<Plan> {
         let m = ctx.manifest;
         let order = m.build_order()?;
         let targets: Vec<String> = match only {
@@ -930,6 +930,22 @@ impl Provider for Native {
                     .cwd(cwd);
             }
             plan.run(cmd);
+        }
+        if verify {
+            // Same environment `rospm env` gives the user, so a passing check
+            // means the documented workflow works too.
+            let env = self.env_script(ctx, Shell::Bash)?;
+            for check in &m.build.verify {
+                let script = format!("set -e\n{env}{check}");
+                let cmd = match &conda {
+                    Some(conda) => conda.command().arg("bash"),
+                    None => Command::new("bash"),
+                };
+                plan.run(
+                    cmd.args(["--noprofile", "--norc", "-c", &script])
+                        .cwd(ctx.root),
+                );
+            }
         }
         Ok(plan)
     }

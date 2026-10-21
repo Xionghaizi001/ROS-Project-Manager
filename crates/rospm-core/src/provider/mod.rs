@@ -87,8 +87,9 @@ pub trait Provider {
     /// Project files, sources and workspaces are never touched.
     fn plan_uninstall(&self, ctx: &Context, keep_source: bool) -> Result<Plan>;
 
-    /// Build `only` (one workspace) or every workspace in overlay order.
-    fn plan_build(&self, ctx: &Context, only: Option<&str>) -> Result<Plan>;
+    /// Build `only` (one workspace) or every workspace in overlay order, then
+    /// run the manifest's `build.verify` commands when `verify` is set.
+    fn plan_build(&self, ctx: &Context, only: Option<&str>, verify: bool) -> Result<Plan>;
 
     /// A script the user can `source` to enter the environment (spec §4 `env`).
     fn env_script(&self, ctx: &Context, shell: Shell) -> Result<String>;
@@ -160,7 +161,7 @@ impl Provider for Unimplemented {
     fn plan_uninstall(&self, _ctx: &Context, _keep_source: bool) -> Result<Plan> {
         Err(self.err())
     }
-    fn plan_build(&self, _ctx: &Context, _only: Option<&str>) -> Result<Plan> {
+    fn plan_build(&self, _ctx: &Context, _only: Option<&str>, _verify: bool) -> Result<Plan> {
         Err(self.err())
     }
     fn env_script(&self, _ctx: &Context, _shell: Shell) -> Result<String> {

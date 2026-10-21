@@ -108,11 +108,15 @@ pub struct Environment {
 pub struct Build {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conda: Option<CondaBuild>,
+    /// Shell commands `apply --build` runs after the full build, with ROS,
+    /// every workspace and `[env]` loaded (and the Conda environment, if any).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verify: Vec<String>,
 }
 
 impl Build {
     fn is_empty(&self) -> bool {
-        self.conda.is_none()
+        self.conda.is_none() && self.verify.is_empty()
     }
 }
 
@@ -461,6 +465,14 @@ impl Manifest {
         }
         if self.project.platforms.is_empty() {
             errs.push(msg!("manifest.no_platforms"));
+        }
+        if self
+            .build
+            .verify
+            .iter()
+            .any(|c| c.trim().is_empty() || c.contains('\0'))
+        {
+            errs.push(msg!("manifest.verify_command_invalid"));
         }
         if let Some(conda) = &self.build.conda {
             if let Err(Error::Validation(messages)) = conda.validate() {

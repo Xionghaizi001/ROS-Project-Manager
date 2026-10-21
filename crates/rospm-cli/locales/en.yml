@@ -100,6 +100,7 @@ cli:
     lock_line: "lock        %{path}"
   apply:
     about: "Prepare declared Conda environments, set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
+    build: "After preparing the environment, build every workspace in overlay order and run the build.verify commands (combine with --locked)"
     distro: "Select humble | jazzy | rolling and save it to the manifest (dry-run only previews)"
     locked_distro_conflict: "--locked cannot change the manifest distribution; run `rospm apply --distro <name>` first, then `rospm lock`"
     locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
@@ -236,6 +237,7 @@ package_xml:
   missing_name: "missing <name>"
 
 manifest:
+  verify_command_invalid: "build.verify commands must be non-empty and must not contain NUL"
   apt_name_invalid: "%{field}: `%{name}` is not a valid apt package name (lowercase letters, digits and + . -, starting with a letter or digit)"
   conda_selector_required: "build.conda must set exactly one of name or prefix or the managed table"
   conda_python_invalid: "build.conda.managed.python must be a numeric major.minor or major.minor.patch version"

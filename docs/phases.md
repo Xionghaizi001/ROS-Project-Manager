@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-20。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-21。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -66,7 +66,8 @@
   - [x] 覆盖规则：显式锁只含 Conda 包；定义中的 pip 依赖须全部为 `name==version`（不接受范围、URL、extras、标记），重放以 `--no-deps` 安装，`lock` 核对环境内全部 PyPI 包与固定完全一致；`variables` 重放后以 `conda env config vars set` 写入。
   - [x] `apply --locked`：规划阶段（无写入、无子进程）要求本平台记录存在、定义摘要一致、锁文件存在且摘要一致、平台 / `@EXPLICIT` / 每包摘要有效、覆盖定义中的 Conda 依赖与 Python 版本（有 pip 依赖时含 `pip`）、pip 全部固定，否则失败并提示在该平台 `apply` 后重新 `lock`，从不求解。执行 `conda create --yes --prefix … --file <锁>` → 变量 → `pip install --no-deps`，全部成功才写两行完成记录；普通 `apply` / `build` 复用重放的环境，按定义求解的环境不被视为锁的重放（不覆盖目录）。外部环境在 `--locked` 下只检查并在计划中说明无可重放保证。
   - [x] 测试：单元测试覆盖记录 / 幂等 / 同机复用 / 干净项目重放不求解 / 两行完成记录、缺平台记录、定义过期、摘要不符、平台不符、缺 `@EXPLICIT`、缺包摘要、覆盖不全、Python 版本不符、pip 未固定、PyPI 漂移、外部环境、`{platform}` 展开与多平台校验、锁合并保留其它平台；CLI 测试覆盖 `apply --locked --dry-run` 缺记录的中英文错误与按锁重放预览（无写入），以及普通 `apply` 不受 `lock_file` 影响。真实验收（2026-10-20，本机 x86_64、conda 26.7.1，清华 conda-forge / PyPI 镜像）：`tests/conda_bootstrap.rs` 的 `locks_and_replays_a_real_environment`（`--ignored`）按定义求解含 `six==1.16.0` 与变量的环境 → `resolve_lock` 写锁 → 同机 `--locked` 复用 → 干净项目按锁重放，`conda list --explicit --sha256` 与锁逐字一致、`six` 与变量生效，重放环境再次锁定得到相同记录（约 150 秒）。aarch64 的真实重放留给干净机一键验收；`verify` 对 Conda 锁的核对见下方“对接 `env` / `shell`”一项。
-- [ ] 定义一键还原入口（拟 `apply --build`，与 `--locked` 组合）：自动准备 Conda 工具与项目环境，继续完成系统依赖安装、源码还原、按拓扑顺序编译及清单声明的验证命令。普通 `apply` 仍负责环境与源码准备；`build` 使用已准备好的环境。用户无需手动激活环境或在安装 Conda 后重新发起还原。
+- [x] 定义一键还原入口（`apply --build`，与 `--locked` 组合）：自动准备 Conda 工具与项目环境，继续完成系统依赖安装、源码还原、按拓扑顺序编译及清单声明的验证命令。普通 `apply` 仍负责环境与源码准备；`build` 使用已准备好的环境。用户无需手动激活环境或在安装 Conda 后重新发起还原。
+  - [x] 已实现（2026-10-21）：`apply --build` 在 apply 计划成功后重新探测主机，再生成与 `build` 相同的全量编译计划，并追加清单新增的 `build.verify` 命令（Bash，加载与 `rospm env` 相同的环境，声明 Conda 时经 `conda run` 执行）；`build` 不执行验证命令；apply 失败时不编译；`--dry-run` 依次预览 apply 与编译 / 验证计划且不写文件。已同步 schema、`spec.md`、双语模板与帮助。测试：`tests/plan.rs` 覆盖验证命令顺序、环境、Conda 包装与空命令校验；CLI 测试覆盖 `apply --build --dry-run` 的预览顺序、无写入及 `build` 不执行验证。真实主机上的一键执行由下方“干净机一键验收”完成。
 - [ ] 安装与还原步骤幂等：复用已校验的工具、下载缓存和符合定义 / 锁记录的项目环境，失败后重跑可继续；未完成的工具或环境不得标记为就绪，不修改外部已有环境。`--dry-run` 展示安装器版本、工具与环境位置、依赖输入及后续命令，不下载或写文件；下载、校验、安装失败时报告具体步骤，离线且无所需缓存时明确报错。
 - [ ] 使用 `conda run -n <name>` / `-p <path>` 或等价的受控子进程执行构建，不依赖调用终端已激活环境；验证环境存在，按 workspace 拓扑顺序加载兼容的 ROS / underlay，并让 `--dry-run` 展示环境、解释器与完整构建命令。直接 `build` 时缺少 Conda、环境或构建工具应明确报错并提示先执行 `apply`，不静默回退到系统环境。
 - [ ] 确保 colcon、Python 构建步骤与 CMake 的 `Python3_EXECUTABLE` / `PYTHON_EXECUTABLE`（按包所用查找机制）使用所选环境的解释器；检查所需 Python 模块及 ROS Python 扩展能否导入，发现版本 / ABI 不兼容时给出诊断。切换环境时检测旧构建目录中的解释器缓存，提示清理或隔离构建目录。

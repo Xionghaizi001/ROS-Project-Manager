@@ -49,6 +49,10 @@ ros_base = "ros-jazzy-ros-base"            # 底包：ros-base（精简）或 de
 # dockerfile = "docker/Dockerfile"         # 省略则由工具生成到 .rospm/docker/
 # platforms = ["linux/amd64", "linux/arm64"] # buildx
 
+# ---------- 可选的一键还原验证命令 ----------
+# [build]
+# verify = ["ros2 pkg list"]               # apply --build 编译全部 workspace 后依次执行
+
 # ---------- 可选的项目级 Conda 构建环境（native） ----------
 # [build.conda]
 # name = "robot-dev"                       # 已有环境名称；与 prefix 二选一
@@ -126,6 +130,7 @@ sign = false
 | `project.ros_distro` | 是 | 枚举，见决策 #5 |
 | `project.platforms` | 是 | 至少一项；`lock` 按每个平台分别解析 |
 | `environment.provider` | 是 | 只允许存在对应的 `environment.<provider>` 子表，多余子表报错 |
+| `build.verify` | 否 | 字符串列表，每项为一条 Bash 命令；空白或含 NUL 报错。只由 `apply --build` 在全部 workspace 编译后按顺序执行，工作目录为清单目录，环境与 `rospm env` 相同（ROS、全部 workspace、`env.*`），声明 Conda 时在同一 `conda run` 中执行；任一命令失败即停止并以非零退出。`build` 不执行 |
 | `build.conda` | 否 | 当前仅用于 native；表存在时必须且只能设置 `name`（已有环境名称）、`prefix`（已有环境路径）或 `managed` 子表；空值、未知字段报错；省略此表保持原构建方式 |
 | `build.conda.managed` | 否 | 必填 `python`（数字 `major.minor[.patch]`）和非空 `channels` 列表；可选 `environment_file` / `lock_file` 路径，以清单目录为基准；`lock_file` 中的 `{platform}` 展开为 Conda 平台名（`linux-64` / `linux-aarch64`），默认 `conda-{platform}.lock`；`project.platforms` 多于一项时显式的 `lock_file` 必须含 `{platform}`；不允许自定义名称或 prefix |
 | `workspaces.<name>` | 至少一个 | `path` 相对于清单所在目录；`sources` 可省略（纯本地源码） |
@@ -298,7 +303,7 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；显式 `--target` 查询 apt / conda 目标仓库索引，跨架构时跳过主机探测；默认只报告（退出码 0），`--strict` 在所执行的检查有缺失或未知项时退出 1 | — |
 | `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期、受管 Conda 环境的显式锁（写入 `lock_file`）；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 与 Conda 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
 | `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
-| `apply [--distro <名>] [--locked] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2），受管 Conda 环境按本平台显式锁重放、缺记录即失败（§2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像 | 必须 |
+| `apply [--distro <名>] [--locked] [--build] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2），受管 Conda 环境按本平台显式锁重放、缺记录即失败（§2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像；`--build`（可与 `--locked` 组合）在上述步骤成功后，重新探测主机（同一次运行中刚装好的 ROS / Miniforge 生效），按拓扑顺序编译全部 workspace（与 `build` 相同，含 Conda 就绪检查）并执行 `build.verify`；`--dry-run` 依次预览两段计划 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`（不跑 `autoremove`，只提示用户自行运行，以免删除计划外的包）；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>] [--conda-env <name> \| --conda-prefix <path>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置；可覆盖项目默认的 Conda 环境选择 | 必须 |
 | `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本 | — |

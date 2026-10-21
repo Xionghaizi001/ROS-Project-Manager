@@ -95,6 +95,7 @@ cli:
     lock_line: "锁文件      %{path}"
   apply:
     about: "准备清单声明的 Conda 环境、配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
+    build: "准备好环境后按叠加顺序编译全部 workspace，并执行 build.verify 中的验证命令（可与 --locked 组合）"
     distro: "选择 humble | jazzy | rolling 并写回清单（dry-run 只预览）"
     locked_distro_conflict: "--locked 不能更改清单的发行版；请先运行 `rospm apply --distro <名>`，再运行 `rospm lock`"
     locked: "遵循 rospm.lock（快照仓库、固定版本）"
@@ -231,6 +232,7 @@ package_xml:
   missing_name: "缺少 <name>"
 
 manifest:
+  verify_command_invalid: "build.verify 中的命令不能为空，也不能包含 NUL"
   apt_name_invalid: "%{field}：`%{name}` 不是合法的 apt 包名（只能包含小写字母、数字和 + . -，且以字母或数字开头）"
   conda_selector_required: "build.conda 必须且只能设置 name、prefix 或 managed 子表中的一项"
   conda_python_invalid: "build.conda.managed.python 必须是数字版本号 major.minor 或 major.minor.patch"
