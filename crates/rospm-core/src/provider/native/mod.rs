@@ -13,6 +13,14 @@ pub mod deps;
 pub mod lock;
 pub mod verify;
 
+/// Tooling `apply` installs next to the base metapackage. `lock` records it
+/// so `apply --locked` replays it; `repository check` looks it up.
+pub const TOOLING: [&str; 3] = [
+    "python3-rosdep",
+    "python3-vcstool",
+    "python3-colcon-common-extensions",
+];
+
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -128,27 +136,16 @@ fn stale_own_sources(ctx: &Context, locked: Option<&crate::lock::LockedNative>) 
     out
 }
 
-/// Pin the ROS apt source to a snapshot (`apply --locked`, spec §3.2).
-/// Mirrors the P1 rewrite rules: only rospm's own [`ROS_APT_LIST`] is
-/// touched — a foreign source file (e.g. `ros2-apt-source`'s `ros2.sources`)
-/// is left alone and the plan says so. `--mirror` has no effect on the apt
-/// line here: snapshots are not mirrored (rosdistro/rosdep still use it,
-/// unaffected by this function).
-fn plan_ros_snapshot_source(
+/// Prerequisites before a ROS apt source is (re)written: the packages the
+/// steps need, a UTF-8 system locale and the `universe` component. Shared by
+/// the live and the snapshot source paths.
+fn plan_prerequisites(
     plan: &mut Plan,
-    ctx: &Context,
-    codename: &str,
-    date: &str,
+    host: &probe::Host,
     need_locale: bool,
     need_universe: bool,
+    need_source: bool,
 ) {
-    let host = ctx.host;
-    let distro = ctx.manifest.project.ros_distro;
-    let base = crate::snapshot::ros_snapshot_url(distro.as_str(), date);
-    let (is_own_file, is_foreign_file, need_source) = ros_snapshot_source_state(ctx, &base);
-    let keyring_ok =
-        host.apt_sources.snapshot_keyring && !host.apt_sources.snapshot_keyring_armored;
-
     if need_locale || need_universe || need_source {
         let mut prereqs: Vec<&str> = Vec::new();
         if need_locale {
@@ -161,14 +158,12 @@ fn plan_ros_snapshot_source(
             // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
             prereqs.extend(["curl", "ca-certificates", "gnupg"]);
         }
-        if !prereqs.is_empty() {
-            plan.run(
-                Command::new("apt-get")
-                    .args(["install", "-y"])
-                    .args(prereqs)
-                    .sudo(),
-            );
-        }
+        plan.run(
+            Command::new("apt-get")
+                .args(["install", "-y"])
+                .args(prereqs)
+                .sudo(),
+        );
     }
     if need_locale {
         plan.run(
@@ -209,6 +204,78 @@ fn plan_ros_snapshot_source(
                 .sudo(),
         );
     }
+}
+
+/// With a mirror that carries rosdistro, write rosdep's default sources list
+/// pointing at it and return true: `rosdep init` would write GitHub URLs (and
+/// a GitHub one is what fails when the mirror is needed, so it is overwritten).
+pub(crate) fn plan_rosdep_mirror_list(
+    plan: &mut Plan,
+    host: &probe::Host,
+    mirror: &crate::mirror::Mirror,
+) -> bool {
+    if !mirror.mirrors_rosdistro() {
+        return false;
+    }
+    if host.rosdep.initialized {
+        plan.note(msg!(
+            "native.apply.rosdep_list_rewrite",
+            file = ROSDEP_DEFAULT_LIST,
+            name = mirror.name
+        ));
+    }
+    plan.write_file_sudo(ROSDEP_DEFAULT_LIST, mirror.rosdep_sources_list());
+    true
+}
+
+/// `rosdep update` for `distro`, against the mirror's rosdistro index when
+/// it has one.
+pub(crate) fn rosdep_update(distro: &str, mirror: &crate::mirror::Mirror) -> Command {
+    let update = Command::new("rosdep").args(["update", "--rosdistro", distro]);
+    if mirror.mirrors_rosdistro() {
+        update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url())
+    } else {
+        update
+    }
+}
+
+/// `rosdep install` for one workspace, honouring the manifest's skip keys.
+pub(crate) fn rosdep_install(m: &Manifest, ws_path: &Path) -> Command {
+    let mut cmd = Command::new("rosdep")
+        .args(["install", "--from-paths", "src", "--ignore-src", "-y"])
+        .arg("--rosdistro")
+        .arg(m.project.ros_distro.as_str())
+        .cwd(ws_path);
+    if !m.dependencies.rosdep.skip_keys.is_empty() {
+        cmd = cmd
+            .arg("--skip-keys")
+            .arg(m.dependencies.rosdep.skip_keys.join(" "));
+    }
+    cmd
+}
+
+/// Pin the ROS apt source to a snapshot (`apply --locked`, spec §3.2).
+/// Mirrors the P1 rewrite rules: only rospm's own [`ROS_APT_LIST`] is
+/// touched — a foreign source file (e.g. `ros2-apt-source`'s `ros2.sources`)
+/// is left alone and the plan says so. `--mirror` has no effect on the apt
+/// line here: snapshots are not mirrored (rosdistro/rosdep still use it,
+/// unaffected by this function).
+fn plan_ros_snapshot_source(
+    plan: &mut Plan,
+    ctx: &Context,
+    codename: &str,
+    date: &str,
+    need_locale: bool,
+    need_universe: bool,
+) {
+    let host = ctx.host;
+    let distro = ctx.manifest.project.ros_distro;
+    let base = crate::snapshot::ros_snapshot_url(distro.as_str(), date);
+    let (is_own_file, is_foreign_file, need_source) = ros_snapshot_source_state(ctx, &base);
+    let keyring_ok =
+        host.apt_sources.snapshot_keyring && !host.apt_sources.snapshot_keyring_armored;
+
+    plan_prerequisites(plan, host, need_locale, need_universe, need_source);
 
     if is_foreign_file {
         let file = host.apt_sources.ros2.as_ref().unwrap();
@@ -567,64 +634,7 @@ impl Provider for Native {
                 .is_some_and(|f| f == Path::new(ROS_APT_LIST))
                 && host.apt_sources.ros2_mirror != Some(mirror.name);
             let need_source = host.apt_sources.ros2.is_none() || rewrite_source;
-            if need_locale || need_universe || need_source {
-                let mut prereqs: Vec<&str> = Vec::new();
-                if need_locale {
-                    prereqs.push("locales");
-                }
-                if need_universe {
-                    prereqs.push("software-properties-common");
-                }
-                if need_source {
-                    // gnupg: `gpg --show-keys` verifies the downloaded key's fingerprint.
-                    prereqs.extend(["curl", "ca-certificates", "gnupg"]);
-                }
-                plan.run(
-                    Command::new("apt-get")
-                        .args(["install", "-y"])
-                        .args(prereqs)
-                        .sudo(),
-                );
-            }
-            if need_locale {
-                plan.run(
-                    Command::new("locale-gen")
-                        .args(["en_US", "en_US.UTF-8"])
-                        .sudo(),
-                );
-                // Set LANG only, never LC_ALL (it would pin every category for
-                // every user). If the file's non-UTF-8 value came from LC_ALL /
-                // LC_CTYPE, drop that variable (bare name = remove) so LANG applies.
-                let mut update = Command::new("update-locale").arg("LANG=en_US.UTF-8");
-                if let Some(var) = host.locale.system_var.filter(|v| *v != "LANG") {
-                    update = update.arg(var);
-                }
-                plan.run(update.sudo());
-                let from = match (&host.locale.system_var, &host.locale.system) {
-                    (Some(var), Some(value)) => format!("{var}={value}"),
-                    _ if host.locale.system_file => "POSIX".to_string(),
-                    _ => msg!("native.apply.locale_no_file").to_string(),
-                };
-                plan.note(msg!(
-                    "native.apply.locale_switched",
-                    file = DEFAULT_LOCALE_FILE,
-                    from = from
-                ));
-            } else if !host.locale.process_utf8() {
-                plan.note(msg!(
-                    "native.apply.shell_locale_not_utf8",
-                    value = host.locale.process.as_deref().unwrap_or("POSIX"),
-                    file = DEFAULT_LOCALE_FILE,
-                    system = host.locale.system.as_deref().unwrap_or("POSIX")
-                ));
-            }
-            if need_universe {
-                plan.run(
-                    Command::new("add-apt-repository")
-                        .args(["-y", "universe"])
-                        .sudo(),
-                );
-            }
+            plan_prerequisites(&mut plan, host, need_locale, need_universe, need_source);
             if need_source {
                 if rewrite_source {
                     plan.note(msg!(
@@ -682,11 +692,7 @@ impl Provider for Native {
                 Command::new("apt-get")
                     .args(["install", "-y"])
                     .arg(m.ros_base_package())
-                    .args([
-                        "python3-rosdep",
-                        "python3-vcstool",
-                        "python3-colcon-common-extensions",
-                    ])
+                    .args(TOOLING)
                     .sudo(),
             );
         }
@@ -717,46 +723,16 @@ impl Provider for Native {
         // lock) is skipped; `init`/`update` still run so the tooling keeps
         // working afterwards.
         if m.dependencies.rosdep.enabled {
-            if mirror.mirrors_rosdistro() {
-                // `rosdep init` would write GitHub URLs; write the same file
-                // with the mirror's instead (and overwrite a GitHub one, which
-                // is what fails when the mirror is needed).
-                if host.rosdep.initialized {
-                    plan.note(msg!(
-                        "native.apply.rosdep_list_rewrite",
-                        file = ROSDEP_DEFAULT_LIST,
-                        name = mirror.name
-                    ));
-                }
-                plan.write_file_sudo(ROSDEP_DEFAULT_LIST, mirror.rosdep_sources_list());
-            } else if !host.rosdep.initialized {
+            if !plan_rosdep_mirror_list(&mut plan, host, &mirror) && !host.rosdep.initialized {
                 plan.run(Command::new("rosdep").arg("init").sudo());
             }
-            let mut update = Command::new("rosdep")
-                .arg("update")
-                .arg("--rosdistro")
-                .arg(distro.as_str());
-            if mirror.mirrors_rosdistro() {
-                update = update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url());
-            }
-            plan.run(update);
+            plan.run(rosdep_update(distro.as_str(), &mirror));
             if locked_native.is_some() {
                 plan.note(msg!("native.apply.locked_rosdep_skipped"));
             } else {
                 for name in &order {
                     let ws = &m.workspaces[name];
-                    let ws_path = ctx.root.join(&ws.path);
-                    let mut cmd = Command::new("rosdep")
-                        .args(["install", "--from-paths", "src", "--ignore-src", "-y"])
-                        .arg("--rosdistro")
-                        .arg(distro.as_str())
-                        .cwd(&ws_path);
-                    if !m.dependencies.rosdep.skip_keys.is_empty() {
-                        cmd = cmd
-                            .arg("--skip-keys")
-                            .arg(m.dependencies.rosdep.skip_keys.join(" "));
-                    }
-                    plan.run(cmd);
+                    plan.run(rosdep_install(m, &ctx.root.join(&ws.path)));
                 }
             }
         }

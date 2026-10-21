@@ -25,13 +25,7 @@ use crate::repos::{same_git_url, ReposFile};
 use crate::scm::{Scm, Vcstool};
 use crate::snapshot::{self, Fetch, Signature};
 
-/// Packages `apply` installs next to the base metapackage; locked so a
-/// replay gets the same tooling.
-const TOOLING: [&str; 3] = [
-    "python3-rosdep",
-    "python3-vcstool",
-    "python3-colcon-common-extensions",
-];
+use super::TOOLING;
 
 /// Packages `apply --locked` installs at exactly the locked version, even
 /// when that is a downgrade: the ROS layer (`ros-<distro>-*`, the base

@@ -20,8 +20,8 @@ use crate::error::Result;
 use crate::message::Message;
 use crate::msg;
 use crate::package_xml::WorkspacePackages;
-use crate::plan::{Command, Plan};
-use crate::probe::{EnvReport, Status, ROSDEP_DEFAULT_LIST};
+use crate::plan::Plan;
+use crate::probe::{EnvReport, Status};
 use crate::provider::Context;
 
 /// Package/key counts for one workspace: the header lines of `deps check`.
@@ -428,44 +428,17 @@ pub fn plan_install(ctx: &Context) -> Result<Plan> {
     let mirror = ctx.mirror;
     let order = m.build_order()?;
 
-    if mirror.mirrors_rosdistro() {
-        if host.rosdep.initialized {
-            plan.note(msg!(
-                "native.apply.rosdep_list_rewrite",
-                file = ROSDEP_DEFAULT_LIST,
-                name = mirror.name
-            ));
-        }
-        plan.write_file_sudo(ROSDEP_DEFAULT_LIST, mirror.rosdep_sources_list());
-    } else if !host.rosdep.initialized {
+    if !super::plan_rosdep_mirror_list(&mut plan, host, &mirror) && !host.rosdep.initialized {
         plan.note(msg!("deps.plan.rosdep_not_initialized"));
     }
 
     if !host.rosdep.updated {
-        let mut update = Command::new("rosdep")
-            .arg("update")
-            .arg("--rosdistro")
-            .arg(distro.as_str());
-        if mirror.mirrors_rosdistro() {
-            update = update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url());
-        }
-        plan.run(update);
+        plan.run(super::rosdep_update(distro.as_str(), &mirror));
     }
 
     for name in &order {
         let ws = &m.workspaces[name];
-        let ws_path = ctx.root.join(&ws.path);
-        let mut cmd = Command::new("rosdep")
-            .args(["install", "--from-paths", "src", "--ignore-src", "-y"])
-            .arg("--rosdistro")
-            .arg(distro.as_str())
-            .cwd(&ws_path);
-        if !m.dependencies.rosdep.skip_keys.is_empty() {
-            cmd = cmd
-                .arg("--skip-keys")
-                .arg(m.dependencies.rosdep.skip_keys.join(" "));
-        }
-        plan.run(cmd);
+        plan.run(super::rosdep_install(m, &ctx.root.join(&ws.path)));
     }
 
     Ok(plan)

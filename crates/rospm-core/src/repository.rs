@@ -18,12 +18,8 @@ pub fn check(m: &Manifest, root: &Path, target: Platform, fetch: &(dyn Fetch + S
     let (packages, urls, conda) = match m.environment.provider {
         ProviderKind::Native => {
             let mut packages = m.effective_apt(target);
-            packages.extend([
-                m.ros_base_package(),
-                "python3-rosdep".into(),
-                "python3-vcstool".into(),
-                "python3-colcon-common-extensions".into(),
-            ]);
+            packages.push(m.ros_base_package());
+            packages.extend(crate::provider::native::TOOLING.map(String::from));
             let ubuntu = m.ubuntu();
             let Some(suite) = ubuntu_codename(&ubuntu) else {
                 report.push(
