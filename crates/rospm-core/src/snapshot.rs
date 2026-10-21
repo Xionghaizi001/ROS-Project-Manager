@@ -393,51 +393,53 @@ pub fn discover_ros(
     let mut first_err: Option<Message> = None;
     // Only the newest few: an old snapshot is not what a fresh lock should pin.
     for date in dates.iter().rev().take(3) {
-        let base = ros_snapshot_url(distro, date);
-        let release_text = match get_text(fetch, &release_url(&base, codename)) {
-            Ok(t) => t,
+        match ros_snapshot_on(fetch, distro, date, codename, arch, accept) {
+            Ok(snapshot) => return Ok(snapshot),
             Err(e) => {
                 first_err.get_or_insert(e);
-                continue;
             }
-        };
-        let release = parse_release(&release_text);
-        let suite_ok = release.suite.as_deref() == Some(codename)
-            || release.codename.as_deref() == Some(codename);
-        if !suite_ok || !release.architectures.iter().any(|a| a == arch) {
-            first_err.get_or_insert(msg!(
-                "snapshot.release_mismatch",
-                url = release_url(&base, codename),
-                codename = codename,
-                arch = arch,
-                suite = release.suite.clone().unwrap_or_default(),
-                architectures = release.architectures.join(" ")
-            ));
-            continue;
         }
-        // `accept` runs first: it only reads, and a candidate it rejects
-        // needs no keyserver round trip. Both must pass either way.
-        let mut snapshot = RosSnapshot {
-            date: date.clone(),
-            base,
-            release,
-            signature: Signature::Skipped(Message::text("")),
-        };
-        if let Err(e) = accept(&snapshot) {
-            first_err.get_or_insert(e);
-            continue;
-        }
-        snapshot.signature =
-            match verify_ros_signature(fetch, &snapshot.base, codename, &release_text) {
-                Ok(sig) => sig,
-                Err(e) => {
-                    first_err.get_or_insert(e);
-                    continue;
-                }
-            };
-        return Ok(snapshot);
     }
     Err(first_err.unwrap_or_else(|| msg!("snapshot.no_usable_date", distro = distro)))
+}
+
+/// The ROS snapshot of `distro` on `date`, checked like each candidate of
+/// [`discover_ros`]: `Release` serves `codename`/`arch`, `accept` approves
+/// it, and the signature does not fail.
+pub fn ros_snapshot_on(
+    fetch: &dyn Fetch,
+    distro: &str,
+    date: &str,
+    codename: &str,
+    arch: &str,
+    accept: &mut dyn FnMut(&RosSnapshot) -> Result<(), Message>,
+) -> Result<RosSnapshot, Message> {
+    let base = ros_snapshot_url(distro, date);
+    let release_text = get_text(fetch, &release_url(&base, codename))?;
+    let release = parse_release(&release_text);
+    let suite_ok =
+        release.suite.as_deref() == Some(codename) || release.codename.as_deref() == Some(codename);
+    if !suite_ok || !release.architectures.iter().any(|a| a == arch) {
+        return Err(msg!(
+            "snapshot.release_mismatch",
+            url = release_url(&base, codename),
+            codename = codename,
+            arch = arch,
+            suite = release.suite.clone().unwrap_or_default(),
+            architectures = release.architectures.join(" ")
+        ));
+    }
+    // `accept` runs first: it only reads, and a candidate it rejects
+    // needs no keyserver round trip. Both must pass either way.
+    let mut snapshot = RosSnapshot {
+        date: date.to_string(),
+        base,
+        release,
+        signature: Signature::Skipped(Message::text("")),
+    };
+    accept(&snapshot)?;
+    snapshot.signature = verify_ros_signature(fetch, &snapshot.base, codename, &release_text)?;
+    Ok(snapshot)
 }
 
 /// Verify `Release.gpg` of one ROS snapshot with a keyring built from the

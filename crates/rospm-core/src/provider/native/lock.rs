@@ -18,7 +18,7 @@ use crate::lock::{
 use crate::manifest::ProviderKind;
 use crate::message::Message;
 use crate::msg;
-use crate::platform::ubuntu_codename;
+use crate::platform::{ubuntu_codename, Platform};
 use crate::probe::{pip_requirement_name, Host, PackageDb};
 use crate::provider::Context;
 use crate::repos::{same_git_url, ReposFile};
@@ -427,9 +427,29 @@ fn resolve_snapshots(
         .cloned()
         .collect();
 
-    // ---- ROS: newest verified snapshot that carries the installed versions ----
-    let mut ros_index: BTreeSet<(String, String)> = BTreeSet::new();
-    let found = snapshot::discover_ros(fetch, distro, codename, arch, &mut |s| {
+    // Other platforms' ROS pins carried over from the previous lock share the
+    // one recorded date, and a ROS snapshot carries a single version of each
+    // package: moving the date must not strand them.
+    let others: Vec<(Platform, Vec<(String, String)>)> = Platform::ALL
+        .iter()
+        .filter(|p| **p != ctx.platform)
+        .filter_map(|p| {
+            let pins: Vec<(String, String)> = ctx
+                .lock?
+                .apt_for(*p)
+                .into_iter()
+                .filter(|a| a.name.starts_with(&ros_prefix))
+                .map(|a| (a.name.clone(), a.version.clone()))
+                .collect();
+            (!pins.is_empty()).then_some((*p, pins))
+        })
+        .collect();
+    let other_names = others
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let check = |s: &snapshot::RosSnapshot, with_others: bool| {
         let url = snapshot::packages_url(&s.base, codename, "main", arch);
         let index = snapshot::fetch_packages(fetch, &url)?;
         let missing = missing_from(&ros_pins, &index);
@@ -441,9 +461,69 @@ fn resolve_snapshots(
                 examples = examples(&missing)
             ));
         }
-        ros_index = index;
+        for (platform, pins) in others.iter().filter(|_| with_others) {
+            let other_arch = platform.dpkg_arch();
+            let missing = if s.release.architectures.iter().any(|a| a == other_arch) {
+                let url = snapshot::packages_url(&s.base, codename, "main", other_arch);
+                missing_from(pins, &snapshot::fetch_packages(fetch, &url)?)
+            } else {
+                pins.to_vec()
+            };
+            if !missing.is_empty() {
+                return Err(msg!(
+                    "lock.snapshot_lacks_other_platform",
+                    platform = platform,
+                    count = missing.len(),
+                    base = &s.base,
+                    examples = examples(&missing)
+                ));
+            }
+        }
+        Ok(index)
+    };
+
+    // ---- ROS: newest verified snapshot that carries the installed versions ----
+    let mut ros_index: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut found = snapshot::discover_ros(fetch, distro, codename, arch, &mut |s| {
+        ros_index = check(s, true)?;
         Ok(())
     });
+    if found.is_err() && !others.is_empty() {
+        let previous = ctx
+            .lock
+            .and_then(|l| l.provider.native.as_ref())
+            .and_then(|n| n.ros_snapshot.as_deref());
+        // No newer date serves every platform: keep the shared one if it still does.
+        let kept = previous.and_then(|date| {
+            snapshot::ros_snapshot_on(fetch, distro, date, codename, arch, &mut |s| {
+                ros_index = check(s, true)?;
+                Ok(())
+            })
+            .ok()
+        });
+        found = match kept {
+            Some(s) => {
+                notes.push(msg!(
+                    "lock.ros_snapshot_kept",
+                    date = s.date,
+                    platforms = other_names
+                ));
+                Ok(s)
+            }
+            // No date serves them all: serve this host and say who must re-lock.
+            None => snapshot::discover_ros(fetch, distro, codename, arch, &mut |s| {
+                ros_index = check(s, false)?;
+                Ok(())
+            })
+            .inspect(|s| {
+                notes.push(msg!(
+                    "lock.ros_snapshot_strands_other_platforms",
+                    date = s.date,
+                    platforms = other_names
+                ))
+            }),
+        };
+    }
     let ros = match found {
         Ok(s) => {
             notes.push(msg!(
