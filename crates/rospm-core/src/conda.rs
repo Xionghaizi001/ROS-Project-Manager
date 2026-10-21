@@ -860,8 +860,34 @@ struct EnvironmentFile {
     channels: Vec<String>,
     #[serde(default)]
     dependencies: Vec<serde_yaml::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "scalar_variables")]
     variables: IndexMap<String, String>,
+}
+
+/// `ROS_DOMAIN_ID: 0` and `USE_SIM: true` are as common as quoted values:
+/// numbers and booleans become their YAML text, anything else names the key.
+fn scalar_variables<'de, D>(
+    deserializer: D,
+) -> std::result::Result<IndexMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = IndexMap::<String, serde_yaml::Value>::deserialize(deserializer)?;
+    raw.into_iter()
+        .map(|(key, value)| {
+            let text = match value {
+                serde_yaml::Value::String(s) => s,
+                serde_yaml::Value::Number(n) => n.to_string(),
+                serde_yaml::Value::Bool(b) => b.to_string(),
+                _ => {
+                    return Err(serde::de::Error::custom(format!(
+                        "variables.{key} must be a string, number or boolean"
+                    )))
+                }
+            };
+            Ok((key, text))
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -1841,5 +1867,39 @@ mod tests {
         assert_eq!(offline.installs.get(), 1);
         assert!(bootstrap.is_ready());
         assert!(!bootstrap.root.join("leftover").exists());
+    }
+
+    #[test]
+    fn numeric_and_boolean_variables_are_read_as_text() {
+        let project = Project::new();
+        let config = pinned(&project, "rich==13.9.4");
+        let file = project.0.join("environment.yml");
+        let managed = config.managed.as_ref().unwrap();
+        fs::write(
+            &file,
+            "dependencies: [numpy]\nvariables:\n  ROS_DOMAIN_ID: 0\n  USE_SIM: true\n  SCALE: 1.5\n  ROBOT: one\n",
+        )
+        .unwrap();
+        let definition = environment_yaml(managed, &project.0).unwrap();
+        let pairs: Vec<_> = definition
+            .variables
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        assert_eq!(
+            pairs,
+            ["ROS_DOMAIN_ID=0", "USE_SIM=true", "SCALE=1.5", "ROBOT=one"]
+        );
+
+        fs::write(
+            &file,
+            "dependencies: [numpy]\nvariables:\n  PATHS: [a, b]\n",
+        )
+        .unwrap();
+        let err = environment_yaml(managed, &project.0)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("variables.PATHS"), "{err}");
     }
 }
