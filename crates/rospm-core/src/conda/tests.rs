@@ -98,6 +98,10 @@ struct Fake {
     interpreter: Option<PathBuf>,
     /// `command -v colcon` fails inside the environment.
     no_colcon: bool,
+    /// `command -v colcon` finds the system's colcon.
+    system_colcon: bool,
+    /// Output of the import check with ROS sourced.
+    imports: &'static str,
 }
 
 impl Default for Fake {
@@ -116,6 +120,8 @@ impl Default for Fake {
             replays: RefCell::new(Vec::new()),
             interpreter: None,
             no_colcon: false,
+            system_colcon: false,
+            imports: r#"{"python": "3.12", "ros": ["3.12"], "failed": {}}"#,
         }
     }
 }
@@ -141,7 +147,14 @@ impl System for Fake {
                         .display()
                 )),
                 ["bash", "--noprofile", "--norc", "-c", "command -v colcon"] if !self.no_colcon => {
-                    Ok("/usr/bin/colcon\n".into())
+                    Ok(match self.system_colcon {
+                        true => "/usr/bin/colcon\n".into(),
+                        false => format!("{}\n", prefix.join("bin/colcon").display()),
+                    })
+                }
+                ["bash", "--noprofile", "--norc", "-c", script] if script.contains("rclpy") => {
+                    assert!(script.starts_with("set -e\nsource /opt/ros/jazzy/setup.bash\n"));
+                    Ok(format!("{}\n", self.imports))
                 }
                 _ => Err(Error::Host(msg!(
                     "conda.query_failed",
@@ -435,6 +448,24 @@ fn build_requires_the_interpreter_and_tools_inside_the_environment() {
             "{error}"
         );
     }
+    // A colcon from the system would build with the system Python.
+    let system = Fake {
+        envs: envs.clone(),
+        system_colcon: true,
+        ..Fake::default()
+    };
+    let step = project.step(
+        &CondaBuild {
+            name: Some("robot".into()),
+            ..Default::default()
+        },
+        false,
+    );
+    let error = step.perform_with(&mut Vec::new(), &system).unwrap_err();
+    assert!(
+        error.to_string().contains("conda.build_tool_outside("),
+        "{error}"
+    );
     // apply only prepares; the checks belong to build.
     let fake = Fake {
         envs,
@@ -1051,4 +1082,82 @@ fn numeric_and_boolean_variables_are_read_as_text() {
         .unwrap()
         .to_string();
     assert!(err.contains("variables.PATHS"), "{err}");
+}
+
+#[test]
+fn build_diagnoses_imports_and_another_interpreters_cmake_cache() {
+    let project = Project::new();
+    let prefix = project.0.join("envs/robot");
+    fs::create_dir_all(prefix.join("conda-meta")).unwrap();
+    fs::write(prefix.join("conda-meta/history"), "external").unwrap();
+    let build = project.0.join("ws/build");
+    let step = project
+        .step(
+            &CondaBuild {
+                prefix: Some(PathBuf::from("envs/robot")),
+                ..Default::default()
+            },
+            false,
+        )
+        .for_build(
+            "source /opt/ros/jazzy/setup.bash".into(),
+            vec![build.clone()],
+        );
+    let check = |imports| {
+        step.perform_with(
+            &mut Vec::new(),
+            &Fake {
+                imports,
+                ..Fake::default()
+            },
+        )
+    };
+    check(r#"{"python": "3.12", "ros": ["3.12"], "failed": {}}"#).unwrap();
+
+    // Another CPython than ROS's: the extension cannot load.
+    let error = check(
+        r#"{"python": "3.11", "ros": ["3.12"], "failed": {"rclpy._rclpy_pybind11": "ModuleNotFoundError: x"}}"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("conda.python_abi(") && error.contains("3.11"),
+        "{error}"
+    );
+    let error =
+        check(r#"{"python": "3.12", "ros": ["3.12"], "failed": {"em": "ModuleNotFoundError: x"}}"#)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        error.contains("conda.python_modules(") && error.contains("em ("),
+        "{error}"
+    );
+
+    // Caches naming this interpreter (or none) pass; another one is reported.
+    fs::create_dir_all(build.join("ok")).unwrap();
+    fs::write(
+        build.join("ok/CMakeCache.txt"),
+        format!(
+            "PYTHON_EXECUTABLE:FILEPATH=PYTHON_EXECUTABLE-NOTFOUND\nPython3_EXECUTABLE:FILEPATH={}\n",
+            prefix.join("bin/python").display()
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(build.join("plain")).unwrap();
+    check(r#"{"python": "3.12", "ros": ["3.12"], "failed": {}}"#).unwrap();
+    fs::create_dir_all(build.join("old")).unwrap();
+    fs::write(
+        build.join("old/CMakeCache.txt"),
+        "Python3_EXECUTABLE:FILEPATH=/usr/bin/python3\n",
+    )
+    .unwrap();
+    let error = check(r#"{"python": "3.12", "ros": ["3.12"], "failed": {}}"#)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("conda.stale_cache(")
+            && error.contains("/usr/bin/python3")
+            && !error.contains("ok ("),
+        "{error}"
+    );
 }

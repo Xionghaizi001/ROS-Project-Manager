@@ -530,6 +530,53 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
 }
 
 #[test]
+fn conda_build_passes_the_environment_interpreter_to_cmake() {
+    let text = FULL.replace(
+        r#"build_args = ["--symlink-install", "--event-handlers""#,
+        r#"build_args = ["--cmake-args", "-DFOO=1", "--symlink-install", "--event-handlers""#,
+    );
+    let m = Manifest::parse(
+        &format!("{text}\n[build.conda]\nname = 'robot'\n"),
+        Path::new("t"),
+    )
+    .unwrap();
+    let host = bare_host();
+    let plan = provider::for_manifest(&m)
+        .plan_build(&ctx(&m, &host), None, false)
+        .unwrap();
+    let scripts: Vec<_> = plan
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            Step::Run(c) => Some(c.args[8].clone()),
+            _ => None,
+        })
+        .collect();
+    let defines = r#""-DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python" "-DPython_EXECUTABLE=$CONDA_PREFIX/bin/python" "-DPYTHON_EXECUTABLE=$CONDA_PREFIX/bin/python""#;
+    // Appended when the workspace sets none (its defaults file is absent) ...
+    assert!(
+        scripts[0].ends_with(&format!("--symlink-install --cmake-args {defines}")),
+        "{}",
+        scripts[0]
+    );
+    // ... and joined to the user's, since colcon keeps only the last one.
+    assert!(
+        scripts[1].contains(&format!("--cmake-args {defines} -DFOO=1 --symlink-install")),
+        "{}",
+        scripts[1]
+    );
+    assert_eq!(scripts[1].matches("--cmake-args").count(), 1);
+    // bash expands the prefix that `conda run` exports.
+    let ran = std::process::Command::new("bash")
+        .env("CONDA_PREFIX", "/env dir")
+        .args(["-c", &format!("printf '%s\\n' {defines}")])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&ran.stdout)
+        .starts_with("-DPython3_EXECUTABLE=/env dir/bin/python\n"));
+}
+
+#[test]
 fn managed_conda_is_prepared_before_apply_mutations_and_build_only_checks() {
     let text =
         format!("{FULL}\n[build.conda.managed]\npython = '3.12'\nchannels = ['conda-forge']\n");

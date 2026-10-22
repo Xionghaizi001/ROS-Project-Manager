@@ -69,6 +69,33 @@ fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<Strin
     lines
 }
 
+/// The selected Conda interpreter for every CMake Python lookup.
+const PYTHON_DEFINES: [&str; 3] = [
+    "-DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python",
+    "-DPython_EXECUTABLE=$CONDA_PREFIX/bin/python",
+    "-DPYTHON_EXECUTABLE=$CONDA_PREFIX/bin/python",
+];
+
+/// The defaults file colcon reads when the manifest names none.
+fn colcon_defaults_file() -> Option<PathBuf> {
+    if let Some(file) = std::env::var_os("COLCON_DEFAULTS_FILE") {
+        return Some(file.into());
+    }
+    let home = std::env::var_os("COLCON_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".colcon")))?;
+    Some(home.join("defaults.yaml"))
+}
+
+/// `build.cmake-args` of a colcon defaults file; empty when absent or unreadable.
+fn default_cmake_args(file: &Path) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_yaml::from_str::<serde_yaml::Value>(&text).ok())
+        .and_then(|v| serde_yaml::from_value(v["build"]["cmake-args"].clone()).ok())
+        .unwrap_or_default()
+}
+
 /// `rm -f` rospm's own snapshot keyring and Ubuntu snapshot list (only rospm
 /// writes these paths) when `ros2.list` is not rospm's: without this they
 /// outlive every uninstall, since only the `ros2.list` branch removed them.
@@ -894,6 +921,14 @@ impl Provider for Native {
                     false,
                     None,
                 )?;
+                // shortcut: assumes colcon's default `build` base; a custom
+                // `--build-base` escapes the stale-cache check.
+                let build_dirs = targets
+                    .iter()
+                    .map(|n| ctx.root.join(&m.workspaces[n].path).join("build"))
+                    .collect();
+                let ros = source_lines(ctx, &[], Shell::Bash).remove(0);
+                let step = step.for_build(ros, build_dirs);
                 plan.steps
                     .push(crate::plan::Step::Conda(Box::new(step.clone())));
                 Some(step)
@@ -920,10 +955,34 @@ impl Provider for Native {
                 cmd = cmd.preamble(line);
             }
             if let Some(conda) = &conda {
+                // colcon keeps only the last `--cmake-args`, so join the
+                // user's (command line, else defaults file) instead of adding one.
+                match cmd.args.iter().position(|a| a == "--cmake-args") {
+                    Some(i) => {
+                        cmd.args
+                            .splice(i + 1..i + 1, PYTHON_DEFINES.map(String::from));
+                    }
+                    None => {
+                        let defaults = ws
+                            .colcon
+                            .defaults
+                            .as_ref()
+                            .map(|f| ctx.root.join(f))
+                            .or_else(colcon_defaults_file);
+                        cmd.args.push("--cmake-args".into());
+                        cmd.args
+                            .extend(defaults.map(|f| default_cmake_args(&f)).unwrap_or_default());
+                        cmd.args.extend(PYTHON_DEFINES.map(String::from));
+                    }
+                }
                 // Activate Conda before sourcing ROS/underlays. Do not let a
                 // caller's shell startup files select another environment.
                 let cwd = cmd.cwd.take().expect("workspace directory is set");
-                let script = format!("set -e\n{}", cmd.render());
+                let mut script = format!("set -e\n{}", cmd.render());
+                // `$CONDA_PREFIX` is set by `conda run`; let bash expand it.
+                for define in PYTHON_DEFINES {
+                    script = script.replace(&shell_quote(define), &format!("\"{define}\""));
+                }
                 cmd = conda.command();
                 cmd = cmd
                     .args(["bash", "--noprofile", "--norc", "-c", &script])
@@ -1468,5 +1527,18 @@ impl Provider for Native {
 
     fn plan_deps_install(&self, ctx: &Context) -> Result<Plan> {
         deps::plan_install(ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reads_cmake_args_from_a_colcon_defaults_file() {
+        let file = std::env::temp_dir().join(format!("rospm-defaults-{}.yaml", std::process::id()));
+        std::fs::write(&file, "build:\n  cmake-args: [-DA=1, -DB=2]\n").unwrap();
+        assert_eq!(super::default_cmake_args(&file), ["-DA=1", "-DB=2"]);
+        std::fs::write(&file, "test: {}\n").unwrap();
+        assert!(super::default_cmake_args(&file).is_empty());
+        std::fs::remove_file(&file).unwrap();
     }
 }

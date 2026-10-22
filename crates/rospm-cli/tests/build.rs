@@ -317,7 +317,7 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     .unwrap();
     fs::write(
         &conda,
-        "#!/bin/sh\nif [ \"$1\" = env ] && [ \"$2\" = list ]; then\n  printf '{\"envs\":[\"%s\"]}\\n' \"$FAKE_ENV\"\n  exit 0\nfi\n[ \"$5\" = python ] && printf '%s/bin/python\\n' \"$FAKE_ENV\" && exit 0\n[ \"$9\" = 'command -v colcon' ] && echo /usr/bin/colcon && exit 0\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$CONDA_CALL\"\nexit 19\n",
+        "#!/bin/sh\nif [ \"$1\" = env ] && [ \"$2\" = list ]; then\n  printf '{\"envs\":[\"%s\"]}\\n' \"$FAKE_ENV\"\n  exit 0\nfi\n[ \"$5\" = python ] && printf '%s/bin/python\\n' \"$FAKE_ENV\" && exit 0\n[ \"$9\" = 'command -v colcon' ] && echo \"$FAKE_ENV/bin/colcon\" && exit 0\ncase \"$9\" in *rclpy*) echo '{\"python\":\"3.12\",\"ros\":[\"3.12\"],\"failed\":{}}'; exit 0;; esac\nprintf '%s\\n' \"$PWD\" \"$@\" > \"$CONDA_CALL\"\nexit 19\n",
     )
     .unwrap();
     fs::set_permissions(&conda, fs::Permissions::from_mode(0o755)).unwrap();
@@ -355,6 +355,7 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     );
     assert!(args.contains("source /opt/ros/jazzy/setup.bash"));
     assert!(args.contains("colcon build"));
+    assert!(args.contains("--cmake-args \"-DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python\""));
     assert!(String::from_utf8_lossy(&out.stderr).contains("19"));
     assert!(String::from_utf8_lossy(&out.stdout)
         .contains(environment.join("bin/python").to_str().unwrap()));

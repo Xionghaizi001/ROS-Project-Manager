@@ -46,6 +46,26 @@ const READY: &str = ".rospm/conda/ready.sha256";
 const PENDING: &str = "pending\n";
 /// What every build command runs inside the environment.
 const BUILD_TOOLS: [&str; 1] = ["colcon"];
+/// CMake cache entries naming the interpreter, for FindPython3, FindPython
+/// and the older FindPythonInterp.
+const CACHE_KEYS: [&str; 3] = [
+    "Python3_EXECUTABLE",
+    "Python_EXECUTABLE",
+    "PYTHON_EXECUTABLE",
+];
+/// Imported with ROS sourced: build-time modules colcon / ament / rosidl need
+/// in the environment, and rclpy's C extension, whose file name carries the
+/// CPython version ROS was built for. Prints one JSON line.
+const IMPORT_CHECK: &str = r#"import importlib, json, os, re, sys
+failed = {}
+for m in ("catkin_pkg", "em", "rclpy._rclpy_pybind11"):
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        failed[m] = f"{type(e).__name__}: {e}"
+ros = sorted({v for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) for v in re.findall(r"/python(3\.\d+)/", p)})
+print(json.dumps({"python": "%d.%d" % sys.version_info[:2], "ros": ros, "failed": failed}))
+"#;
 
 #[derive(Debug, Clone)]
 pub enum Selection {
@@ -154,6 +174,18 @@ pub struct CondaStep {
     /// environment; otherwise `conda` from PATH, checked when executed.
     program: String,
     prepare: bool,
+    /// Build only: the line sourcing ROS before the import check.
+    ros_setup: Option<String>,
+    /// Build only: workspace build bases scanned for another interpreter's
+    /// CMake caches.
+    build_dirs: Vec<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct Imports {
+    python: String,
+    ros: Vec<String>,
+    failed: IndexMap<String, String>,
 }
 
 impl CondaStep {
@@ -210,7 +242,16 @@ impl CondaStep {
             bootstrap,
             program,
             prepare,
+            ros_setup: None,
+            build_dirs: Vec::new(),
         })
+    }
+
+    /// Adds the build checks that need ROS and the workspaces.
+    pub fn for_build(mut self, ros_setup: String, build_dirs: Vec<PathBuf>) -> Self {
+        self.ros_setup = Some(ros_setup);
+        self.build_dirs = build_dirs;
+        self
     }
 
     /// The `conda run` prefix every build command goes through.
@@ -383,21 +424,100 @@ impl CondaStep {
             msg!("conda.interpreter", python = found.display())
         )
         .map_err(|e| Error::io("<stdout>", e))?;
+        let bash = |script: &str| {
+            query(
+                self.command()
+                    .args(["bash", "--noprofile", "--norc", "-c", script]),
+            )
+        };
         for tool in BUILD_TOOLS {
-            query(self.command().args([
-                "bash",
-                "--noprofile",
-                "--norc",
-                "-c",
-                &format!("command -v {tool}"),
-            ]))
-            .map_err(|_| {
+            let path = bash(&format!("command -v {tool}")).map_err(|_| {
                 Error::Host(msg!(
                     "conda.build_tool_missing",
                     tool = tool,
                     selection = selection
                 ))
             })?;
+            // A tool from the system runs, and builds, with the system Python.
+            let path = PathBuf::from(path.trim());
+            if !real(&path).starts_with(real(prefix)) {
+                return Err(Error::Host(msg!(
+                    "conda.build_tool_outside",
+                    tool = tool,
+                    selection = selection,
+                    found = path.display(),
+                    prefix = prefix.display()
+                )));
+            }
+        }
+        if let Some(setup) = &self.ros_setup {
+            let output = bash(&format!(
+                "set -e\n{setup}\npython -c {}",
+                shell_quote(IMPORT_CHECK)
+            ))?;
+            let imports: Imports = output
+                .lines()
+                .last()
+                .and_then(|line| serde_json::from_str(line).ok())
+                .ok_or_else(|| Error::Host(msg!("conda.query_invalid", error = output.trim())))?;
+            if !imports.failed.is_empty() {
+                let failed = imports
+                    .failed
+                    .iter()
+                    .map(|(m, e)| format!("{m} ({e})"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(Error::Host(
+                    if !imports.ros.is_empty() && !imports.ros.contains(&imports.python) {
+                        msg!(
+                            "conda.python_abi",
+                            selection = selection,
+                            python = imports.python,
+                            ros = imports.ros.join(", "),
+                            failed = failed
+                        )
+                    } else {
+                        msg!(
+                            "conda.python_modules",
+                            selection = selection,
+                            failed = failed
+                        )
+                    },
+                ));
+            }
+        }
+        let python = real(&found);
+        let mut stale = Vec::new();
+        for entry in self
+            .build_dirs
+            .iter()
+            .filter_map(|dir| fs::read_dir(dir).ok())
+            .flatten()
+            .flatten()
+        {
+            let Ok(cache) = fs::read_to_string(entry.path().join("CMakeCache.txt")) else {
+                continue;
+            };
+            // `KEY:TYPE=VALUE`; NOTFOUND and other non-paths are skipped.
+            let old = cache.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                let key = key.split(':').next()?;
+                (CACHE_KEYS.contains(&key)
+                    && value.starts_with('/')
+                    && real(Path::new(value)) != python)
+                    .then(|| value.to_string())
+            });
+            if let Some(old) = old {
+                stale.push(format!("{} ({old})", entry.path().display()));
+            }
+        }
+        if !stale.is_empty() {
+            stale.sort();
+            return Err(Error::Host(msg!(
+                "conda.stale_cache",
+                python = found.display(),
+                caches = stale.join(", ")
+            )));
         }
         Ok(())
     }
