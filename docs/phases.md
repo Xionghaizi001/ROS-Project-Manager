@@ -67,7 +67,8 @@
 - [x] `rospm build [<workspace>] -- <colcon build 参数…>`（2026-10-22 新增并完成）：日常临时参数（`--packages-select`、`--parallel-workers`、`--cmake-args -DCMAKE_BUILD_TYPE=Debug` 等）不必写进清单，也不必绕过 rospm 直接运行 colcon 而失去日志、Conda 取消激活、旧缓存检查与删除重试。仅本次追加在所构建 workspace 的 `build_args` 之后、不写回清单（与 `--conda-env` 一致），colcon 同名参数取最后一个，因此命令行覆盖清单；只透传 `colcon build`，其它子命令在 `rospm shell` 中执行；`apply --build` 不接受透传，一键还原只依赖清单与锁。Conda 构建把解释器定义并入最后一组 `--cmake-args`（colcon 保留的那组）；透传的 base 参数优先级最高；未指定 workspace 时作用于每个 workspace（帮助与 `spec.md` 说明）；删除重试的确认提示写明删除整个目录、含本次未选择的包。测试：计划测试覆盖 `--cmake-args` 合并、`--log-base` 前移与日志路径；CLI 测试覆盖预览中的透传（含空格参数）、不写回清单、`apply --build` 拒绝透传。真实验收（本机 Humble）：`rospm build main -- --packages-select a_cpp --cmake-args -DCMAKE_BUILD_TYPE=Debug --build-base b2 --log-base lg` 只构建 a_cpp、`CMAKE_BUILD_TYPE=Debug`，使用 `b2` / `lg`，日志头指向 `lg/latest_build`，清单未变；`b2` 中引用 miniconda 的旧缓存被检出，删除重试提示列出 `b2` 与 `install`。
 - [x] 在 `rospm-core` 定义统一诊断结构：稳定错误码、类别、严重程度、工具、文件 / 行 / 列、原始报错片段、关联诊断、解释与建议，并区分“工具已明确报告的事实”与“待验证的可能原因”。位置缺失时不编造行号；显示编译器报告的位置，不把它当作根因必然所在的位置。
   - [x] 已实现（2026-10-22）：公开 `diagnostic` 模块提供 `Diagnostic`、`Code`、`Category`、`Severity` 与 `Location`；机器枚举序列化为稳定 snake_case 标识，未知工具 / 位置为 `null`，行列使用可选的非零一基坐标。`raw` 保留原始片段，`related` 保留有序关联上下文；`explanation` 仅解释工具明确报告的事实，`possible_causes` 单列待验证假设，`suggestions` 提供排查建议，三者复用 `Message` 国际化。JSON 契约测试覆盖原始 ANSI、含空格路径、关联诊断、事实与假设分离、缺失位置 / 行列；本项仅定义共享结构，解析规则与 CLI 接入仍由后续条目完成。
-- [ ] C++ 首批规则：GCC / Clang 的语法与类型错误、缺少头文件；CMake 的 `find_package` 失败；链接器的 `cannot find -l...` / `undefined reference`。保留模板实例化和 include 链等关联上下文，区分语法、包发现、头文件搜索与链接问题；优先使用工具支持的结构化诊断，兼容常见文本输出与无法识别的格式。
+- [x] C++ 首批规则：GCC / Clang 的语法与类型错误、缺少头文件；CMake 的 `find_package` 失败；链接器的 `cannot find -l...` / `undefined reference`。保留模板实例化和 include 链等关联上下文，区分语法、包发现、头文件搜索与链接问题；优先使用工具支持的结构化诊断，兼容常见文本输出与无法识别的格式。
+  - [x] 已实现（2026-10-22）：`diagnostic::parse_cpp` 把构建日志（可含 ANSI）解析为按出现顺序的诊断，`raw` 保留原始行（含颜色）。编译器按 `文件:行[:列]: error|fatal error|note:` 识别（路径可含空格），语法 / 类型错误按消息前缀分类，其余编译错误为 `unknown` 但保留位置；缺少头文件识别 GCC `x.h: <strerror>`（strerror 随语言变化）与 Clang `'x.h' file not found`。include 链、`In function` / `In instantiation of` / `required from` 作为 `related` 挂到其后的错误，`note:` 挂到其前的错误，`N | …` 源码摘录并入 `raw`。CMake 取 `CMake Error at 文件:行 (命令):` 及缩进续行与 `Call Stack`，`find_package` 失败（配置文件模式与 `Could NOT find X` 模块模式）归为包发现并提取包名，其它 CMake 错误为 `unknown`。链接器识别 GNU ld / lld 的 `cannot find -l…`（含中文 `找不到 -l…`）、`unable to find library`、`undefined reference to`（`file:(.text+…)` 只给文件、带调试信息时给行）与 `undefined symbol`，`in function` 行作为关联上下文。警告、`collect2` / gmake 级联行不产出诊断（汇总留给 CLI 摘要）。解释 / 可能原因 / 建议的中英文文本已加入 locale。未采用 `-fdiagnostics-format=json` / SARIF：会替换用户实时看到的文本输出，故解析默认文本格式。Clang 摘录行没有 `|` 前缀，不并入 `raw`（代码中 `shortcut:` 注明）。测试：用 GCC 11.4 / ld 2.38 / CMake 3.22 的真实输出（含 ANSI、zh_CN 本地化、含空格路径）及 Clang / lld 文档格式覆盖各规则、模板链、note 归属、未知错误保留位置、成功日志与 OSC 超链接不误报。真实核对（本机 Humble，路径含空格、zh_CN）：一次 `colcon build --continue-on-error` 中缺分号、缺头文件、`find_package` 缺包、缺库、未定义引用五个包的合并日志，五条诊断类别、位置与名称均正确，无多余诊断。
 - [ ] Python 首批规则：`SyntaxError`、`IndentationError` / `TabError`、`ModuleNotFoundError`、常见 `ImportError` 及 traceback 位置；保留异常链与项目调用帧，对运行时异常按实际异常类型解释。模块缺失时检查本次构建 / 验证所用解释器，避免把“装在另一个环境”误报为完全未安装。
 - [ ] 依赖建议结合 `package.xml`、rosdep、项目清单及当前提供者：有明确映射和检查证据时提示缺少的依赖及对应还原 / 安装步骤；无法确认时提示“未找到头文件 / 模块，可能缺少依赖或搜索路径未配置”，不把 Python 模块名直接当作 pip / Conda 包名，不把所有链接错误归为缺包。诊断提供排查建议，不自动修改源码或安装依赖。
 - [ ] CLI 在失败后输出简短摘要，按包归组、合并重复诊断并优先展示直接报错，将 colcon / make 的失败汇总关联为后续结果；不将日志中的第一个错误武断视为唯一根因。示例：`src/main.cpp:42:10：编译器报告此处缺少分号；请检查此处及前一条语句。`、`节点使用的 Python 环境中未找到模块 numpy；请核对项目依赖和环境配置。` 保留完整日志路径，解释与建议走中英文 i18n；`--json` 输出稳定字段，原始子进程输出不混入 JSON 数据流。
@@ -167,7 +168,37 @@
 - [ ] Tauri 或 egui，只调用与 CLI 相同的库层（`rospm-core`），不另写业务逻辑。
 - [ ] 功能：清单编辑、check / verify 结果可视化、导出向导；复用 Phase 3.6 的结构化诊断，展示错误位置、解释、建议与原始日志。
 - [ ] 构建环境冲突交互：CLI 已对 native 构建自动取消激活不可用的 Conda 环境（Phase 3.6“构建环境基准”）；GUI 在该规则仍无法解决（如旧 CMake 缓存引用该环境、或自动取消激活后仍缺模块）或构建报出同类错误时，让用户选择目标 Conda 环境（对应 `--conda-env` / `--conda-prefix`，可写回 `build.conda`）、确认清理所列 build / install 目录（CLI 已有交互式确认兜底，GUI 以对话框提供同一选项），或取消激活后重试编译。
+- [ ] 运行与调试便利功能（只调用 `rospm-core` 与 ROS 自带 CLI / GUI 工具，不另写 ROS 通信栈，也不重做 rqt 已有的界面）：
 
+  可行性评估（2026-10-21，Humble 本机核对）：整体可行，且大部分已有 ROS 原生实现，rospm 的价值在于“在项目环境中一键打开、保存为项目配置、显示等价命令”。分工如下：
+
+  | 需求 | 复用的原生组件 | rospm 自己做的部分 |
+  |---|---|---|
+  | 运行图浏览 | `rqt_graph`；轻量列表用 `ros2 node / topic / service / action list -t` | 在项目环境中启动、手动或低频刷新列表 |
+  | 话题查看 | `rqt_topic`（频率、带宽、字段树）；`ros2 topic echo --once` / `hz` / `bw` | 无 |
+  | 话题发布 | `rqt_publisher`；`ros2 topic pub --once` / `-r` / `-t` | 收藏时用 `ros2 interface proto <类型>` 预填 YAML |
+  | 服务调用 | `rqt_service_caller`；`ros2 service call` | 同上 |
+  | 动作调用 | 无 rqt 插件（`rqt_action` 只浏览类型）；`ros2 action send_goal -f`，SIGINT 时取消目标 | 启动 / 停止子进程并显示反馈与结果 |
+  | 参数 | `rqt_reconfigure`；`ros2 param dump` / `load` | 导出 / 导入按钮 |
+  | 日志 | `rqt_console` | 无 |
+  | 启动节点 / launch | `ros2 pkg executables`、`ros2 launch -s`（列出 launch 参数）、`ros2 run` / `ros2 launch` | 运行配置、启动 / 停止 / 重启、输出与诊断（ROS 没有对应工具） |
+
+  已知约束：
+  - 默认底包 `ros-base` 不含 rqt（rqt 随 `desktop` 或 `ros-<distro>-rqt-common-plugins` 安装；本机 Humble ros-base 即无 rqt）。GUI 检测缺失时提示改用 `desktop` 或把该包加入 `dependencies.apt` 后执行 `apply`，不自动安装。
+  - rqt 依赖 apt 版 Python / Qt，在受管 Conda 环境中运行很可能因 ABI 冲突失败：rqt 与 `ros2` 查询命令只加载 ROS 与 workspace 环境；只有项目节点（`ros2 run` / `ros2 launch`）在 Conda 环境中运行。
+  - `ros2 daemon`（Humble ros2cli 源码核对）：只有 `ros2 … list` 等查询命令会在没有 daemon 时自动拉起它，节点、`ros2 run` / `ros2 launch` 不会；daemon 闲置 2 小时（`--timeout` 默认值，每次请求重新计时）后自行退出。处理规则：
+    - 已有的 daemon 不是 rospm 启动的，直接复用，不违反“不常驻未声明的进程”，也不停止它。
+    - 首次查询前用 `ros2 daemon status` 检查；原本没有、由 GUI 的查询拉起的 daemon 算 GUI 自己的，在进程列表中显示，退出 GUI 时 `ros2 daemon stop`。误停他人正在用的 daemon 影响很小，下次查询会自动重新拉起；GUI 崩溃遗留的由闲置超时清理。不自定义更短的超时（需绕过 `ros2 daemon start` 调用内部入口）。
+    - 查询命令只按 `127.0.0.1` 和 `ROS_DOMAIN_ID` 推出的端口连接 daemon：在不同 `RMW_IMPLEMENTATION`、`ROS_LOCALHOST_ONLY` 或另一发行版环境下启动的已有 daemon 也会被复用，结果可能与项目环境不一致。GUI 显示 daemon 状态，环境不一致时提示改用 `--no-daemon` 或经用户确认后重启 daemon，不自动处理。
+  - 每次调用 `ros2` 命令都要启动 Python（约 0.5–1 秒），列表只按需或低频刷新；按节点汇总发布 / 订阅关系需要逐节点执行 `ros2 node info`，开销大，交给 `rqt_graph`。
+  - 运行配置与收藏若写入 `rospm.toml`，每次保存都会改变清单哈希而使 `rospm.lock` 过期；应放在独立的项目文件中（如 `rospm.run.toml`，可纳入版本控制），格式在实现时定，不进入 Phase 4 冻结的 schema v1。
+
+  - [ ] 包与节点启动：列出 workspace 中的可执行文件（`ros2 pkg executables`）与 launch 文件，`ros2 launch -s` 读取可配置参数；以 `ros2 run` / `ros2 launch` 启动，环境与 `rospm env` / `shell` 一致（含受管 Conda 环境）；节点参数与 launch 参数可编辑并保存为运行配置；实时显示输出，可停止 / 重启，接入 Phase 3.6 的日志采集与诊断。为保持 GUI 只是 CLI 的薄壳，运行配置同时提供 CLI 入口（拟 `rospm run <名>`）。
+  - [ ] ROS 工具入口：在项目环境中启动 `rqt_graph`、`rqt_topic`、`rqt_publisher`、`rqt_service_caller`、`rqt_reconfigure`、`rqt_console`，缺失时按上面的约束提示；另提供基于 `ros2 … list -t` 的轻量节点 / 话题 / 服务 / 动作列表（含类型、按命名空间分组），不重复实现关系图。
+  - [ ] 动作调用：用 `ros2 action send_goal -f` 发送目标，显示反馈与结果，停止时发送 SIGINT 以取消目标。
+  - [ ] 参数导出 / 导入：`ros2 param dump` / `load`，查看与修改交给 `rqt_reconfigure`。
+  - [ ] 常用操作收藏：把一次发布、服务 / 动作调用或启动保存为运行配置文件中的快捷操作（YAML 内容由 `ros2 interface proto` 预填后编辑），一键重放，重放即执行对应的 `ros2` 命令。
+  - [ ] 安全约束：所有操作显示等价的 CLI 命令；发布 / 调用前标明目标名称、类型与生效的 `ROS_DOMAIN_ID`（及 `ROS_LOCALHOST_ONLY` 等）并需确认，避免误操作真实机器人；按频率发布、启动的节点和 GUI 自己拉起的 daemon 都在界面上列出并可停止，关闭 GUI 时只结束自己启动的进程。
 ---
 
 ## Phase 8 — Pixi 提供者（约 3 周）

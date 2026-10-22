@@ -13,6 +13,9 @@ use serde::Serialize;
 
 use crate::Message;
 
+mod cpp;
+pub use cpp::parse_cpp;
+
 /// Stable rule identifiers, shared by tools reporting the same kind of error.
 /// Adding a code does not imply that its parser has been implemented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
