@@ -89,7 +89,7 @@ struct Fake {
     installs: Cell<u32>,
     /// Program of each `env create`.
     creates: RefCell<Vec<String>>,
-    /// `conda list --json` and `--explicit` output for `lock`.
+    /// PyPI `[name, version]` pairs and `conda list --explicit` output.
     listed: String,
     explicit: String,
     /// Arguments of every replay command.
@@ -139,6 +139,7 @@ impl System for Fake {
                     .unwrap(),
             };
             return match rest {
+                ["python", "-I", "-c", _] => Ok(self.listed.clone()),
                 ["python", "-c", _] => Ok(format!(
                     "{}\n",
                     self.interpreter
@@ -163,12 +164,9 @@ impl System for Fake {
                 ))),
             };
         }
-        if let ["list", kind, .., prefix] = args {
+        if let ["list", "--explicit", "--sha256", "--prefix", prefix] = args {
             assert!(Path::new(prefix).join("conda-meta/history").is_file());
-            return Ok(match *kind {
-                "--json" => self.listed.clone(),
-                _ => self.explicit.clone(),
-            });
+            return Ok(self.explicit.clone());
         }
         if program != "conda" {
             assert!(Path::new(program).is_file(), "{program} was not installed");
@@ -289,7 +287,7 @@ fn managed_creation_reuses_only_a_completed_matching_definition() {
     step.perform_with(&mut Vec::new(), &fake).unwrap();
     assert_eq!(fake.creates.borrow().len(), 2);
     assert!(step.managed.as_ref().unwrap().is_ready());
-    assert!(step.render().contains("conda.reused("));
+    assert!(step.render().contains("conda.reuse_checked("));
 }
 
 #[test]
@@ -581,8 +579,7 @@ fn recorder(listed: &str) -> Fake {
     }
 }
 
-const PYPI: &str = r#"[{"name": "numpy", "version": "2.1.2", "channel": "conda-forge"},
-    {"name": "Requests", "version": "2.32.3", "channel": "pypi"}]"#;
+const PYPI: &str = r#"[["Requests", "2.32.3"]]"#;
 
 fn resolve(
     project: &Project,
@@ -669,7 +666,8 @@ fn lock_records_a_ready_environment_and_apply_locked_replays_it_without_solving(
     for name in ["environment.yml", "conda-linux-64.lock"] {
         fs::copy(machine.0.join(name), clean.0.join(name)).unwrap();
     }
-    let replayer = Fake::default();
+    // Conda reports the replayed packages under its own header.
+    let replayer = recorder(PYPI);
     let step = locked_step(&clean, &config, &lock).unwrap();
     let preview = step.render();
     assert!(preview.contains("conda.replay("), "{preview}");
@@ -693,8 +691,10 @@ fn lock_records_a_ready_environment_and_apply_locked_replays_it_without_solving(
     assert_eq!(
         fs::read_to_string(clean.0.join(READY)).unwrap(),
         format!(
-            "{} linux-64\n{}",
-            record.definition_sha256, record.lock_sha256
+            "{} linux-64\n{}\n{}",
+            record.definition_sha256,
+            packages_sha256(&fake.explicit),
+            sha256_hex("requests==2.32.3\n")
         )
     );
     // Replayed: reused by locked apply, plain apply and build alike.
@@ -733,7 +733,10 @@ fn lock_records_a_ready_environment_and_apply_locked_replays_it_without_solving(
     // apply --locked replaces it with the replay instead.
     let step = locked_step(&solved, &config, &lock_with(vec![other])).unwrap();
     assert!(step.render().contains("conda.recreate("));
-    let replayer = Fake::default();
+    let replayer = Fake {
+        explicit: text.replace("# platform", "# created-by: conda 99.0.0\n# platform"),
+        ..Fake::default()
+    };
     step.perform_with(&mut Vec::new(), &replayer).unwrap();
     assert!(replayer.creates.borrow().is_empty());
     assert!(step.managed.as_ref().unwrap().is_ready());
@@ -842,8 +845,8 @@ fn lock_does_not_record_loose_drifted_or_external_environments() {
         .perform_with(&mut Vec::new(), &fake)
         .unwrap();
     for listed in [
-        r#"[{"name": "requests", "version": "2.32.3", "channel": "pypi"}, {"name": "idna", "version": "3.10", "channel": "pypi"}]"#,
-        r#"[{"name": "requests", "version": "2.31.0", "channel": "pypi"}]"#,
+        r#"[["requests", "2.32.3"], ["idna", "3.10"]]"#,
+        r#"[["requests", "2.31.0"]]"#,
     ] {
         let (record, notes) = resolve(&project, &config, &recorder(listed));
         assert!(record.is_none());
@@ -1160,4 +1163,197 @@ fn build_diagnoses_imports_and_another_interpreters_cmake_cache() {
             && !error.contains("ok ("),
         "{error}"
     );
+}
+
+#[test]
+fn verify_checks_the_conda_lock_apart_and_never_trusts_a_name() {
+    let machine = Project::new();
+    let config = pinned(&machine, "requests==2.32.3");
+    let fake = recorder(PYPI);
+    machine
+        .step(&config, true)
+        .perform_with(&mut Vec::new(), &fake)
+        .unwrap();
+    let record = resolve(&machine, &config, &fake).0.unwrap();
+    let mut arm = record.clone();
+    arm.platform = Platform::LinuxAarch64;
+    let lock = lock_with(vec![record.clone(), arm]);
+    let rows_with = |project: &Project, config: Option<&CondaBuild>, lock: &Lock, fake: &Fake| {
+        let mut r = EnvReport::default();
+        let platform = Platform::LinuxX86_64;
+        verify_with(
+            config,
+            &project.0,
+            &project.host(),
+            platform,
+            lock,
+            &mut r,
+            fake,
+        )
+        .unwrap();
+        r.items
+            .iter()
+            .map(|i| (i.status, i.actual.to_string()))
+            .collect::<Vec<_>>()
+    };
+    let rows = |project: &Project, config: Option<&CondaBuild>, lock: &Lock| {
+        rows_with(project, config, lock, &fake)
+    };
+    let has = |rows: &[(Status, String)], status, key: &str| {
+        rows.iter().any(|(s, a)| *s == status && a.contains(key))
+    };
+
+    let ready = rows(&machine, Some(&config), &lock);
+    assert!(
+        has(&ready, Status::Info, "verify.conda.other_platform("),
+        "{ready:?}"
+    );
+    assert!(
+        has(&ready, Status::Ok, "verify.conda.replayed"),
+        "{ready:?}"
+    );
+    // Checked live: a hand-installed PyPI package is a change.
+    let drifted = rows_with(&machine, Some(&config), &lock, &recorder(DRIFTED));
+    assert!(
+        has(&drifted, Status::Mismatch, "verify.conda.changed"),
+        "{drifted:?}"
+    );
+
+    // Same files elsewhere, environment not replayed yet.
+    let clean = Project::new();
+    for name in ["environment.yml", "conda-linux-64.lock"] {
+        fs::copy(machine.0.join(name), clean.0.join(name)).unwrap();
+    }
+    assert!(has(
+        &rows(&clean, Some(&config), &lock),
+        Status::Missing,
+        "verify.conda.not_prepared"
+    ));
+    // A solved environment satisfies a lock only with exactly its packages.
+    let solved = Project::new();
+    let plain = solved.managed();
+    solved
+        .step(&plain, true)
+        .perform_with(&mut Vec::new(), &fake)
+        .unwrap();
+    let mut other = record.clone();
+    other.definition_sha256 =
+        definition_sha256(plain.managed.as_ref().unwrap(), &solved.0).unwrap();
+    let text = explicit("linux-64", &PACKAGES[..1]);
+    fs::write(solved.0.join(&other.lock), &text).unwrap();
+    other.lock_sha256 = sha256_hex(&text);
+    let solved_rows = rows(&solved, Some(&plain), &lock_with(vec![other]));
+    assert!(
+        has(&solved_rows, Status::Mismatch, "verify.conda.differs"),
+        "{solved_rows:?}"
+    );
+
+    let missing = rows(&machine, Some(&config), &lock_with(Vec::new()));
+    assert!(
+        has(&missing, Status::Missing, "conda.lock_record_missing("),
+        "{missing:?}"
+    );
+    fs::write(machine.0.join(&record.lock), "edited").unwrap();
+    let edited = rows(&machine, Some(&config), &lock);
+    assert!(
+        has(&edited, Status::Mismatch, "conda.lock_digest_mismatch("),
+        "{edited:?}"
+    );
+
+    let external = CondaBuild {
+        name: Some("robot".into()),
+        ..Default::default()
+    };
+    let named = rows(&machine, Some(&external), &lock_with(Vec::new()));
+    assert_eq!(named.len(), 1);
+    assert!(has(&named, Status::Info, "verify.conda.external"));
+    let undeclared = rows(&machine, None, &lock);
+    assert!(has(
+        &undeclared,
+        Status::Mismatch,
+        "verify.conda.not_declared"
+    ));
+}
+
+const DRIFTED: &str = r#"[["Requests", "2.32.3"], ["idna", "3.10"]]"#;
+
+#[test]
+fn hand_edits_are_detected_before_every_run() {
+    let project = Project::new();
+    let config = pinned(&project, "requests==2.32.3");
+    project
+        .step(&config, true)
+        .perform_with(&mut Vec::new(), &recorder(PYPI))
+        .unwrap();
+    // Unchanged: build and apply reuse it.
+    project
+        .step(&config, false)
+        .perform_with(&mut Vec::new(), &recorder(PYPI))
+        .unwrap();
+    // `pip install idna` by hand, or a changed Conda package.
+    let pip = recorder(DRIFTED);
+    let conda = Fake {
+        explicit: explicit("linux-64", &PACKAGES[..2]),
+        ..recorder(PYPI)
+    };
+    for changed in [&pip, &conda] {
+        let error = project
+            .step(&config, false)
+            .perform_with(&mut Vec::new(), changed)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("conda.managed_changed("),
+            "{error}"
+        );
+    }
+    // apply recreates the environment it owns, then records it again.
+    let mut out = Vec::new();
+    project
+        .step(&config, true)
+        .perform_with(&mut out, &pip)
+        .unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains("conda.changed(") && out.contains("conda.recreate("),
+        "{out}"
+    );
+    assert_eq!(pip.creates.borrow().len(), 1);
+    project
+        .step(&config, false)
+        .perform_with(&mut Vec::new(), &pip)
+        .unwrap();
+}
+
+#[test]
+fn skipped_checks_start_no_subprocess_but_still_require_preparation() {
+    // Every query fails: no conda on PATH.
+    let offline = Fake {
+        path_conda: None,
+        ..recorder(DRIFTED)
+    };
+    let project = Project::new();
+    let mut external = project.step(
+        &CondaBuild {
+            name: Some("robot".into()),
+            ..Default::default()
+        },
+        false,
+    );
+    external.skip_checks();
+    external.perform_with(&mut Vec::new(), &offline).unwrap();
+
+    let config = pinned(&project, "requests==2.32.3");
+    let mut build = project.step(&config, false);
+    build.skip_checks();
+    let error = build.perform_with(&mut Vec::new(), &offline).unwrap_err();
+    assert!(error.to_string().contains("conda.run_apply"), "{error}");
+    project
+        .step(&config, true)
+        .perform_with(&mut Vec::new(), &recorder(PYPI))
+        .unwrap();
+    // Prepared, then changed by hand: unchecked runs use it anyway.
+    let mut build = project.step(&config, false);
+    build.skip_checks();
+    assert!(build.render().contains("conda.checks_skipped("));
+    build.perform_with(&mut Vec::new(), &offline).unwrap();
 }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use rospm_core::lock::{Lock, LockedApt, LockedNative, LockedProvider, LockedSource};
 use rospm_core::manifest::{Manifest, ProviderKind};
 use rospm_core::mirror;
-use rospm_core::plan::{shell_quote, Command, Step};
+use rospm_core::plan::{shell_quote, Command, Plan, Step};
 use rospm_core::platform::Platform;
 use rospm_core::probe::{
     parse_dpkg_query, AptSources, Host, LocaleState, OsRelease, PackageDb, Status, ROS_APT_KEYRING,
@@ -422,9 +422,59 @@ fn native_build_plan_sources_underlays_first() {
             assert_eq!(c.args[..4], ["build", "--mixin", "release", "ccache"]);
             assert!(c.preamble[0].contains("/opt/ros/jazzy/setup.bash"));
             assert!(c.preamble[1].contains("deps_ws/install/setup.bash"));
+            let header = c.log.as_deref().unwrap();
+            assert!(header.starts_with("workspace: main\npython: system\n"));
+            assert!(header.contains("/log/latest_build/<package>/stdout_stderr.log"));
         }
         other => panic!("unexpected step {other:?}"),
     }
+    assert_eq!(
+        plan.log.as_deref(),
+        Some(Path::new("/proj/.rospm/log/build.log"))
+    );
+}
+
+#[test]
+fn logged_commands_forward_and_save_output_and_keep_the_failure() {
+    let dir = std::env::temp_dir().join(format!("rospm-build-log-{}", std::process::id()));
+    let log = dir.join("log dir/build.log");
+    let mut plan = Plan::new(rospm_core::message::Message::text("t"));
+    plan.log = Some(log.clone());
+    plan.run(
+        Command::new("bash")
+            .args(["-c", "printf '\\033[31mred\\033[0m\\n'; echo oops >&2"])
+            .log("workspace: a\n"),
+    );
+    plan.run(Command::new("bash").args(["-c", "echo unlogged"]));
+    plan.run(
+        Command::new("bash")
+            .args(["-c", "exit 3"])
+            .log("verify: x\n"),
+    );
+    plan.run(
+        Command::new("bash")
+            .args(["-c", "echo never"])
+            .log("workspace: b\n"),
+    );
+
+    let mut out = Vec::new();
+    let err = plan.perform(&mut out).unwrap_err().to_string();
+    assert!(err.contains("error.command_failed"), "{err}");
+    let shown = String::from_utf8(out).unwrap();
+    assert_eq!(shown.matches("plan.log(path=").count(), 1, "{shown}");
+
+    let text = std::fs::read_to_string(&log).unwrap();
+    assert!(text.contains("==> command: bash -c"), "{text}");
+    assert!(text.contains("workspace: a\n"), "{text}");
+    assert!(text.contains("\x1b[31mred\x1b[0m\n"), "{text}");
+    assert!(text.contains("oops\n"), "{text}");
+    assert!(text.contains("verify: x\n"), "{text}");
+    assert!(text.contains("==> exit status: 3"), "{text}");
+    assert!(
+        !text.contains("unlogged") && !text.contains("never"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -444,6 +494,10 @@ fn build_verify_runs_after_full_build_with_project_environment() {
             assert!(script.starts_with("set -e\n"));
             assert!(script.contains("ws/install/setup.bash"));
             assert!(script.ends_with("ros2 pkg list"));
+            assert_eq!(
+                c.log.as_deref(),
+                Some("verify: ros2 pkg list\npython: system\n")
+            );
         }
         other => panic!("unexpected step {other:?}"),
     }
@@ -460,6 +514,11 @@ fn build_verify_runs_after_full_build_with_project_environment() {
         Step::Run(c) => {
             assert_eq!(c.program, "conda");
             assert_eq!(c.args[4..8], ["bash", "--noprofile", "--norc", "-c"]);
+            assert!(c
+                .log
+                .as_deref()
+                .unwrap()
+                .ends_with("python: conda -n robot-dev\n"));
         }
         other => panic!("unexpected step {other:?}"),
     }
@@ -487,8 +546,8 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         let plan = provider::for_manifest(&m)
             .plan_build(&ctx(&m, &host), None, false)
             .unwrap();
-        assert_eq!(plan.action_count(), 3);
-        let commands: Vec<_> = plan
+        assert_eq!(plan.action_count(), 4);
+        let mut commands: Vec<_> = plan
             .steps
             .iter()
             .filter_map(|s| match s {
@@ -496,6 +555,9 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
                 _ => None,
             })
             .collect();
+        let pin = commands.pop().unwrap();
+        assert_eq!(pin.args[4..7], ["python", "-I", "-c"]);
+        assert_eq!(pin.args[8..], ["/proj/deps_ws/install", "/proj/ws/install"]);
         assert_eq!(commands[0].cwd.as_deref(), Some(Path::new("/proj/deps_ws")));
         assert_eq!(commands[1].cwd.as_deref(), Some(Path::new("/proj/ws")));
         for cmd in &commands {
@@ -527,6 +589,64 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         assert_eq!(String::from_utf8_lossy(&ran.stdout), "colcon\n", "{guard}");
         assert!(main_script.contains("--mixin release ccache --symlink-install"));
     }
+}
+
+#[test]
+fn conda_build_pins_python_shebangs_to_the_environment() {
+    let m = Manifest::parse(
+        &format!("{FULL}\n[build.conda]\nname = 'robot'\n"),
+        Path::new("t"),
+    )
+    .unwrap();
+    let host = bare_host();
+    let plan = provider::for_manifest(&m)
+        .plan_build(&ctx(&m, &host), None, false)
+        .unwrap();
+    let Some(Step::Run(pin)) = plan.steps.last() else {
+        panic!("last step is not the shebang command");
+    };
+    let dir = std::env::temp_dir().join(format!("rospm-shebang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let node = |name: &str, text: &str, mode: u32| {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("lib/pkg").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        path
+    };
+    let env = node("env_node", "#!/usr/bin/env python3\nprint(1)\n", 0o755);
+    let abs = node("abs_node", "#!/usr/bin/python3 -u\nprint(2)\n", 0o755);
+    let sh = node("sh_node", "#!/bin/sh\necho\n", 0o755);
+    let data = node("data.py", "#!/usr/bin/python3\n", 0o644);
+    let linked = dir.join("lib/pkg/linked");
+    std::os::unix::fs::symlink(&data, &linked).unwrap();
+    let out = std::process::Command::new("python3")
+        .args(&pin.args[5..8])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let python = String::from_utf8(
+        std::process::Command::new("python3")
+            .args(["-I", "-c", "import sys; print(sys.executable)"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let python = python.trim();
+    let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+    assert_eq!(read(&env), format!("#!{python}\nprint(1)\n"));
+    assert_eq!(read(&abs), format!("#!{python} -u\nprint(2)\n"));
+    assert_eq!(read(&sh), "#!/bin/sh\necho\n");
+    assert_eq!(
+        read(&data),
+        "#!/usr/bin/python3\n",
+        "not executable, and not via symlink"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).lines().count(), 2);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -622,6 +742,28 @@ fn env_script_lists_workspaces_in_order_and_exports_env() {
     assert!(base < deps && deps < main, "{script}");
     assert!(script.contains("export ROS_DOMAIN_ID=42"));
     assert!(script.contains("export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp"));
+}
+
+#[test]
+fn env_script_activates_conda_before_sourcing_ros() {
+    for (selector, target) in [
+        ("name = 'robot-dev'", "conda activate robot-dev\n"),
+        ("prefix = 'my env'", "conda activate '/proj/my env'\n"),
+    ] {
+        let m = Manifest::parse(
+            &format!("{FULL}\n[build.conda]\n{selector}\n"),
+            Path::new("t"),
+        )
+        .unwrap();
+        let host = bare_host();
+        let script = provider::for_manifest(&m)
+            .env_script(&ctx(&m, &host), Shell::Zsh)
+            .unwrap();
+        let hook = script.find("eval \"$(conda shell.zsh hook)\"\n").unwrap();
+        let activate = script.find(target).unwrap();
+        let ros = script.find("/opt/ros/jazzy/setup.zsh").unwrap();
+        assert!(hook < activate && activate < ros, "{script}");
+    }
 }
 
 #[test]

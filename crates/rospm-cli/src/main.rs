@@ -92,6 +92,8 @@ enum Cmd {
         locked: bool,
         #[arg(long, help = tr("cli.apply.build"))]
         build: bool,
+        #[arg(long, help = tr("cli.no_env_check"))]
+        no_env_check: bool,
         #[arg(long, help = tr("cli.apply.offline"))]
         offline: bool,
         #[arg(long, value_name = "NAME", help = tr("cli.apply.mirror"), hide_possible_values = true, value_parser = clap::builder::PossibleValuesParser::new(rospm_core::mirror::NAMES))]
@@ -118,6 +120,8 @@ enum Cmd {
         conda_env: Option<String>,
         #[arg(long, value_name = "PATH", conflicts_with = "conda_env", help = tr("cli.build.conda_prefix"))]
         conda_prefix: Option<PathBuf>,
+        #[arg(long, help = tr("cli.no_env_check"))]
+        no_env_check: bool,
         #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
@@ -268,6 +272,7 @@ fn main() -> ExitCode {
             distro,
             locked,
             build,
+            no_env_check,
             offline,
             mirror,
             dry_run,
@@ -275,7 +280,16 @@ fn main() -> ExitCode {
             let mirror = mirror
                 .as_deref()
                 .map(|m| m.parse::<Mirror>().expect("validated by clap"));
-            commands::apply(&global, locked, build, offline, dry_run, mirror, distro)
+            commands::apply(
+                &global,
+                locked,
+                build,
+                no_env_check,
+                offline,
+                dry_run,
+                mirror,
+                distro,
+            )
         }
         Cmd::Uninstall {
             keep_source,
@@ -286,12 +300,14 @@ fn main() -> ExitCode {
             workspace,
             conda_env,
             conda_prefix,
+            no_env_check,
             dry_run,
         } => commands::build(
             &global,
             workspace.as_deref(),
             conda_env,
             conda_prefix,
+            no_env_check,
             dry_run,
         ),
         Cmd::Env { shell } => commands::env(&global, shell),

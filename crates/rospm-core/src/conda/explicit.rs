@@ -5,12 +5,11 @@ use std::fs;
 use std::path::Path;
 
 use indexmap::IndexMap;
-use serde::Deserialize;
 
 use super::bootstrap::Bootstrap;
 use super::definition::{environment_yaml, spec_name, Definition};
 use super::system::{Real, System};
-use super::{stamp_head, Replay, Selection, MANAGED_PREFIX, READY};
+use super::{stamp_head, Contents, Replay, Selection, MANAGED_PREFIX, READY};
 use crate::error::{Error, Result};
 use crate::lock::{sha256_hex, Lock, LockedConda};
 use crate::manifest::{CondaBuild, ManagedConda};
@@ -103,6 +102,7 @@ pub(super) fn replay(
     let pip = exact_pins(&definition.pip)
         .map_err(|loose| Error::Host(msg!("conda.pip_unpinned", packages = loose.join(", "))))?;
     Ok(Replay {
+        packages_sha256: super::packages_sha256(&text),
         lock: path,
         lock_sha256: record.lock_sha256.clone(),
         pip: pip
@@ -259,24 +259,13 @@ pub(super) fn resolve_lock_with(
         Some(b) if b.is_ready() => b.conda().to_string_lossy().into_owned(),
         _ => "conda".to_string(),
     };
-    let prefix_arg = prefix.to_string_lossy();
-    let listed = system
-        .query(&program, &["list", "--json", "--prefix", &prefix_arg])
-        .and_then(|text| {
-            serde_json::from_str::<Vec<Listed>>(&text)
-                .map_err(|e| Error::Host(msg!("conda.query_invalid", error = e)))
-        });
-    let listed = match listed {
-        Ok(listed) => listed,
+    let contents = match Contents::query(&prefix, &program, system) {
+        Ok(contents) => contents,
         Err(error) => return skipped(notes, error.message()),
     };
     // Explicit locks hold Conda packages only: every PyPI package in the
     // environment must be one of the pins, at the pinned version.
-    let installed: Vec<(String, String)> = listed
-        .into_iter()
-        .filter(|p| p.channel == "pypi")
-        .map(|p| (pip_requirement_name(&p.name), p.version))
-        .collect();
+    let installed = &contents.pypi;
     let mut differences: Vec<String> = installed
         .iter()
         .filter(|p| !pins.contains(p))
@@ -293,20 +282,14 @@ pub(super) fn resolve_lock_with(
             msg!("conda.pip_differs", packages = differences.join(", ")),
         );
     }
-    let text = match system.query(
-        &program,
-        &["list", "--explicit", "--sha256", "--prefix", &prefix_arg],
-    ) {
-        Ok(text) => text,
-        Err(error) => return skipped(notes, error.message()),
-    };
-    let packages = match parse_explicit(&text, platform) {
+    let text = &contents.explicit;
+    let packages = match parse_explicit(text, platform) {
         Ok(packages) => packages,
         Err(error) => return skipped(notes, error),
     };
     let relative = lock_path(managed, platform);
     let path = root.join(&relative);
-    if fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+    if fs::read_to_string(&path).ok().as_deref() != Some(text) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         }
@@ -314,8 +297,8 @@ pub(super) fn resolve_lock_with(
     }
     // The environment is what the lock describes, so `apply --locked` on
     // this host reuses it instead of refusing to touch the prefix.
-    let lock_sha256 = sha256_hex(&text);
-    let stamp = format!("{}\n{lock_sha256}", stamp_head(&fingerprint, platform));
+    let lock_sha256 = sha256_hex(text);
+    let stamp = contents.record(&stamp_head(&fingerprint, platform));
     if ready != stamp {
         let ready = root.join(READY);
         fs::write(&ready, stamp).map_err(|e| Error::io(&ready, e))?;
@@ -332,12 +315,4 @@ pub(super) fn resolve_lock_with(
         lock_sha256,
         definition_sha256: fingerprint,
     }))
-}
-
-#[derive(Deserialize)]
-struct Listed {
-    name: String,
-    version: String,
-    #[serde(default)]
-    channel: String,
 }

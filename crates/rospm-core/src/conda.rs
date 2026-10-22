@@ -30,7 +30,8 @@ use crate::msg;
 use crate::pixi::conda_platform;
 use crate::plan::{shell_quote, Command};
 use crate::platform::Platform;
-use crate::probe::CondaHost;
+use crate::probe::{CondaHost, EnvReport, Status};
+use crate::provider::Shell;
 
 use bootstrap::{compatible, miniforge, Bootstrap};
 use definition::environment_yaml;
@@ -66,6 +67,101 @@ for m in ("catkin_pkg", "em", "rclpy._rclpy_pybind11"):
 ros = sorted({v for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) for v in re.findall(r"/python(3\.\d+)/", p)})
 print(json.dumps({"python": "%d.%d" % sys.version_info[:2], "ros": ros, "failed": failed}))
 "#;
+/// Points Python shebangs of installed executables at this interpreter, so
+/// `ros2 run` (which executes the file) uses the environment even when it is
+/// not activated. Symlinks (`--symlink-install`) lead into sources: left alone.
+const PIN_SHEBANGS: &str = r##"import os, re, sys
+py = sys.executable
+if any(c.isspace() for c in py):
+    print(f"shebangs not rewritten: {py} contains whitespace", file=sys.stderr)
+    sys.exit()
+shebang = re.compile(rb"#![ \t]*(?:/usr/bin/env[ \t]+)?((?:\S*/)?python[0-9.]*)([ \t][^\n]*)?\n?")
+for top in sys.argv[1:]:
+    for d, _, files in os.walk(top):
+        for f in files:
+            p = os.path.join(d, f)
+            if os.path.islink(p) or not os.access(p, os.X_OK):
+                continue
+            with open(p, "rb") as h:
+                m = shebang.fullmatch(h.readline(512))
+                if not m or os.path.realpath(m[1]) == os.path.realpath(py):
+                    continue
+                rest = h.read()
+            with open(p, "wb") as h:
+                h.write(b"#!" + os.fsencode(py) + (m[2] or b"") + b"\n" + rest)
+            print(f"{p}: {os.fsdecode(m[1])} -> {py}")
+"##;
+
+/// PyPI distributions in the environment, i.e. those no Conda package owns,
+/// as `conda list` reports them. `conda list --json` takes 30 s with 170 PyPI
+/// packages (its pip scan); this takes about 1 s. Prints `[name, version]` pairs.
+const PYPI_LIST: &str = r#"import glob, importlib.metadata as md, json, os, sys
+owned = set()
+for f in glob.glob(os.path.join(sys.prefix, "conda-meta", "*.json")):
+    with open(f) as h:
+        for p in json.load(h).get("files", []):
+            owned.update((p, os.path.dirname(p)))
+print(json.dumps(sorted({(d.metadata["Name"], d.version) for d in md.distributions()
+    if os.path.relpath(str(d._path), sys.prefix) not in owned})))
+"#;
+
+/// What a managed environment holds. Its digests complete the completion
+/// record, and every run that reuses the environment compares them again,
+/// so hand edits (`pip install`, `conda install`) never go unnoticed.
+pub(crate) struct Contents {
+    /// `conda list --explicit --sha256` output.
+    pub explicit: String,
+    /// Normalized PyPI name and version, sorted.
+    pub pypi: Vec<(String, String)>,
+}
+
+impl Contents {
+    pub(crate) fn query(prefix: &Path, conda: &str, system: &dyn System) -> Result<Self> {
+        let prefix_arg = prefix.to_string_lossy();
+        let explicit = system.query(
+            conda,
+            &["list", "--explicit", "--sha256", "--prefix", &prefix_arg],
+        )?;
+        let cmd = Selection::Prefix(prefix.to_path_buf())
+            .command(conda)
+            .args(["python", "-I", "-c", PYPI_LIST]);
+        let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
+        let text = system.query(&cmd.program, &args)?;
+        let listed: Vec<(String, String)> = serde_json::from_str(text.trim())
+            .map_err(|e| Error::Host(msg!("conda.query_invalid", error = e)))?;
+        let mut pypi: Vec<_> = listed
+            .into_iter()
+            .map(|(name, version)| (crate::probe::pip_requirement_name(&name), version))
+            .collect();
+        pypi.sort();
+        Ok(Self { explicit, pypi })
+    }
+
+    /// The full completion record for `head`.
+    pub(crate) fn record(&self, head: &str) -> String {
+        let pypi: String = self
+            .pypi
+            .iter()
+            .map(|(name, version)| format!("{name}=={version}\n"))
+            .collect();
+        format!(
+            "{head}\n{}\n{}",
+            packages_sha256(&self.explicit),
+            sha256_hex(&pypi)
+        )
+    }
+}
+
+/// Digest of an explicit lock's package lines; comments such as
+/// `# created-by: conda <version>` differ between Conda versions.
+pub(crate) fn packages_sha256(explicit: &str) -> String {
+    let lines: String = explicit
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    sha256_hex(&lines)
+}
 
 #[derive(Debug, Clone)]
 pub enum Selection {
@@ -100,6 +196,13 @@ impl Selection {
         }
     }
 
+    fn target(&self) -> String {
+        match self {
+            Self::Name(name) => shell_quote(name),
+            Self::Prefix(prefix) => shell_quote(&prefix.to_string_lossy()),
+        }
+    }
+
     fn label(&self) -> String {
         match self {
             Self::Name(name) => format!("-n {}", shell_quote(name)),
@@ -127,32 +230,39 @@ struct Preparation {
 struct Replay {
     lock: PathBuf,
     lock_sha256: String,
+    /// [`packages_sha256`] of the lock: the replayed environment must match.
+    packages_sha256: String,
     /// `name==version`, installed with `--no-deps` after the Conda packages.
     pip: Vec<String>,
 }
 
 impl Preparation {
-    /// Completion record: the definition digest, followed by the lock digest
-    /// when the environment was replayed from a lock.
-    fn stamp(&self) -> String {
-        let head = stamp_head(&self.fingerprint, self.platform);
-        match &self.replay {
-            Some(replay) => format!("{head}\n{}", replay.lock_sha256),
-            None => head,
-        }
+    fn head(&self) -> String {
+        stamp_head(&self.fingerprint, self.platform)
     }
 
-    /// A replayed environment also satisfies its definition, so build and
-    /// plain apply reuse it; a solved one never satisfies a lock.
+    /// What the completion record claims, read without subprocesses: the
+    /// definition digest, then the Conda and PyPI package digests. A
+    /// replayed environment also satisfies its definition, so build and
+    /// plain apply reuse it; a solved one satisfies a lock only when it
+    /// holds exactly the lock's packages (as after `rospm lock`).
     fn is_ready(&self) -> bool {
         let Ok(ready) = fs::read_to_string(&self.ready) else {
             return false;
         };
+        let lines: Vec<&str> = ready.lines().collect();
         self.prefix.join("conda-meta/history").is_file()
-            && match &self.replay {
-                Some(_) => ready == self.stamp(),
-                None => ready.lines().next() == Some(&stamp_head(&self.fingerprint, self.platform)),
-            }
+            && lines.len() == 3
+            && lines[0] == self.head()
+            && self
+                .replay
+                .as_ref()
+                .is_none_or(|r| lines[1] == r.packages_sha256)
+    }
+
+    /// The live half of readiness: the packages are still what was recorded.
+    fn unchanged(&self, contents: &Contents) -> bool {
+        fs::read_to_string(&self.ready).is_ok_and(|r| r == contents.record(&self.head()))
     }
 }
 
@@ -174,6 +284,9 @@ pub struct CondaStep {
     /// environment; otherwise `conda` from PATH, checked when executed.
     program: String,
     prepare: bool,
+    /// `--no-env-check` clears it: a prepared or existing environment is
+    /// used without the live package and build checks.
+    checks: bool,
     /// Build only: the line sourcing ROS before the import check.
     ros_setup: Option<String>,
     /// Build only: workspace build bases scanned for another interpreter's
@@ -242,6 +355,7 @@ impl CondaStep {
             bootstrap,
             program,
             prepare,
+            checks: true,
             ros_setup: None,
             build_dirs: Vec::new(),
         })
@@ -254,13 +368,53 @@ impl CondaStep {
         self
     }
 
+    /// The user confirmed the environment; skip the checks that cost subprocesses.
+    pub fn skip_checks(&mut self) {
+        self.checks = false;
+    }
+
+    /// Unchecked use needs no preparation: an existing environment, or a
+    /// managed one whose completion record matches.
+    fn unchecked(&self) -> bool {
+        !self.checks && self.managed.as_ref().is_none_or(Preparation::is_ready)
+    }
+
+    /// The selected environment as `conda run` names it (`-n …` / `-p …`).
+    pub fn label(&self) -> String {
+        self.selection.label()
+    }
+
     /// The `conda run` prefix every build command goes through.
     pub fn command(&self) -> Command {
         self.selection.command(&self.program)
     }
 
+    /// Lines activating the environment in `rospm env` / `shell`, with
+    /// Conda's own shell hook: no `conda init` or startup file needed.
+    pub fn activation(&self, shell: Shell) -> String {
+        format!(
+            "eval \"$({} shell.{shell} hook)\"\nconda activate {}\n",
+            shell_quote(&self.program),
+            self.selection.target()
+        )
+    }
+
+    /// Run after building, inside the environment.
+    pub fn pin_shebangs(&self, install_dirs: impl IntoIterator<Item = PathBuf>) -> Command {
+        self.command()
+            .args(["python", "-I", "-c", PIN_SHEBANGS])
+            .args(
+                install_dirs
+                    .into_iter()
+                    .map(|d| d.to_string_lossy().into_owned()),
+            )
+    }
+
     /// Preview includes the normalized definition and exact creation command.
     pub fn render(&self) -> String {
+        if self.unchecked() {
+            return msg!("conda.checks_skipped", selection = self.selection.label()).to_string();
+        }
         let check = msg!("conda.check", selection = self.selection.label());
         if !self.prepare {
             let python = match &self.selection {
@@ -295,7 +449,7 @@ impl CondaStep {
         };
         let prefix = managed.prefix.display();
         if managed.is_ready() {
-            return format!("{tool}\n{}", msg!("conda.reused", prefix = prefix));
+            return format!("{tool}\n{}", msg!("conda.reuse_checked", prefix = prefix));
         }
         // What perform will do with a prefix that is already there.
         let tool = match (
@@ -376,6 +530,10 @@ impl CondaStep {
     }
 
     fn perform_with(&self, out: &mut dyn Write, system: &dyn System) -> Result<()> {
+        if self.unchecked() {
+            writeln!(out, "{}", self.render()).map_err(|e| Error::io("<stdout>", e))?;
+            return Ok(());
+        }
         let prefix = self.ensure(out, system)?;
         if !self.prepare {
             self.check_build_tools(&prefix, out, system)?;
@@ -527,13 +685,28 @@ impl CondaStep {
         if let Some(managed) = &self.managed {
             let conda = self.managed_conda(out, system)?;
             if managed.is_ready() {
+                let contents = Contents::query(&managed.prefix, &conda, system)?;
+                if managed.unchanged(&contents) {
+                    writeln!(
+                        out,
+                        "{}",
+                        msg!("conda.reused", prefix = managed.prefix.display())
+                    )
+                    .map_err(|e| Error::io("<stdout>", e))?;
+                    return Ok(managed.prefix.clone());
+                }
+                if !self.prepare {
+                    return Err(Error::Host(msg!(
+                        "conda.managed_changed",
+                        prefix = managed.prefix.display()
+                    )));
+                }
                 writeln!(
                     out,
                     "{}",
-                    msg!("conda.reused", prefix = managed.prefix.display())
+                    msg!("conda.changed", prefix = managed.prefix.display())
                 )
                 .map_err(|e| Error::io("<stdout>", e))?;
-                return Ok(managed.prefix.clone());
             }
             if !self.prepare {
                 return Err(Error::Host(msg!(
@@ -584,7 +757,18 @@ impl CondaStep {
                     prefix = managed.prefix.display()
                 )));
             }
-            fs::write(&managed.ready, managed.stamp()).map_err(|e| Error::io(&managed.ready, e))?;
+            let contents = Contents::query(&managed.prefix, &conda, system)?;
+            if let Some(replay) = &managed.replay {
+                if packages_sha256(&contents.explicit) != replay.packages_sha256 {
+                    return Err(Error::Host(msg!(
+                        "conda.replay_differs",
+                        prefix = managed.prefix.display(),
+                        lock = replay.lock.display()
+                    )));
+                }
+            }
+            fs::write(&managed.ready, contents.record(&managed.head()))
+                .map_err(|e| Error::io(&managed.ready, e))?;
             return Ok(managed.prefix.clone());
         }
 
@@ -610,6 +794,97 @@ impl CondaStep {
             ))),
         }
     }
+}
+
+/// `verify` rows for Conda, kept apart from apt. Only a managed environment
+/// has a lock; an existing environment's name or path pins no versions.
+pub fn verify(
+    config: Option<&CondaBuild>,
+    root: &Path,
+    host: &CondaHost,
+    platform: Platform,
+    lock: &Lock,
+    r: &mut EnvReport,
+) -> Result<()> {
+    verify_with(config, root, host, platform, lock, r, &Real)
+}
+
+fn verify_with(
+    config: Option<&CondaBuild>,
+    root: &Path,
+    host: &CondaHost,
+    platform: Platform,
+    lock: &Lock,
+    r: &mut EnvReport,
+    system: &dyn System,
+) -> Result<()> {
+    for record in lock.conda.iter().filter(|c| c.platform != platform) {
+        r.push(
+            "conda",
+            record.platform.to_string(),
+            crate::Message::text("-"),
+            msg!("verify.conda.other_platform", lock = record.lock),
+            Status::Info,
+        );
+    }
+    let Some(config) = config else {
+        for record in lock.conda.iter().filter(|c| c.platform == platform) {
+            r.push(
+                "conda",
+                record.lock.clone(),
+                crate::Message::text("-"),
+                msg!("verify.conda.not_declared"),
+                Status::Mismatch,
+            );
+        }
+        return Ok(());
+    };
+    let selection = Selection::from_config(config, root)?;
+    let Some(managed) = &config.managed else {
+        r.push(
+            "conda",
+            selection.label(),
+            crate::Message::text("-"),
+            msg!("verify.conda.external"),
+            Status::Info,
+        );
+        return Ok(());
+    };
+    let expected = match lock.conda_for(platform) {
+        Some(record) => format!(
+            "{} ({})",
+            record.lock,
+            record.lock_sha256.get(..12).unwrap_or(&record.lock_sha256)
+        ),
+        None => lock_path(managed, platform),
+    };
+    let step = match CondaStep::new(config, root, host, platform, true, Some(lock)) {
+        Ok(step) => step,
+        Err(e) => {
+            let status = match lock.conda_for(platform) {
+                Some(_) => Status::Mismatch,
+                None => Status::Missing,
+            };
+            r.push("conda", selection.label(), expected, e.message(), status);
+            return Ok(());
+        }
+    };
+    let managed = step.managed.as_ref().expect("managed configuration");
+    let (actual, status) = if managed.is_ready() {
+        match Contents::query(&managed.prefix, &step.program, system) {
+            Ok(contents) if managed.unchanged(&contents) => {
+                (msg!("verify.conda.replayed"), Status::Ok)
+            }
+            Ok(_) => (msg!("verify.conda.changed"), Status::Mismatch),
+            Err(e) => (e.message(), Status::Unknown),
+        }
+    } else if managed.prefix.join("conda-meta/history").is_file() {
+        (msg!("verify.conda.differs"), Status::Mismatch)
+    } else {
+        (msg!("verify.conda.not_prepared"), Status::Missing)
+    };
+    r.push("conda", selection.label(), expected, actual, status);
+    Ok(())
 }
 
 fn creation_command(managed: &Preparation, conda: &str) -> Command {

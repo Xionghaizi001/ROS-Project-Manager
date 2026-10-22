@@ -18,7 +18,7 @@ use rospm_core::lock::{sha256_hex, Lock, LOCK_FILE};
 use rospm_core::manifest::{CondaBuild, Manifest, RosFlavor, MANIFEST_FILE};
 use rospm_core::mirror::{self, Mirror};
 use rospm_core::net::{self, ProbeResult, Role, Verdict};
-use rospm_core::plan::Step;
+use rospm_core::plan::{Plan, Step};
 use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
 use rospm_core::probe::{
     EnvReport, Host, OsRelease, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, TOOLS,
@@ -731,10 +731,12 @@ fn requested_mirror(flag: Option<Mirror>) -> Result<Option<Mirror>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // one per CLI flag, called once from main
 pub fn apply(
     global: &Global,
     locked: bool,
     build: bool,
+    no_env_check: bool,
     offline: bool,
     dry_run: bool,
     mirror: Option<Mirror>,
@@ -786,6 +788,9 @@ pub fn apply(
     };
     let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
+    if no_env_check {
+        skip_env_checks(&mut plan);
+    }
     if let Some(contents) = manifest_update {
         plan.steps.insert(
             0,
@@ -810,7 +815,7 @@ pub fn apply(
         Ok(()) if build => {
             // Re-probe: apply may just have installed ROS or Miniforge.
             let host = if dry_run { host } else { Host::probe() };
-            run_build(&loaded, &host, None, true, dry_run)
+            run_build(&loaded, &host, None, true, no_env_check, dry_run)
         }
         Ok(()) => Ok(()),
     }
@@ -1164,6 +1169,7 @@ pub fn build(
     workspace: Option<&str>,
     conda_env: Option<String>,
     conda_prefix: Option<PathBuf>,
+    no_env_check: bool,
     dry_run: bool,
 ) -> Result<()> {
     let mut loaded = load(global)?;
@@ -1185,7 +1191,23 @@ pub fn build(
         loaded.manifest.build.conda = Some(conda);
         loaded.manifest.validate()?;
     }
-    run_build(&loaded, &Host::probe(), workspace, false, dry_run)
+    run_build(
+        &loaded,
+        &Host::probe(),
+        workspace,
+        false,
+        no_env_check,
+        dry_run,
+    )
+}
+
+/// `--no-env-check`: the user vouches for the Conda environment.
+fn skip_env_checks(plan: &mut Plan) {
+    for step in &mut plan.steps {
+        if let Step::Conda(conda) = step {
+            conda.skip_checks();
+        }
+    }
 }
 
 fn run_build(
@@ -1193,10 +1215,14 @@ fn run_build(
     host: &Host,
     workspace: Option<&str>,
     verify: bool,
+    no_env_check: bool,
     dry_run: bool,
 ) -> Result<()> {
     let ctx = context(loaded, host, false, None, false, mirror::OFFICIAL)?;
-    let plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
+    let mut plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
+    if no_env_check {
+        skip_env_checks(&mut plan);
+    }
     let mut out = std::io::stdout().lock();
     plan.execute(dry_run, &mut out)?;
     out.flush()?;

@@ -311,6 +311,16 @@ pub fn verify(ctx: &Context, lock: &Lock) -> Result<EnvReport> {
         }
     }
 
+    // ---- conda: its own lock record, never mixed with apt ----
+    crate::conda::verify(
+        m.build.conda.as_ref(),
+        ctx.root,
+        &host.conda,
+        ctx.platform,
+        lock,
+        &mut r,
+    )?;
+
     // ---- pip: recorded only, never installed (decision #6), still reported as drift ----
     match host.pip_freeze() {
         None => {

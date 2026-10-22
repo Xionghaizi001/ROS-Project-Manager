@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-21。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-22。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -48,7 +48,7 @@
 
 ## Phase 3.5 — Conda 自动配置与一键还原（约 2–3 周）
 
-状态：**进行中**（2026-10-22，已完成项目级 Conda 配置、CLI 覆盖、已有 / 受管环境区分、Conda 自动引导、受管环境的本机平台锁定重放、一键还原入口 `apply --build`、安装与还原步骤幂等及经 `conda run` 的受控构建；未安装 Conda 时 `apply` 可自动安装 Miniforge 并创建受管环境，`lock` / `apply --locked` 按显式锁精确重放）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
+状态：**进行中**（2026-10-22，已完成项目级 Conda 配置、CLI 覆盖、已有 / 受管环境区分、Conda 自动引导、受管环境的本机平台锁定重放、一键还原入口 `apply --build`、安装与还原步骤幂等、经 `conda run` 的受控构建及解释器 / CMake / 导入检查、`env` / `shell` 激活与 shebang 改写、`verify` 的 Conda 区域及每次执行前的实时环境核对；未安装 Conda 时 `apply` 可自动安装 Miniforge 并创建受管环境，`lock` / `apply --locked` 按显式锁精确重放）。排在 Phase 3 之后、Phase 4 的 schema v1 冻结之前；支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
 
 需求与合理性：项目可能依赖只安装在特定 Conda 环境中的 Python 包或工具，显式选择环境能避免依赖用户当前终端的激活状态，并让本地与 CI 的构建入口一致。但仅激活环境不足以保证成功：colcon 自身的解释器、CMake 缓存的 Python 路径，以及 ROS Python 扩展的 ABI 都可能仍指向系统环境。尤其是 apt 安装的 ROS 与 Conda Python 不一定兼容，因此需要在编译前检查并明确报告冲突，不能承诺任意环境均可编译。
 
@@ -65,7 +65,7 @@
   - [x] `rospm lock`：受管环境就绪且定义一致时写显式锁（内容不变不重写），校验平台与摘要，并把锁摘要补入完成记录，使本机 `apply --locked` 直接复用；其它平台的 Conda 记录保留；未就绪、Conda 查询失败、外部环境均只说明不记录。JSON 报告新增 `conda`。
   - [x] 覆盖规则：显式锁只含 Conda 包；定义中的 pip 依赖须全部为 `name==version`（不接受范围、URL、extras、标记），重放以 `--no-deps` 安装，`lock` 核对环境内全部 PyPI 包与固定完全一致；`variables` 重放后以 `conda env config vars set` 写入。
   - [x] `apply --locked`：规划阶段（无写入、无子进程）要求本平台记录存在、定义摘要一致、锁文件存在且摘要一致、平台 / `@EXPLICIT` / 每包摘要有效、覆盖定义中的 Conda 依赖与 Python 版本（有 pip 依赖时含 `pip`）、pip 全部固定，否则失败并提示在该平台 `apply` 后重新 `lock`，从不求解。执行 `conda create --yes --prefix … --file <锁>` → 变量 → `pip install --no-deps`，全部成功才写两行完成记录；普通 `apply` / `build` 复用重放的环境，按定义求解的环境不被视为锁的重放（不覆盖目录）。外部环境在 `--locked` 下只检查并在计划中说明无可重放保证。
-  - [x] 测试：单元测试覆盖记录 / 幂等 / 同机复用 / 干净项目重放不求解 / 两行完成记录、缺平台记录、定义过期、摘要不符、平台不符、缺 `@EXPLICIT`、缺包摘要、覆盖不全、Python 版本不符、pip 未固定、PyPI 漂移、外部环境、`{platform}` 展开与多平台校验、锁合并保留其它平台；CLI 测试覆盖 `apply --locked --dry-run` 缺记录的中英文错误与按锁重放预览（无写入），以及普通 `apply` 不受 `lock_file` 影响。真实验收（2026-10-20，本机 x86_64、conda 26.7.1，清华 conda-forge / PyPI 镜像）：`tests/conda_bootstrap.rs` 的 `locks_and_replays_a_real_environment`（`--ignored`）按定义求解含 `six==1.16.0` 与变量的环境 → `resolve_lock` 写锁 → 同机 `--locked` 复用 → 干净项目按锁重放，`conda list --explicit --sha256` 与锁逐字一致、`six` 与变量生效，重放环境再次锁定得到相同记录（约 150 秒）。aarch64 的真实重放留给干净机一键验收；`verify` 对 Conda 锁的核对见下方“对接 `env` / `shell`”一项。
+  - [x] 测试：单元测试覆盖记录 / 幂等 / 同机复用 / 干净项目重放不求解 / 两行完成记录、缺平台记录、定义过期、摘要不符、平台不符、缺 `@EXPLICIT`、缺包摘要、覆盖不全、Python 版本不符、pip 未固定、PyPI 漂移、外部环境、`{platform}` 展开与多平台校验、锁合并保留其它平台；CLI 测试覆盖 `apply --locked --dry-run` 缺记录的中英文错误与按锁重放预览（无写入），以及普通 `apply` 不受 `lock_file` 影响。真实验收（2026-10-20，本机 x86_64、conda 26.7.1，清华 conda-forge / PyPI 镜像）：`tests/conda_bootstrap.rs` 的 `locks_and_replays_a_real_environment`（`--ignored`）按定义求解含 `six==1.16.0` 与变量的环境 → `resolve_lock` 写锁 → 同机 `--locked` 复用 → 干净项目按锁重放，`conda list --explicit --sha256` 与锁逐字一致、`six` 与变量生效，重放环境再次锁定得到相同记录（约 150 秒）。aarch64 的真实重放留给干净机一键验收；`verify` 对 Conda 锁的核对见下方“对接 `env` / `shell`”一项（已完成）。
 - [x] 定义一键还原入口（`apply --build`，与 `--locked` 组合）：自动准备 Conda 工具与项目环境，继续完成系统依赖安装、源码还原、按拓扑顺序编译及清单声明的验证命令。普通 `apply` 仍负责环境与源码准备；`build` 使用已准备好的环境。用户无需手动激活环境或在安装 Conda 后重新发起还原。
   - [x] 已实现（2026-10-21）：`apply --build` 在 apply 计划成功后重新探测主机，再生成与 `build` 相同的全量编译计划，并追加清单新增的 `build.verify` 命令（Bash，加载与 `rospm env` 相同的环境，声明 Conda 时经 `conda run` 执行）；`build` 不执行验证命令；apply 失败时不编译；`--dry-run` 依次预览 apply 与编译 / 验证计划且不写文件。已同步 schema、`spec.md`、双语模板与帮助。测试：`tests/plan.rs` 覆盖验证命令顺序、环境、Conda 包装与空命令校验；CLI 测试覆盖 `apply --build --dry-run` 的预览顺序、无写入及 `build` 不执行验证。真实主机上的一键执行由下方“干净机一键验收”完成。
 - [x] 安装与还原步骤幂等：复用已校验的工具、下载缓存和符合定义 / 锁记录的项目环境，失败后重跑可继续；未完成的工具或环境不得标记为就绪，不修改外部已有环境。`--dry-run` 展示安装器版本、工具与环境位置、依赖输入及后续命令，不下载或写文件；下载、校验、安装失败时报告具体步骤，离线且无所需缓存时明确报错。
@@ -74,7 +74,9 @@
   - [x] 已实现（2026-10-22）：`conda run`、按拓扑顺序加载 ROS / underlay、环境存在检查与完整命令预览此前已具备；本次补上构建前在所选环境内核对 `python` 的 `sys.executable` 位于环境 prefix 下、`colcon` 可用，不满足时分别报错（受管环境 / 构建工具缺失提示 `rospm apply`，已有环境提示在其中安装 Python），通过后输出所用解释器；`build --dry-run` 展示解释器位置与这些检查，不启动子进程。缺少 Conda 时受管环境提示 `apply`、已有环境报无法启动 Conda，均不回退到系统环境。测试：单元测试覆盖按名称 / 路径 / 受管环境的通过输出、系统解释器与缺少 colcon 的报错、`apply` 不做构建检查；CLI 测试覆盖真实子进程调用顺序与解释器输出。
 - [x] 确保 colcon、Python 构建步骤与 CMake 的 `Python3_EXECUTABLE` / `PYTHON_EXECUTABLE`（按包所用查找机制）使用所选环境的解释器；检查所需 Python 模块及 ROS Python 扩展能否导入，发现版本 / ABI 不兼容时给出诊断。切换环境时检测旧构建目录中的解释器缓存，提示清理或隔离构建目录。
   - [x] 已实现（2026-10-22）：Conda 构建的 colcon 命令以 `--cmake-args` 传入 `Python3_EXECUTABLE` / `Python_EXECUTABLE` / `PYTHON_EXECUTABLE`=`$CONDA_PREFIX/bin/python`，与 `build_args` 或 colcon 默认文件中已有的 `--cmake-args` 合并（colcon 只保留最后一个）；构建前要求 `colcon` 也位于环境内（系统 colcon 会用系统 Python 构建 Python 包），加载 ROS 后在环境中导入 `catkin_pkg`、`em`、`rclpy._rclpy_pybind11`，失败时按环境 Python 与 ROS `lib/python3.X` 是否一致分别报版本 / ABI 不兼容或缺少模块；扫描所构建 workspace 的 `build/*/CMakeCache.txt`，记录其它解释器时报错并提示删除 build / install 或用 `--build-base` / `--install-base` 隔离。中英文消息、`spec.md` 同步。测试：单元测试覆盖系统 colcon、ABI 不符、缺模块、旧缓存检测（NOTFOUND 与同一解释器不误报）、默认文件 `cmake-args` 读取；计划测试覆盖追加与合并 `--cmake-args` 及 Bash 展开含空格的 prefix；CLI 测试覆盖真实子进程中的 CMake 参数。真实 ROS + Conda 主机上的构建由下方“验收”项完成。
-- [ ] 对接 `env` / `shell` 的 Conda 环境选择，验证安装生成的 Python 入口及 `ros2 run` 使用目标解释器，必要时可清除节点文件的 `shebang` ；native 的 apt 锁记录与受管 Conda 环境锁记录分别校验，明确记录环境名称或路径本身不等于锁定包版本。
+- [x] 对接 `env` / `shell` 的 Conda 环境选择，验证安装生成的 Python 入口及 `ros2 run` 使用目标解释器，必要时可清除节点文件的 `shebang` ；native 的 apt 锁记录与受管 Conda 环境锁记录分别校验，明确记录环境名称或路径本身不等于锁定包版本。
+  - [x] 已实现（2026-10-22）：`env` / `shell` 在声明 Conda 时先用 `eval "$(<conda> shell.<shell> hook)"` + `conda activate <名称|路径>` 激活所选环境（受管环境用 rospm 安装的 Conda），再 source ROS 与 workspace，不执行 `conda init`。Conda 构建结束后在环境内改写所构建 workspace `install/` 下可执行文件中指向其它 Python 的 shebang（`/usr/bin/env python3`、`/usr/bin/python3` 等）为环境解释器绝对路径，`ros2 run` 不激活也用目标解释器；符号链接（`--symlink-install`）与含空白的解释器路径不改。`verify` 新增 `conda` 区域，与 apt 分开：受管环境复用 `apply --locked` 的规划检查并按完成记录判断环境是否为该锁，其它平台记录 `info`，按名称 / 路径选择的已有环境只报 `info`（名称或路径不等于锁定版本），清单未声明受管环境却有锁记录报 `MISMATCH`。中英文消息、`spec.md` 同步。测试：`env` 激活先于 ROS（名称 / 含空格路径）、构建计划末尾的 shebang 命令及真实执行（env / 绝对路径 / 带参数改写，`/bin/sh`、非可执行、符号链接不动）、`verify` 各状态。真实 ROS + Conda 主机上的 `ros2 run` 由下方“验收”项完成。
+  - [x] 每次执行前实时核对受管环境（2026-10-22）：完成记录扩为三行（定义摘要、explicit 包行摘要、PyPI 包摘要），`apply` / `build` 复用前与 `verify` 都实时查询比较，人为 `pip install` / `conda install` 后 `build` 报错提示 `apply`、`apply` 重建、`verify` 报 `MISMATCH`；`lock` 的 PyPI 查询同样改用该方法。本机实测：`conda list --explicit` 约 0.5 秒（与环境大小无关），PyPI 查询约 1 秒，而 `conda list --json` 在 171 个 PyPI 包时为 30 秒；构建原有检查约 4 秒，新增开销可忽略。新增 `--no-env-check`（`apply` / `build`）在用户确认环境无误时跳过全部环境检查子进程，未准备的环境仍会准备或报错。测试覆盖手动修改检测（pip / Conda 包）、`apply` 重建、重放头部注释差异不误报、跳过时不启动子进程、CLI 预览。
 - [ ] 验收：未激活 Conda 的终端中，指定名称和路径均能完成最小 ROS Python 包构建并运行节点，能导入仅目标环境安装的依赖；覆盖构建预览不写文件、缺环境与 ABI 冲突诊断、切换环境后的缓存检测；未配置 Conda 的 native 构建回归通过。
 - [ ] 干净机一键验收：在满足 ROS 主机前置条件、未安装 Conda 的机器上，仅凭项目清单、目标平台锁文件和源码入口，一条命令完成 Conda 安装、项目环境创建、依赖与源码还原、编译和最小节点运行验证。覆盖 x86_64 / aarch64 安装器选择、重复执行复用、安装中断后重试、摘要错误、缺少锁记录，以及 shell 启动文件保持不变；锁定重放在另一干净环境中得到相同包记录。
 - **产出**：已有 Conda 用户可直接指定环境；未安装 Conda 的用户可一条命令自动准备工具和项目环境并完成还原、编译与验证；不兼容环境在构建前得到明确诊断。
@@ -83,11 +85,12 @@
 
 ## Phase 3.6 — 常见 C++ / Python 错误诊断（约 1–2 周）
 
-状态：**未开始**（2026-10-19 新增需求）。排在 Phase 3.5 之后、Phase 4 发布之前；首期服务 CLI 构建与一键还原，诊断结构供后续 GUI / 编辑器复用。
+状态：**进行中**（2026-10-22，已完成构建日志采集）。排在 Phase 3.5 之后、Phase 4 发布之前；首期服务 CLI 构建与一键还原，诊断结构供后续 GUI / 编辑器复用。
 
 需求与合理性：项目管理器掌握构建命令、workspace、依赖清单与实际 Python 环境，可将编译器 / 解释器已有的错误信息整理为“文件与行列 + 问题说明 + 排查建议”，帮助用户从长日志中定位问题。当前执行层直接显示子进程输出，失败时仅记录命令与退出状态，尚需补充日志采集和诊断解析。首期使用可测试的规则与工具原生诊断，不依赖在线 AI；只能解释捕获到的报错，不承诺推断任意业务逻辑错误或准确找出所有根因。
 
-- [ ] 构建日志采集：执行子进程时同时转发并保存 stdout / stderr，记录命令、工作目录、workspace / ROS 包、退出状态和所选 Python 环境；避免管道阻塞与无界内存缓存，兼容 ANSI 颜色及 colcon 多包并行输出，优先按包归属解析日志。首期覆盖 `build`、一键还原中的构建与非交互验证命令；用户在交互 shell 中自行启动的程序不自动获得诊断。
+- [x] 构建日志采集：执行子进程时同时转发并保存 stdout / stderr，记录命令、工作目录、workspace / ROS 包、退出状态和所选 Python 环境；避免管道阻塞与无界内存缓存，兼容 ANSI 颜色及 colcon 多包并行输出，优先按包归属解析日志。首期覆盖 `build`、一键还原中的构建与非交互验证命令；用户在交互 shell 中自行启动的程序不自动获得诊断。
+  - [x] 已实现（2026-10-22）：`Plan` 新增日志路径、`Command` 新增日志头；`build` / `apply --build` 的 colcon 与 `build.verify` 命令以两条读线程、8 KiB 固定缓冲转发 stdout / stderr 并原样（含 ANSI）写入 `.rospm/log/build.log`（每次覆盖，首个记录命令前提示路径），写入失败仍持续读取以免子进程阻塞，退出状态照常决定成败。日志头记录命令、工作目录、workspace 或验证命令、所选 Python 环境（`system` / `conda -n|-p …`）及 colcon 按包日志路径——包归属直接取 colcon 自身的 `log/latest_build/<包>/stdout_stderr.log`，不从并行交错输出中拆分（自定义 `--log-base` 时该路径不准，解析需回退到合并日志）。子进程输出改经管道后，GCC 等工具检测到非终端可能不再输出颜色。Conda 检查与 shebang 改写不记录。测试：核心测试覆盖转发与保存、ANSI 原样、stderr、未标记命令不记录、失败后停止且保留退出状态、仅提示一次路径、含空格目录；计划测试覆盖 workspace / 验证命令的日志头与 Conda 环境；CLI 测试覆盖预览不建日志、真实失败构建写入日志头与退出状态。真实验收（2026-10-22，本机 Ubuntu 22.04 / Humble、GCC 11.4，项目路径含空格）：一个缺分号的 ament_cmake 包与一个 ament_python 包并行构建，合并日志完整保存日志头、并行交错的 colcon 输出、GCC `main.cpp:3:3: error` 及源码摘录、gmake 级联报错与 `exit status: 2`，记录的按包日志路径存在且含同一报错。同时发现可供后续诊断规则使用的样例：调用终端激活 Conda base 时，native 构建的 CMake 选中 Conda 的 `python3`，报 `ModuleNotFoundError: No module named 'catkin_pkg'`。
 - [ ] 在 `rospm-core` 定义统一诊断结构：稳定错误码、类别、严重程度、工具、文件 / 行 / 列、原始报错片段、关联诊断、解释与建议，并区分“工具已明确报告的事实”与“待验证的可能原因”。位置缺失时不编造行号；显示编译器报告的位置，不把它当作根因必然所在的位置。
 - [ ] C++ 首批规则：GCC / Clang 的语法与类型错误、缺少头文件；CMake 的 `find_package` 失败；链接器的 `cannot find -l...` / `undefined reference`。保留模板实例化和 include 链等关联上下文，区分语法、包发现、头文件搜索与链接问题；优先使用工具支持的结构化诊断，兼容常见文本输出与无法识别的格式。
 - [ ] Python 首批规则：`SyntaxError`、`IndentationError` / `TabError`、`ModuleNotFoundError`、常见 `ImportError` 及 traceback 位置；保留异常链与项目调用帧，对运行时异常按实际异常类型解释。模块缺失时检查本次构建 / 验证所用解释器，避免把“装在另一个环境”误报为完全未安装。

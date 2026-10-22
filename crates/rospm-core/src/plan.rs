@@ -25,6 +25,9 @@ pub struct Command {
     pub env: Vec<(String, String)>,
     pub preamble: Vec<String>,
     pub sudo: bool,
+    /// Header lines (`key: value`) for the plan's build log. When both this
+    /// and [`Plan::log`] are set, output is forwarded and also saved there.
+    pub log: Option<String>,
 }
 
 impl Command {
@@ -36,6 +39,7 @@ impl Command {
             env: Vec::new(),
             preamble: Vec::new(),
             sudo: false,
+            log: None,
         }
     }
 
@@ -70,6 +74,11 @@ impl Command {
 
     pub fn sudo(mut self) -> Self {
         self.sudo = true;
+        self
+    }
+
+    pub fn log(mut self, header: impl Into<String>) -> Self {
+        self.log = Some(header.into());
         self
     }
 
@@ -171,6 +180,8 @@ pub enum Step {
 pub struct Plan {
     pub title: Message,
     pub steps: Vec<Step>,
+    /// Build log, rewritten by each run that executes a logged command.
+    pub log: Option<PathBuf>,
 }
 
 impl Default for Plan {
@@ -178,6 +189,7 @@ impl Default for Plan {
         Plan {
             title: Message::text(""),
             steps: Vec::new(),
+            log: None,
         }
     }
 }
@@ -187,6 +199,7 @@ impl Plan {
         Plan {
             title: title.into(),
             steps: Vec::new(),
+            log: None,
         }
     }
 
@@ -317,6 +330,7 @@ impl Plan {
     /// confirmation between the rendered plan and execution use this.
     pub fn perform(&self, out: &mut dyn Write) -> Result<()> {
         let stdout = || PathBuf::from("<stdout>");
+        let mut log: Option<std::fs::File> = None;
         for (i, step) in self.steps.iter().enumerate() {
             match step {
                 Step::Conda(step) => {
@@ -327,10 +341,22 @@ impl Plan {
                 Step::Run(c) => {
                     writeln!(out, "==> [{}] {}", i + 1, c.render())
                         .map_err(|e| Error::io(stdout(), e))?;
-                    let status = c
-                        .to_process()
-                        .status()
-                        .map_err(|e| Error::io(&c.program, e))?;
+                    let status = match (&self.log, &c.log) {
+                        (Some(path), Some(header)) => {
+                            if log.is_none() {
+                                writeln!(out, "==> # {}", msg!("plan.log", path = path.display()))
+                                    .map_err(|e| Error::io(stdout(), e))?;
+                                log = Some(open_log(path).map_err(|e| Error::io(path, e))?);
+                            }
+                            out.flush().map_err(|e| Error::io(stdout(), e))?;
+                            let file = log.as_ref().expect("opened above");
+                            run_logged(c, header, file).map_err(|e| Error::io(path, e))?
+                        }
+                        _ => c
+                            .to_process()
+                            .status()
+                            .map_err(|e| Error::io(&c.program, e))?,
+                    };
                     if !status.success() {
                         return Err(Error::CommandFailed {
                             command: c.render(),
@@ -385,6 +411,67 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+fn open_log(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create(path)
+}
+
+/// Run `c` with its stdout / stderr forwarded live and copied to `log`.
+/// One reader thread per pipe, fixed-size buffers: neither pipe can fill up
+/// and block the child, and memory stays bounded however long the output.
+/// Bytes are kept verbatim (ANSI colors included); parsers strip them.
+fn run_logged(
+    c: &Command,
+    header: &str,
+    mut log: &std::fs::File,
+) -> std::io::Result<process::ExitStatus> {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+
+    let cwd = c.cwd.as_deref().map_or_else(
+        || std::env::current_dir().unwrap_or_default(),
+        Path::to_path_buf,
+    );
+    writeln!(
+        log,
+        "==> command: {}\ncwd: {}\n{}",
+        c.render(),
+        cwd.display(),
+        header
+    )?;
+    let mut child = c
+        .to_process()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let child_out = child.stdout.take().expect("piped");
+    let child_err = child.stderr.take().expect("piped");
+    // A duplicate of fd 1: the caller may hold the `Stdout` lock.
+    let our_out = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
+    let tee = |mut from: Box<dyn Read + Send>, mut to: Box<dyn Write + Send>| {
+        let mut buf = [0u8; 8192];
+        let mut log = log;
+        while let Ok(n) = from.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            // Keep draining on write errors (closed terminal, full disk) so
+            // the child never blocks on a full pipe.
+            let _ = to.write_all(&buf[..n]);
+            let _ = log.write_all(&buf[..n]);
+        }
+    };
+    std::thread::scope(|s| {
+        s.spawn(|| tee(Box::new(child_out), Box::new(our_out)));
+        tee(Box::new(child_err), Box::new(std::io::stderr()));
+    });
+    let status = child.wait()?;
+    writeln!(log, "==> {status}\n")?;
+    Ok(status)
 }
 
 /// Download `url` as the current user (bounded by timeouts and retries, so a

@@ -37,6 +37,7 @@ cli:
   lang: "Output language: zh | en (overrides ROSPM_LANG and the locale)"
   help_flag: "Print help"
   version_flag: "Print version"
+  no_env_check: "Skip the Conda environment checks for this run (packages unchanged since prepared, interpreter, build tools, imports, CMake caches) to save a few seconds; use only after confirming the environment is fine. An environment that was never prepared is still prepared (apply) or reported (build)"
   dry_run: "Print the plan and exit"
   init:
     about: "Create a rospm.toml template in the current directory"
@@ -261,8 +262,10 @@ manifest:
   underlay_cycle: "underlay cycle detected among workspaces: %{workspaces}"
 
 conda:
+  checks_skipped: "use Conda environment %{selection} without checking it (--no-env-check)"
+  shebangs: "point Python shebangs of installed executables at the environment interpreter, so `ros2 run` uses it without activation"
   check: "check existing Conda environment %{selection} (read-only)"
-  require_ready: "require managed environment completion record %{path}"
+  require_ready: "require managed environment completion record %{path} and Conda / PyPI packages unchanged since it was prepared"
   build_checks: "before building, require the interpreter (%{python}) and the build tools %{tools} to resolve inside the environment, import catkin_pkg, em and rclpy's C extension there with ROS sourced, and reject build directories whose CMake cache names another interpreter; never falls back to the system environment. CMake receives this interpreter as Python3_EXECUTABLE / Python_EXECUTABLE / PYTHON_EXECUTABLE"
   interpreter: "Python interpreter: %{python}"
   interpreter_missing: "No Python interpreter can be run in Conda environment %{selection} (%{error}); rospm does not fall back to the system interpreter. For a managed environment run `rospm apply`; otherwise install Python into that environment"
@@ -276,6 +279,10 @@ conda:
   definition: "normalized environment definition: %{path}"
   recreate: "remove the incomplete or outdated Conda environment %{prefix} that rospm created, then create it again"
   reused: "reuse prepared Conda environment %{prefix}"
+  reuse_checked: "reuse prepared Conda environment %{prefix} if its Conda and PyPI packages are unchanged since it was prepared, otherwise recreate it"
+  changed: "Conda or PyPI packages in %{prefix} changed since rospm prepared it"
+  managed_changed: "Managed Conda environment %{prefix} was modified after it was prepared (its Conda or PyPI packages differ from the completion record); run `rospm apply` to recreate it"
+  replay_differs: "the environment replayed into %{prefix} does not hold exactly the packages of %{lock}; it is not marked ready"
   replay: "replay lock file %{lock} (%{sha256}) exactly into %{prefix} without solving; Conda verifies each package digest, PyPI packages pinned with == are installed with --no-deps"
   lock_record_missing: "rospm.lock has no managed Conda lock record for %{platform} (%{path}); refusing to re-solve. Run `rospm apply` and then `rospm lock` on that platform"
   lock_definition_stale: "the environment definition changed since the managed Conda lock for %{platform} was recorded; run `rospm apply` and then `rospm lock` again"
@@ -321,6 +328,7 @@ plan:
   write_file: "write %{path} (%{bytes} bytes)"
   write_file_sudo: "write %{path} (sudo) (%{bytes} bytes)"
   dry_run: "dry-run: nothing executed"
+  log: "build output is also saved to %{path}"
   writing: "write %{path}"
   fetch_key: "fetch %{url} -> %{dest} (sudo), verify fingerprint %{fingerprint}"
   fetching_key: "fetch %{url} -> %{dest} (verify fingerprint %{fingerprint})"
@@ -396,6 +404,14 @@ verify:
     base_not_locked_expected: "pinned in rospm.lock"
     base_not_locked: "not in rospm.lock for %{platform} (the manifest's ROS base package); `apply --locked` refuses this lock, run `rospm lock` again"
     newer_kept: "%{version} (newer than locked; Ubuntu packages are not downgraded)"
+  conda:
+    other_platform: "managed Conda lock %{lock} not checked on this host"
+    not_declared: "rospm.lock records a managed Conda lock, but the manifest declares no managed Conda environment; run `rospm lock` again"
+    external: "existing environment: a name or path does not lock package versions, not checked"
+    changed: "packages changed since the environment was prepared; run `rospm apply --locked`"
+    replayed: "environment matches the lock (Conda / PyPI packages checked)"
+    differs: "environment was not created from or recorded with this lock; run `rospm apply --locked`"
+    not_prepared: "environment not prepared; run `rospm apply --locked`"
   pip:
     unavailable: "pip not found; cannot check installed versions"
 

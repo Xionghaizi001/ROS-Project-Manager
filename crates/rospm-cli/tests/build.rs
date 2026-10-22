@@ -336,6 +336,8 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(!call.exists());
+    let log = dir.join(".rospm/log/build.log");
+    assert!(!log.exists());
     let out = rospm()
         .current_dir(&dir)
         .env("PATH", &bin)
@@ -359,6 +361,13 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("19"));
     assert!(String::from_utf8_lossy(&out.stdout)
         .contains(environment.join("bin/python").to_str().unwrap()));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(log.to_str().unwrap()));
+    let saved = fs::read_to_string(&log).unwrap();
+    assert!(
+        saved.contains("workspace: main\npython: conda -n robot\n"),
+        "{saved}"
+    );
+    assert!(saved.contains("==> exit status: 19"), "{saved}");
 }
 
 #[test]
@@ -392,4 +401,40 @@ fn apply_build_previews_preparation_then_build_and_verify_without_writing() {
     assert!(!preview(&dir, &[]).contains("ros2 pkg list"));
     assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), text);
     assert!(!dir.join(".rospm").exists());
+}
+
+#[test]
+fn no_env_check_skips_the_conda_checks_in_build_and_apply() {
+    let dir = fixture("build-no-env-check");
+    // init's host-matching distro, so apply plans on any development machine.
+    assert!(rospm()
+        .current_dir(&dir)
+        .arg("init")
+        .status()
+        .unwrap()
+        .success());
+    let base = fs::read_to_string(dir.join("rospm.toml")).unwrap();
+    fs::write(
+        dir.join("rospm.toml"),
+        format!("{base}\n[build.conda]\nname = 'robot'\n"),
+    )
+    .unwrap();
+    for args in [
+        ["build", "--no-env-check", "--dry-run"],
+        ["apply", "--no-env-check", "--dry-run"],
+    ] {
+        let out = rospm()
+            .current_dir(&dir)
+            .args(["--lang", "en"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(
+            text.contains("use Conda environment -n robot without checking it (--no-env-check)"),
+            "{text}"
+        );
+        assert!(!text.contains("before building, require"), "{text}");
+    }
 }
