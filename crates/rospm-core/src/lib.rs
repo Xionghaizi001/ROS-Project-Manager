@@ -21,6 +21,7 @@
 
 pub mod conda;
 pub mod debver;
+pub mod diagnostic;
 pub mod error;
 pub mod introspect;
 pub mod lock;
