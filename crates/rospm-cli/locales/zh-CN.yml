@@ -137,6 +137,9 @@ cli:
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
     conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
     conda_prefix: "本次构建使用此 Conda 环境路径（相对于当前目录），覆盖 build.conda（与 --conda-env 互斥）"
+    clean_offer: "构建失败。旧的构建产物（如记录了其它 Python 解释器的 CMake 缓存）是常见原因。是否删除以下目录后重新构建？"
+    clean_confirm: "删除并重试构建？[y/N] "
+    clean_retry: "已删除，重新构建"
   env:
     about: "输出进入项目环境的脚本（`source <(rospm env)`）"
     shell: "输出的 shell 语法：bash（默认）| zsh"
@@ -456,6 +459,9 @@ native:
     source_not_ours: "ROS apt 源 %{file} 并非 rospm 写入（例如来自 ros2-apt-source 包）；保留不动"
   build:
     title: "build `%{name}`（%{order}）"
+    conda_active: "当前终端激活了 Conda 环境 %{prefix}，但清单未设置 build.conda：若其 python3 无法导入 catkin_pkg、em 与 rclpy，每条构建命令都会先取消激活该环境再执行（如需在 Conda 环境中构建，请使用 --conda-env / --conda-prefix）"
+    conda_deactivated: "rospm：当前激活的 Conda 环境 %{prefix} 无法构建 ROS（python3 无法导入 catkin_pkg、em 或 rclpy），本条命令取消激活该环境后执行"
+    conda_stale: "rospm：以下 CMake 缓存仍引用 Conda 环境 %{prefix}，会继续使用该环境；请删除所列包的 build 与 install 目录后重试，或使用 --conda-env / --conda-prefix 在 Conda 环境中构建："
 
 probe:
   present: "存在"

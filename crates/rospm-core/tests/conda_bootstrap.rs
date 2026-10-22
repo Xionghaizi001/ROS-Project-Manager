@@ -58,6 +58,7 @@ fn installs_pinned_miniforge_without_conda_and_reuses_it() {
         cache_dir: std::env::var_os("ROSPM_TEST_CACHE_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("user/cache")),
+        active: None,
     };
     let config = CondaBuild {
         managed: Some(ManagedConda {
@@ -159,6 +160,7 @@ fn locks_and_replays_a_real_environment() {
     let host = CondaHost {
         data_dir: base.join("user/data"),
         cache_dir: base.join("user/cache"),
+        active: None,
     };
     let config = CondaBuild {
         managed: Some(ManagedConda {

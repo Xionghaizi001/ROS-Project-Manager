@@ -38,6 +38,7 @@ impl Project {
         CondaHost {
             data_dir: self.0.join("user/data"),
             cache_dir: self.0.join("user/cache"),
+            active: None,
         }
     }
 

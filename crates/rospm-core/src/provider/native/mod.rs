@@ -79,6 +79,27 @@ const PYTHON_DEFINES: [&str; 3] = [
 /// Output of `build` (and `apply --build`) commands, relative to the project root.
 pub const BUILD_LOG: &str = ".rospm/log/build.log";
 
+/// Native builds only: when the calling terminal's Conda environment lacks
+/// the modules ROS builds need (its `python3` would win on PATH and in CMake's
+/// FindPython, which also reads `$CONDA_PREFIX`), drop it for this command.
+/// An environment that can build ROS is left alone. Runs after ROS is sourced.
+/// CMake caches (default `build` base) still naming the dropped environment
+/// would keep using it, so they stop the build, as in a Conda build.
+fn deactivate_unusable_conda(note: &str, stale: &str) -> String {
+    format!(
+        "if [ -n \"${{CONDA_PREFIX:-}}\" ] && ! python3 -c 'import catkin_pkg, em, rclpy._rclpy_pybind11' >/dev/null 2>&1; then \
+         root=$(dirname \"$(dirname \"${{CONDA_EXE:-$CONDA_PREFIX/bin/conda}}\")\"); \
+         [ -d \"$root/conda-meta\" ] || root=$CONDA_PREFIX; \
+         PATH=$(printf '%s' \"$PATH\" | tr : '\\n' | grep -vF -e \"$CONDA_PREFIX/\" -e \"$root/\" | paste -sd:); \
+         stale=$(grep -lF -e \"=$CONDA_PREFIX/\" -e \"=$root/\" build/*/CMakeCache.txt 2>/dev/null || true); \
+         unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_PROMPT_MODIFIER CONDA_EXE CONDA_PYTHON_EXE _CE_CONDA _CE_M; \
+         hash -r; echo {} >&2; \
+         if [ -n \"$stale\" ]; then echo {} >&2; printf '%s\\n' \"$stale\" >&2; exit 1; fi; fi",
+        shell_quote(note),
+        shell_quote(stale)
+    )
+}
+
 /// The defaults file colcon reads when the manifest names none.
 fn colcon_defaults_file() -> Option<PathBuf> {
     if let Some(file) = std::env::var_os("COLCON_DEFAULTS_FILE") {
@@ -939,6 +960,16 @@ impl Provider for Native {
             None => None,
         };
         plan.log = Some(ctx.root.join(BUILD_LOG));
+        let deactivate = match (&conda, &ctx.host.conda.active) {
+            (None, Some(active)) => {
+                plan.note(msg!("native.build.conda_active", prefix = active.display()));
+                Some(deactivate_unusable_conda(
+                    &msg!("native.build.conda_deactivated", prefix = active.display()).to_string(),
+                    &msg!("native.build.conda_stale", prefix = active.display()).to_string(),
+                ))
+            }
+            _ => None,
+        };
         let python = conda
             .as_ref()
             .map_or("system".into(), |c| format!("conda {}", c.label()));
@@ -959,6 +990,9 @@ impl Provider for Native {
                 );
             }
             for line in source_lines(ctx, &underlays, Shell::Bash) {
+                cmd = cmd.preamble(line);
+            }
+            if let Some(line) = &deactivate {
                 cmd = cmd.preamble(line);
             }
             if let Some(conda) = &conda {
@@ -1018,7 +1052,10 @@ impl Provider for Native {
             // means the documented workflow works too.
             let env = self.env_script(ctx, Shell::Bash)?;
             for check in &m.build.verify {
-                let script = format!("set -e\n{env}{check}");
+                let script = match &deactivate {
+                    Some(line) => format!("set -e\n{env}{line}\n{check}"),
+                    None => format!("set -e\n{env}{check}"),
+                };
                 let cmd = match &conda {
                     Some(conda) => conda.command().arg("bash"),
                     None => Command::new("bash"),
@@ -1571,6 +1608,75 @@ impl Provider for Native {
 
 #[cfg(test)]
 mod tests {
+    /// Runs the deactivation line with a fake active Conda whose `python3`
+    /// exits with `python_status`; returns (success, stdout, stderr).
+    fn run_deactivation(name: &str, python_status: u8, stale: bool) -> (bool, String, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("rospm-deactivate-{name}-{}", std::process::id()));
+        let conda = dir.join("conda root");
+        std::fs::create_dir_all(conda.join("bin")).unwrap();
+        std::fs::create_dir_all(conda.join("conda-meta")).unwrap();
+        let python = conda.join("bin/python3");
+        std::fs::write(&python, format!("#!/bin/sh\nexit {python_status}\n")).unwrap();
+        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if stale {
+            std::fs::create_dir_all(dir.join("build/pkg")).unwrap();
+            std::fs::write(
+                dir.join("build/pkg/CMakeCache.txt"),
+                format!(
+                    "Python3_EXECUTABLE:FILEPATH={}/bin/python3\n",
+                    conda.display()
+                ),
+            )
+            .unwrap();
+        }
+        let script = format!(
+            "set -e\n{}\necho \"PATH=$PATH\"; echo \"PREFIX=${{CONDA_PREFIX:-none}}\"",
+            super::deactivate_unusable_conda("NOTE", "STALE")
+        );
+        let out = std::process::Command::new("bash")
+            .args(["--noprofile", "--norc", "-c", &script])
+            .current_dir(&dir)
+            .env("PATH", format!("{}/bin:/usr/bin:/bin", conda.display()))
+            .env("CONDA_PREFIX", &conda)
+            .env("CONDA_EXE", conda.join("bin/conda"))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    #[test]
+    fn an_active_conda_that_cannot_build_ros_is_deactivated() {
+        let (ok, out, err) = run_deactivation("unusable", 1, false);
+        assert!(ok, "{err}");
+        assert!(out.contains("PATH=/usr/bin:/bin\n"), "{out}");
+        assert!(out.contains("PREFIX=none"), "{out}");
+        assert_eq!(err, "NOTE\n");
+    }
+
+    #[test]
+    fn an_active_conda_that_can_build_ros_is_kept() {
+        let (ok, out, err) = run_deactivation("usable", 0, true);
+        assert!(ok, "{err}");
+        assert!(out.contains("conda root/bin:/usr/bin:/bin"), "{out}");
+        assert!(!out.contains("PREFIX=none"), "{out}");
+        assert_eq!(err, "");
+    }
+
+    #[test]
+    fn caches_naming_the_deactivated_conda_stop_the_build() {
+        let (ok, out, err) = run_deactivation("stale", 1, true);
+        assert!(!ok);
+        assert_eq!(out, "");
+        assert_eq!(err, "NOTE\nSTALE\nbuild/pkg/CMakeCache.txt\n");
+    }
+
     #[test]
     fn reads_cmake_args_from_a_colcon_defaults_file() {
         let file = std::env::temp_dir().join(format!("rospm-defaults-{}.yaml", std::process::id()));

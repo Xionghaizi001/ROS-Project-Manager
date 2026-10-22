@@ -392,6 +392,8 @@ pub struct CondaHost {
     pub data_dir: PathBuf,
     /// `$XDG_CACHE_HOME/rospm`, default `~/.cache/rospm`.
     pub cache_dir: PathBuf,
+    /// `$CONDA_PREFIX`: the environment active in the calling terminal.
+    pub active: Option<PathBuf>,
 }
 
 impl CondaHost {
@@ -399,6 +401,9 @@ impl CondaHost {
         CondaHost {
             data_dir: xdg_dir("XDG_DATA_HOME", ".local/share").join("rospm"),
             cache_dir: xdg_dir("XDG_CACHE_HOME", ".cache").join("rospm"),
+            active: std::env::var_os("CONDA_PREFIX")
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
         }
     }
 }
@@ -607,6 +612,7 @@ impl Host {
             conda: CondaHost {
                 data_dir: PathBuf::from("/nonexistent/.local/share/rospm"),
                 cache_dir: PathBuf::from("/nonexistent/.cache/rospm"),
+                active: None,
             },
         }
     }

@@ -338,6 +338,8 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     assert!(!call.exists());
     let log = dir.join(".rospm/log/build.log");
     assert!(!log.exists());
+    // Without a terminal the clean-rebuild fallback never asks or deletes.
+    fs::create_dir_all(dir.join("ws/build/pkg")).unwrap();
     let out = rospm()
         .current_dir(&dir)
         .env("PATH", &bin)
@@ -368,6 +370,8 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
         "{saved}"
     );
     assert!(saved.contains("==> exit status: 19"), "{saved}");
+    assert!(dir.join("ws/build/pkg").is_dir());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("retry the build"));
 }
 
 #[test]

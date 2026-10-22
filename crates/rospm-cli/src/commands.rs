@@ -1224,7 +1224,57 @@ fn run_build(
         skip_env_checks(&mut plan);
     }
     let mut out = std::io::stdout().lock();
-    plan.execute(dry_run, &mut out)?;
+    let Err(err) = plan.execute(dry_run, &mut out) else {
+        out.flush()?;
+        return Ok(());
+    };
+    out.flush()?;
+    // Fallback for a failed build: stale outputs (caches naming another
+    // interpreter, half-built packages) are a common cause, so offer one
+    // clean rebuild. Only interactively, and only with the user's consent.
+    let stale_cache =
+        matches!(&err, Error::Host(Message::Key { key, .. }) if *key == "conda.stale_cache");
+    let colcon_failed =
+        matches!(&err, Error::CommandFailed { command, .. } if command.contains("colcon build"));
+    // shortcut: assumes colcon's default `build` / `install` bases, like the cache checks.
+    let names: Vec<&String> = match workspace {
+        Some(name) => loaded
+            .manifest
+            .workspaces
+            .get_key_value(name)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect(),
+        None => loaded.manifest.workspaces.keys().collect(),
+    };
+    let dirs: Vec<PathBuf> = names
+        .iter()
+        .flat_map(|n| {
+            let ws = loaded.root.join(&loaded.manifest.workspaces[*n].path);
+            [ws.join("build"), ws.join("install")]
+        })
+        .filter(|d| d.is_dir())
+        .collect();
+    let stdin = std::io::stdin();
+    if !(stale_cache || colcon_failed) || dirs.is_empty() || !stdin.is_terminal() {
+        return Err(err.into());
+    }
+    eprintln!("{}", tr("cli.build.clean_offer"));
+    for dir in &dirs {
+        eprintln!("  {}", dir.display());
+    }
+    eprint!("{}", tr("cli.build.clean_confirm"));
+    let mut answer = String::new();
+    stdin.read_line(&mut answer)?;
+    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+        return Err(err.into());
+    }
+    for dir in &dirs {
+        // Does not follow symlinks: `--symlink-install` links into sources stay intact.
+        std::fs::remove_dir_all(dir).with_context(|| dir.display().to_string())?;
+    }
+    writeln!(out, "# {}", tr("cli.build.clean_retry"))?;
+    plan.perform(&mut out)?;
     out.flush()?;
     Ok(())
 }

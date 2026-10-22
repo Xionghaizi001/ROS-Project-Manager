@@ -435,6 +435,57 @@ fn native_build_plan_sources_underlays_first() {
 }
 
 #[test]
+fn native_build_deactivates_an_unusable_active_conda_only_without_build_conda() {
+    let text = format!("{FULL}\n[build]\nverify = ['ros2 pkg list']\n");
+    let m = Manifest::parse(&text, Path::new("t")).unwrap();
+    let provider = provider::for_manifest(&m);
+    let line = |plan: &rospm_core::plan::Plan| -> Vec<bool> {
+        plan.steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Run(c) => Some(
+                    c.preamble
+                        .last()
+                        .is_some_and(|l| l.contains("native.build.conda_deactivated"))
+                        || c.args.last().is_some_and(|a| {
+                            a.contains("native.build.conda_deactivated(")
+                                && a.ends_with("fi\nros2 pkg list")
+                        }),
+                ),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let host = bare_host();
+    let plain = provider.plan_build(&ctx(&m, &host), None, true).unwrap();
+    assert!(line(&plain).iter().all(|l| !l));
+
+    let mut host = bare_host();
+    host.conda.active = Some(PathBuf::from("/home/u/miniconda3"));
+    let plan = provider.plan_build(&ctx(&m, &host), None, true).unwrap();
+    assert!(plan
+        .render()
+        .contains("native.build.conda_active(prefix=/home/u/miniconda3)"));
+    // Every colcon command (after ROS and underlays are sourced) and the verify command.
+    assert_eq!(line(&plan), [true, true, true]);
+    match &plan.steps[1] {
+        Step::Run(c) => assert!(c.preamble[0].contains("/opt/ros/jazzy/setup.bash")),
+        other => panic!("unexpected step {other:?}"),
+    }
+
+    let conda = Manifest::parse(
+        &format!("{text}\n[build.conda]\nname = 'robot'\n"),
+        Path::new("t"),
+    )
+    .unwrap();
+    let plan = provider::for_manifest(&conda)
+        .plan_build(&ctx(&conda, &host), None, true)
+        .unwrap();
+    assert!(!plan.render().contains("native.build.conda_"));
+}
+
+#[test]
 fn logged_commands_forward_and_save_output_and_keep_the_failure() {
     let dir = std::env::temp_dir().join(format!("rospm-build-log-{}", std::process::id()));
     let log = dir.join("log dir/build.log");
