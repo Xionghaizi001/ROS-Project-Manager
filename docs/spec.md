@@ -141,7 +141,7 @@ sign = false
 
 `build.conda` 是所有 workspace 共用的默认选择。`name` 不能包含空白、`/`、`\`、`:`、`#` 或 NUL，不能以 `-` 开头，也不能为 `.` 或 `..`；`prefix` 允许空格，但不能是空白字符串或包含 NUL。清单中的相对 `prefix` 从清单所在目录解析；CLI 的相对 `--conda-prefix` 从调用时的当前目录解析；绝对路径直接使用。不展开 `~` 或环境变量，也不要求预览时路径已存在。
 
-`build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括受管环境选择），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再加载 ROS 与 underlay 并执行 colcon；`--dry-run` 展示该完整命令且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。
+`build --conda-env <name>` 与 `build --conda-prefix <path>` 互斥，任一参数均替换清单中的整个 Conda 选择（包括受管环境选择），只影响本次构建，不写回清单；清单仍须先通过结构校验。构建通过 `conda run --no-capture-output -n <name>` / `-p <path>` 启动受控 Bash，再按拓扑顺序加载 ROS 与 underlay 并执行 colcon；不依赖调用终端已激活的环境。编译前先确认环境存在（受管环境要求完成记录匹配），再在环境内检查 `python` 的 `sys.executable` 位于环境 prefix 下（解析符号链接后比较）、`colcon` 可用，任一不满足即报错并提示（受管环境或构建工具缺失时提示 `rospm apply`），从不回退到系统环境；通过时输出所用解释器。`--dry-run` 展示环境、解释器（`<prefix>/bin/python`，按名称选择时为该环境的 `python`）、上述检查与完整构建命令，且不执行、不创建文件。未声明 Conda 且未传覆盖参数时继续直接运行原有 colcon 命令。
 
 已有环境模式下，`apply` / `build` 在执行系统安装或编译之前查询 Conda 并检查环境是否存在，缺失时明确报错；不会创建、更新或接管外部环境。名称或路径本身不锁定包版本：`lock` 不为外部环境写锁记录并说明，`apply --locked` 对它仍只检查存在并在计划中说明没有可重放保证。
 
@@ -169,7 +169,7 @@ sign = false
 
 覆盖规则：显式锁只包含 Conda 包。定义中的 PyPI 依赖（`pip:` 子列表）必须全部写成 `name==version`（不接受范围、通配、URL、extras 或环境标记），重放时以 `pip install --no-deps` 安装，因此传递依赖也必须逐个固定；`lock` 用 `conda list --json` 核对环境中 channel 为 `pypi` 的包与这些固定完全一致（PEP 503 规范化名称），有未固定、多余或版本不同的包时不记录并列出。定义中的 `variables` 在重放后以 `conda env config vars set --prefix` 写入环境。
 
-`apply --locked` 在规划阶段（不写文件、不启动子进程）检查：`rospm.lock` 有本机平台的 `[[conda]]` 记录；记录的定义摘要与当前规范化定义一致；锁文件存在且摘要一致；锁文件为本机平台、含 `@EXPLICIT` 且每个包都有摘要；锁覆盖定义中的每个 Conda 依赖名称、`python` 版本与清单一致，有 pip 依赖时含 `pip`；pip 依赖全部为精确固定。任一不满足即失败并提示在该平台 `apply` 后重新 `lock`，从不退回求解。执行时依次运行 `conda create --yes --prefix <prefix> --file <锁文件>`（显式文件不经求解器，Conda 校验包摘要）、写入变量、`conda run --no-capture-output -p <prefix> python -m pip install --no-deps --no-input --disable-pip-version-check <固定>`，全部成功后才写入两行完成记录。已有但完成记录不匹配锁的目录（例如此前按定义求解创建）不会被覆盖，仍提示先移走目录。
+`apply --locked` 在规划阶段（不写文件、不启动子进程）检查：`rospm.lock` 有本机平台的 `[[conda]]` 记录；记录的定义摘要与当前规范化定义一致；锁文件存在且摘要一致；锁文件为本机平台、含 `@EXPLICIT` 且每个包都有摘要；锁覆盖定义中的每个 Conda 依赖名称、`python` 版本与清单一致，有 pip 依赖时含 `pip`；pip 依赖全部为精确固定。任一不满足即失败并提示在该平台 `apply` 后重新 `lock`，从不退回求解。执行时依次运行 `conda create --yes --prefix <prefix> --file <锁文件>`（显式文件不经求解器，Conda 校验包摘要）、写入变量、`conda run --no-capture-output -p <prefix> python -m pip install --no-deps --no-input --disable-pip-version-check <固定>`，全部成功后才写入两行完成记录。已有完成记录但不匹配锁的环境（例如此前按定义求解创建）删除后按锁重建；没有完成记录的目录不覆盖，提示先移走目录。
 
 构建工具 / Python ABI / CMake 缓存检查及 `env` / `shell` 对接仍见后续任务。
 

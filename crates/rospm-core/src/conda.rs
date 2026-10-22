@@ -44,6 +44,8 @@ const MANAGED_PREFIX: &str = ".rospm/conda/env";
 const DEFINITION: &str = ".rospm/conda/environment.yml";
 const READY: &str = ".rospm/conda/ready.sha256";
 const PENDING: &str = "pending\n";
+/// What every build command runs inside the environment.
+const BUILD_TOOLS: [&str; 1] = ["colcon"];
 
 #[derive(Debug, Clone)]
 pub enum Selection {
@@ -219,15 +221,27 @@ impl CondaStep {
     /// Preview includes the normalized definition and exact creation command.
     pub fn render(&self) -> String {
         let check = msg!("conda.check", selection = self.selection.label());
+        if !self.prepare {
+            let python = match &self.selection {
+                Selection::Prefix(prefix) => prefix.join("bin/python").display().to_string(),
+                Selection::Name(_) => format!("python ({})", self.selection.label()),
+            };
+            let checks = msg!(
+                "conda.build_checks",
+                python = python,
+                tools = BUILD_TOOLS.join(", ")
+            );
+            return match &self.managed {
+                Some(managed) => format!(
+                    "{check}; {}; {checks}",
+                    msg!("conda.require_ready", path = managed.ready.display())
+                ),
+                None => format!("{check}; {checks}"),
+            };
+        }
         let Some(managed) = &self.managed else {
             return check.to_string();
         };
-        if !self.prepare {
-            return format!(
-                "{check}; {}",
-                msg!("conda.require_ready", path = managed.ready.display())
-            );
-        }
         let source = managed
             .source
             .as_ref()
@@ -321,6 +335,75 @@ impl CondaStep {
     }
 
     fn perform_with(&self, out: &mut dyn Write, system: &dyn System) -> Result<()> {
+        let prefix = self.ensure(out, system)?;
+        if !self.prepare {
+            self.check_build_tools(&prefix, out, system)?;
+        }
+        Ok(())
+    }
+
+    /// Before building, prove that `python` and the build tools resolve
+    /// inside the environment, never silently from the system.
+    fn check_build_tools(
+        &self,
+        prefix: &Path,
+        out: &mut dyn Write,
+        system: &dyn System,
+    ) -> Result<()> {
+        let query = |cmd: Command| {
+            let args: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
+            system.query(&cmd.program, &args)
+        };
+        let selection = self.selection.label();
+        let found =
+            query(
+                self.command()
+                    .args(["python", "-c", "import sys; print(sys.executable)"]),
+            )
+            .map_err(|e| {
+                Error::Host(msg!(
+                    "conda.interpreter_missing",
+                    selection = selection,
+                    error = e.message()
+                ))
+            })?;
+        let found = PathBuf::from(found.trim());
+        let real = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if !real(&found).starts_with(real(prefix)) {
+            return Err(Error::Host(msg!(
+                "conda.interpreter_outside",
+                selection = selection,
+                found = found.display(),
+                prefix = prefix.display()
+            )));
+        }
+        writeln!(
+            out,
+            "{}",
+            msg!("conda.interpreter", python = found.display())
+        )
+        .map_err(|e| Error::io("<stdout>", e))?;
+        for tool in BUILD_TOOLS {
+            query(self.command().args([
+                "bash",
+                "--noprofile",
+                "--norc",
+                "-c",
+                &format!("command -v {tool}"),
+            ]))
+            .map_err(|_| {
+                Error::Host(msg!(
+                    "conda.build_tool_missing",
+                    tool = tool,
+                    selection = selection
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Prepares or checks the environment and returns its prefix.
+    fn ensure(&self, out: &mut dyn Write, system: &dyn System) -> Result<PathBuf> {
         if let Some(managed) = &self.managed {
             let conda = self.managed_conda(out, system)?;
             if managed.is_ready() {
@@ -330,7 +413,7 @@ impl CondaStep {
                     msg!("conda.reused", prefix = managed.prefix.display())
                 )
                 .map_err(|e| Error::io("<stdout>", e))?;
-                return Ok(());
+                return Ok(managed.prefix.clone());
             }
             if !self.prepare {
                 return Err(Error::Host(msg!(
@@ -382,32 +465,30 @@ impl CondaStep {
                 )));
             }
             fs::write(&managed.ready, managed.stamp()).map_err(|e| Error::io(&managed.ready, e))?;
-            return Ok(());
+            return Ok(managed.prefix.clone());
         }
 
         let text = system.query("conda", &["env", "list", "--json"])?;
         let envs: EnvironmentList = serde_json::from_str(&text)
             .map_err(|e| Error::Host(msg!("conda.query_invalid", error = e)))?;
-        let exists = match &self.selection {
-            Selection::Prefix(prefix) => prefix.join("conda-meta/history").is_file(),
+        let found = match &self.selection {
+            Selection::Prefix(prefix) => Some(prefix.clone()),
             Selection::Name(name) if name == "base" => {
                 let output = system.query("conda", &["info", "--base"])?;
-                Path::new(output.trim())
-                    .join("conda-meta/history")
-                    .is_file()
+                Some(PathBuf::from(output.trim()))
             }
-            Selection::Name(name) => envs.envs.iter().any(|p| {
-                p.file_name().is_some_and(|n| n == name.as_str())
-                    && p.join("conda-meta/history").is_file()
-            }),
+            Selection::Name(name) => envs
+                .envs
+                .into_iter()
+                .find(|p| p.file_name().is_some_and(|n| n == name.as_str())),
         };
-        if !exists {
-            return Err(Error::Host(msg!(
+        match found {
+            Some(prefix) if prefix.join("conda-meta/history").is_file() => Ok(prefix),
+            _ => Err(Error::Host(msg!(
                 "conda.existing_missing",
                 selection = self.selection.label()
-            )));
+            ))),
         }
-        Ok(())
     }
 }
 

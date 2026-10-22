@@ -94,6 +94,10 @@ struct Fake {
     explicit: String,
     /// Arguments of every replay command.
     replays: RefCell<Vec<Vec<String>>>,
+    /// `sys.executable` reported inside the environment; default `<prefix>/bin/python`.
+    interpreter: Option<PathBuf>,
+    /// `command -v colcon` fails inside the environment.
+    no_colcon: bool,
 }
 
 impl Default for Fake {
@@ -110,12 +114,42 @@ impl Default for Fake {
             listed: "[]".into(),
             explicit: String::new(),
             replays: RefCell::new(Vec::new()),
+            interpreter: None,
+            no_colcon: false,
         }
     }
 }
 
 impl System for Fake {
     fn query(&self, program: &str, args: &[&str]) -> Result<String> {
+        if let ["run", "--no-capture-output", flag, target, rest @ ..] = args {
+            let prefix = match *flag {
+                "-p" => PathBuf::from(target),
+                _ => self
+                    .envs
+                    .iter()
+                    .find(|p| p.ends_with(target))
+                    .cloned()
+                    .unwrap(),
+            };
+            return match rest {
+                ["python", "-c", _] => Ok(format!(
+                    "{}\n",
+                    self.interpreter
+                        .clone()
+                        .unwrap_or(prefix.join("bin/python"))
+                        .display()
+                )),
+                ["bash", "--noprofile", "--norc", "-c", "command -v colcon"] if !self.no_colcon => {
+                    Ok("/usr/bin/colcon\n".into())
+                }
+                _ => Err(Error::Host(msg!(
+                    "conda.query_failed",
+                    status = 1,
+                    error = ""
+                ))),
+            };
+        }
         if let ["list", kind, .., prefix] = args {
             assert!(Path::new(prefix).join("conda-meta/history").is_file());
             return Ok(match *kind {
@@ -346,6 +380,94 @@ fn external_environments_are_checked_without_writes_and_missing_ones_fail() {
         "external"
     );
     assert!(!project.0.join(".rospm").exists() && !project.0.join("user").exists());
+}
+
+#[test]
+fn build_requires_the_interpreter_and_tools_inside_the_environment() {
+    let project = Project::new();
+    let prefix = project.0.join("envs/robot");
+    fs::create_dir_all(prefix.join("conda-meta")).unwrap();
+    fs::write(prefix.join("conda-meta/history"), "external").unwrap();
+    let envs = vec![prefix.clone()];
+    for config in [
+        CondaBuild {
+            name: Some("robot".into()),
+            ..Default::default()
+        },
+        CondaBuild {
+            prefix: Some(PathBuf::from("envs/robot")),
+            ..Default::default()
+        },
+    ] {
+        let step = project.step(&config, false);
+        assert!(step.render().contains("conda.build_checks("));
+        let fake = Fake {
+            envs: envs.clone(),
+            ..Fake::default()
+        };
+        let mut out = Vec::new();
+        step.perform_with(&mut out, &fake).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains(prefix.join("bin/python").to_str().unwrap()),
+            "{out}"
+        );
+
+        // A system interpreter or a missing colcon stops the build.
+        let system = Fake {
+            envs: envs.clone(),
+            interpreter: Some("/usr/bin/python3".into()),
+            ..Fake::default()
+        };
+        let error = step.perform_with(&mut Vec::new(), &system).unwrap_err();
+        assert!(
+            error.to_string().contains("conda.interpreter_outside("),
+            "{error}"
+        );
+        let no_colcon = Fake {
+            envs: envs.clone(),
+            no_colcon: true,
+            ..Fake::default()
+        };
+        let error = step.perform_with(&mut Vec::new(), &no_colcon).unwrap_err();
+        assert!(
+            error.to_string().contains("conda.build_tool_missing("),
+            "{error}"
+        );
+    }
+    // apply only prepares; the checks belong to build.
+    let fake = Fake {
+        envs,
+        no_colcon: true,
+        ..Fake::default()
+    };
+    project
+        .step(
+            &CondaBuild {
+                name: Some("robot".into()),
+                ..Default::default()
+            },
+            true,
+        )
+        .perform_with(&mut Vec::new(), &fake)
+        .unwrap();
+    // A ready managed environment is checked at its project prefix.
+    let config = project.managed();
+    project
+        .step(&config, true)
+        .perform_with(&mut Vec::new(), &Fake::default())
+        .unwrap();
+    let step = project.step(&config, false);
+    assert!(step.render().contains(
+        project
+            .0
+            .join(MANAGED_PREFIX)
+            .join("bin/python")
+            .to_str()
+            .unwrap()
+    ));
+    step.perform_with(&mut Vec::new(), &Fake::default())
+        .unwrap();
 }
 
 #[test]

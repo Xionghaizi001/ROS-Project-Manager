@@ -263,6 +263,11 @@ manifest:
 conda:
   check: "check existing Conda environment %{selection} (read-only)"
   require_ready: "require managed environment completion record %{path}"
+  build_checks: "before building, require the interpreter to be inside the environment (%{python}) and the build tools %{tools} to be available there; never falls back to the system environment"
+  interpreter: "Python interpreter: %{python}"
+  interpreter_missing: "No Python interpreter can be run in Conda environment %{selection} (%{error}); rospm does not fall back to the system interpreter. For a managed environment run `rospm apply`; otherwise install Python into that environment"
+  interpreter_outside: "`python` in Conda environment %{selection} resolves to %{found}, outside the environment %{prefix}; rospm does not fall back to the system interpreter. For a managed environment run `rospm apply`; otherwise install Python into that environment"
+  build_tool_missing: "Build tool %{tool} is not available in Conda environment %{selection}; run `rospm apply` first to install the build tools"
   prepare: "prepare project Conda environment %{prefix} from %{source}; reuse only when the completed definition matches"
   definition: "normalized environment definition: %{path}"
   recreate: "remove the incomplete or outdated Conda environment %{prefix} that rospm created, then create it again"

@@ -258,6 +258,11 @@ manifest:
 conda:
   check: "检查已有 Conda 环境 %{selection}（只读）"
   require_ready: "要求存在受管环境完成记录 %{path}"
+  build_checks: "构建前确认解释器位于该环境内（%{python}），并检查环境中可用的构建工具 %{tools}；不回退到系统环境"
+  interpreter: "Python 解释器：%{python}"
+  interpreter_missing: "无法在 Conda 环境 %{selection} 中运行 Python 解释器（%{error}）；rospm 不会回退到系统解释器。受管环境请执行 `rospm apply`，已有环境请在其中安装 Python"
+  interpreter_outside: "Conda 环境 %{selection} 中的 `python` 解析为 %{found}，不在环境 %{prefix} 内；rospm 不会回退到系统解释器。受管环境请执行 `rospm apply`，已有环境请在其中安装 Python"
+  build_tool_missing: "Conda 环境 %{selection} 中找不到构建工具 %{tool}；请先执行 `rospm apply` 安装构建工具"
   prepare: "从 %{source} 准备项目专用 Conda 环境 %{prefix}；仅复用已完成且定义一致的环境"
   definition: "规范化环境定义：%{path}"
   recreate: "删除 rospm 创建的未完成或已过期的 Conda 环境 %{prefix}，然后重新创建"
