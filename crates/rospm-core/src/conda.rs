@@ -70,13 +70,21 @@ print(json.dumps({"python": "%d.%d" % sys.version_info[:2], "ros": ros, "failed"
 /// Points Python shebangs of installed executables at this interpreter, so
 /// `ros2 run` (which executes the file) uses the environment even when it is
 /// not activated. Symlinks (`--symlink-install`) lead into sources: left alone.
+/// Each argument lists one workspace's install base candidates, one per line;
+/// the first existing is used, none existing is an error.
 const PIN_SHEBANGS: &str = r##"import os, re, sys
 py = sys.executable
 if any(c.isspace() for c in py):
     print(f"shebangs not rewritten: {py} contains whitespace", file=sys.stderr)
     sys.exit()
 shebang = re.compile(rb"#![ \t]*(?:/usr/bin/env[ \t]+)?((?:\S*/)?python[0-9.]*)([ \t][^\n]*)?\n?")
-for top in sys.argv[1:]:
+tops = []
+for arg in sys.argv[1:]:
+    found = [c for c in arg.split("\n") if os.path.isdir(c)]
+    if not found:
+        sys.exit("install base not found: " + ", ".join(arg.split("\n")))
+    tops.append(found[0])
+for top in tops:
     for d, _, files in os.walk(top):
         for f in files:
             p = os.path.join(d, f)
@@ -400,14 +408,16 @@ impl CondaStep {
     }
 
     /// Run after building, inside the environment.
-    pub fn pin_shebangs(&self, install_dirs: impl IntoIterator<Item = PathBuf>) -> Command {
+    pub fn pin_shebangs(&self, install_bases: impl IntoIterator<Item = Vec<PathBuf>>) -> Command {
         self.command()
             .args(["python", "-I", "-c", PIN_SHEBANGS])
-            .args(
-                install_dirs
-                    .into_iter()
-                    .map(|d| d.to_string_lossy().into_owned()),
-            )
+            .args(install_bases.into_iter().map(|bases| {
+                bases
+                    .iter()
+                    .map(|d| d.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }))
     }
 
     /// Preview includes the normalized definition and exact creation command.

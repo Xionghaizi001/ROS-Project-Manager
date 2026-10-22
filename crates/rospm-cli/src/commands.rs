@@ -23,6 +23,7 @@ use rospm_core::platform::{ubuntu_codename, Platform, RosDistro};
 use rospm_core::probe::{
     EnvReport, Host, OsRelease, Status, DEFAULT_LOCALE_FILE, NATIVE_CORE_TOOLS, TOOLS,
 };
+use rospm_core::provider::native::{colcon_bases, existing_base};
 use rospm_core::provider::{self, Context, Shell};
 use rospm_core::repos::ReposFile;
 use rospm_core::snapshot::{Fetch, Http};
@@ -1169,10 +1170,20 @@ pub fn build(
     workspace: Option<&str>,
     conda_env: Option<String>,
     conda_prefix: Option<PathBuf>,
+    colcon_args: Vec<String>,
     no_env_check: bool,
     dry_run: bool,
 ) -> Result<()> {
     let mut loaded = load(global)?;
+    // After the manifest's build_args, so colcon's last-wins parsing lets the
+    // command line override them; never written back.
+    if !colcon_args.is_empty() {
+        for (name, ws) in &mut loaded.manifest.workspaces {
+            if workspace.is_none_or(|w| w == name) {
+                ws.colcon.build_args.extend(colcon_args.iter().cloned());
+            }
+        }
+    }
     if conda_env.is_some() || conda_prefix.is_some() {
         let mut conda = CondaBuild {
             name: conda_env,
@@ -1234,26 +1245,19 @@ fn run_build(
     // clean rebuild. Only interactively, and only with the user's consent.
     let stale_cache =
         matches!(&err, Error::Host(Message::Key { key, .. }) if *key == "conda.stale_cache");
-    let colcon_failed =
-        matches!(&err, Error::CommandFailed { command, .. } if command.contains("colcon build"));
-    // shortcut: assumes colcon's default `build` / `install` bases, like the cache checks.
-    let names: Vec<&String> = match workspace {
-        Some(name) => loaded
-            .manifest
-            .workspaces
-            .get_key_value(name)
-            .into_iter()
-            .map(|(k, _)| k)
-            .collect(),
-        None => loaded.manifest.workspaces.keys().collect(),
+    let colcon_failed = matches!(&err, Error::CommandFailed { command, .. } if (command.contains("colcon build") || command.contains("colcon --log-base")));
+    let workspaces: Vec<_> = match workspace {
+        Some(name) => loaded.manifest.workspaces.get(name).into_iter().collect(),
+        None => loaded.manifest.workspaces.values().collect(),
     };
-    let dirs: Vec<PathBuf> = names
+    // Configured base first, else colcon's default; neither existing: nothing to offer.
+    let dirs: Vec<PathBuf> = workspaces
         .iter()
-        .flat_map(|n| {
-            let ws = loaded.root.join(&loaded.manifest.workspaces[*n].path);
-            [ws.join("build"), ws.join("install")]
+        .flat_map(|ws| {
+            [("build-base", "build"), ("install-base", "install")]
+                .map(|(key, default)| existing_base(colcon_bases(&loaded.root, ws, key, default)))
         })
-        .filter(|d| d.is_dir())
+        .flatten()
         .collect();
     let stdin = std::io::stdin();
     if !(stale_cache || colcon_failed) || dirs.is_empty() || !stdin.is_terminal() {

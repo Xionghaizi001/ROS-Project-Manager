@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 use crate::lock::{Lock, Resolution};
-use crate::manifest::{Manifest, ProviderKind};
+use crate::manifest::{Manifest, ProviderKind, Workspace};
 use crate::message::Message;
 use crate::msg;
 use crate::package_xml::WorkspacePackages;
@@ -46,25 +46,100 @@ fn ros_setup_file(manifest: &Manifest, shell: Shell) -> String {
     format!("/opt/ros/{}/setup.{}", manifest.project.ros_distro, shell)
 }
 
-fn ws_setup_file(root: &Path, ws_path: &Path, shell: Shell) -> PathBuf {
-    root.join(ws_path)
-        .join("install")
-        .join(format!("setup.{shell}"))
+/// colcon's `--build-base` / `--install-base` (`key` without dashes) for a
+/// workspace, as candidates in lookup order: the configured base (the
+/// manifest's `build_args`, else the colcon defaults file), then colcon's
+/// `default`. Relative values are taken from the workspace directory, where
+/// colcon runs. Callers use the first that exists.
+// shortcut: a base set through a mixin is not seen; name it in build_args or the defaults file.
+pub fn colcon_bases(root: &Path, ws: &Workspace, key: &str, default: &str) -> Vec<PathBuf> {
+    let flag = format!("--{key}");
+    let args = &ws.colcon.build_args;
+    // argparse keeps the last occurrence.
+    let configured = args
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, a)| match a.strip_prefix(&flag) {
+            Some("") => args.get(i + 1).cloned(),
+            Some(rest) => rest.strip_prefix('=').map(String::from),
+            None => None,
+        })
+        .or_else(|| {
+            let file = ws
+                .colcon
+                .defaults
+                .as_ref()
+                .map(|f| root.join(f))
+                .or_else(colcon_defaults_file)?;
+            defaults_value(&file, key)
+        });
+    let ws_path = root.join(&ws.path);
+    let mut bases: Vec<PathBuf> = configured.map(|c| ws_path.join(c)).into_iter().collect();
+    let default = ws_path.join(default);
+    if !bases.contains(&default) {
+        bases.push(default);
+    }
+    bases
 }
 
-/// `source` lines for the ROS base and the given workspaces, guarded so a
-/// not-yet-built workspace is skipped instead of aborting.
-fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell) -> Vec<String> {
+/// Removes every `flag VALUE` / `flag=VALUE` from `args`; returns the last value.
+fn take_option(args: &mut Vec<String>, flag: &str) -> Option<String> {
+    let mut value = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].strip_prefix(flag) {
+            Some("") if i + 1 < args.len() => {
+                value = Some(args.remove(i + 1));
+                args.remove(i);
+            }
+            Some(rest) if rest.starts_with('=') => {
+                value = Some(rest[1..].to_string());
+                args.remove(i);
+            }
+            _ => i += 1,
+        }
+    }
+    value
+}
+
+/// The first of `bases` that is a directory now.
+pub fn existing_base(bases: Vec<PathBuf>) -> Option<PathBuf> {
+    bases.into_iter().find(|b| b.is_dir())
+}
+
+/// `source` lines for the ROS base and the given workspaces. Each workspace
+/// is looked up at run time in its install base candidates, so one built
+/// earlier in the same plan is found. A workspace built in neither is
+/// skipped, or stops the command when `required` (underlays of a build).
+fn source_lines(ctx: &Context, workspaces: &[String], shell: Shell, required: bool) -> Vec<String> {
     let mut lines = vec![format!(
         "source {}",
         shell_quote(&ros_setup_file(ctx.manifest, shell))
     )];
     for name in workspaces {
         let ws = &ctx.manifest.workspaces[name];
-        let setup = ws_setup_file(ctx.root, &ws.path, shell);
-        let q = shell_quote(&setup.to_string_lossy());
-        // `[ -f X ] && source X` would fail the whole `&&` chain when X is missing.
-        lines.push(format!("[ ! -f {q} ] || source {q}"));
+        let bases = colcon_bases(ctx.root, ws, "install-base", "install");
+        let mut line = String::new();
+        for (i, base) in bases.iter().enumerate() {
+            let q = shell_quote(&base.join(format!("setup.{shell}")).to_string_lossy());
+            let branch = if i == 0 { "if" } else { "elif" };
+            line.push_str(&format!("{branch} [ -f {q} ]; then source {q}; "));
+        }
+        if required {
+            let searched: Vec<String> = bases.iter().map(|b| b.display().to_string()).collect();
+            let error = msg!(
+                "native.build.underlay_missing",
+                name = name,
+                paths = searched.join(", ")
+            );
+            line.push_str(&format!(
+                "else echo {} >&2; exit 1; ",
+                shell_quote(&error.to_string())
+            ));
+        }
+        line.push_str("fi");
+        lines.push(line);
     }
     lines
 }
@@ -83,18 +158,23 @@ pub const BUILD_LOG: &str = ".rospm/log/build.log";
 /// the modules ROS builds need (its `python3` would win on PATH and in CMake's
 /// FindPython, which also reads `$CONDA_PREFIX`), drop it for this command.
 /// An environment that can build ROS is left alone. Runs after ROS is sourced.
-/// CMake caches (default `build` base) still naming the dropped environment
+/// CMake caches under `build_base` still naming the dropped environment
 /// would keep using it, so they stop the build, as in a Conda build.
-fn deactivate_unusable_conda(note: &str, stale: &str) -> String {
+fn deactivate_unusable_conda(note: &str, stale: &str, build_base: Option<&Path>) -> String {
+    let caches = match build_base {
+        Some(base) => format!("{}/*/CMakeCache.txt", shell_quote(&base.to_string_lossy())),
+        None => "/dev/null".into(),
+    };
     format!(
         "if [ -n \"${{CONDA_PREFIX:-}}\" ] && ! python3 -c 'import catkin_pkg, em, rclpy._rclpy_pybind11' >/dev/null 2>&1; then \
          root=$(dirname \"$(dirname \"${{CONDA_EXE:-$CONDA_PREFIX/bin/conda}}\")\"); \
          [ -d \"$root/conda-meta\" ] || root=$CONDA_PREFIX; \
          PATH=$(printf '%s' \"$PATH\" | tr : '\\n' | grep -vF -e \"$CONDA_PREFIX/\" -e \"$root/\" | paste -sd:); \
-         stale=$(grep -lF -e \"=$CONDA_PREFIX/\" -e \"=$root/\" build/*/CMakeCache.txt 2>/dev/null || true); \
+         stale=$(grep -lF -e \"=$CONDA_PREFIX/\" -e \"=$root/\" {} 2>/dev/null || true); \
          unset CONDA_PREFIX CONDA_DEFAULT_ENV CONDA_SHLVL CONDA_PROMPT_MODIFIER CONDA_EXE CONDA_PYTHON_EXE _CE_CONDA _CE_M; \
          hash -r; echo {} >&2; \
          if [ -n \"$stale\" ]; then echo {} >&2; printf '%s\\n' \"$stale\" >&2; exit 1; fi; fi",
+        caches,
         shell_quote(note),
         shell_quote(stale)
     )
@@ -111,13 +191,17 @@ fn colcon_defaults_file() -> Option<PathBuf> {
     Some(home.join("defaults.yaml"))
 }
 
-/// `build.cmake-args` of a colcon defaults file; empty when absent or unreadable.
-fn default_cmake_args(file: &Path) -> Vec<String> {
+/// `build.<key>` of a colcon defaults file; `None` when absent or unreadable.
+fn defaults_value<T: serde::de::DeserializeOwned>(file: &Path, key: &str) -> Option<T> {
     std::fs::read_to_string(file)
         .ok()
         .and_then(|text| serde_yaml::from_str::<serde_yaml::Value>(&text).ok())
-        .and_then(|v| serde_yaml::from_value(v["build"]["cmake-args"].clone()).ok())
-        .unwrap_or_default()
+        .and_then(|v| serde_yaml::from_value(v["build"][key].clone()).ok())
+}
+
+/// `build.cmake-args` of a colcon defaults file; empty when absent or unreadable.
+fn default_cmake_args(file: &Path) -> Vec<String> {
+    defaults_value(file, "cmake-args").unwrap_or_default()
 }
 
 /// `rm -f` rospm's own snapshot keyring and Ubuntu snapshot list (only rospm
@@ -945,13 +1029,18 @@ impl Provider for Native {
                     false,
                     None,
                 )?;
-                // shortcut: assumes colcon's default `build` base; a custom
-                // `--build-base` escapes the stale-cache check.
                 let build_dirs = targets
                     .iter()
-                    .map(|n| ctx.root.join(&m.workspaces[n].path).join("build"))
+                    .filter_map(|n| {
+                        existing_base(colcon_bases(
+                            ctx.root,
+                            &m.workspaces[n],
+                            "build-base",
+                            "build",
+                        ))
+                    })
                     .collect();
-                let ros = source_lines(ctx, &[], Shell::Bash).remove(0);
+                let ros = source_lines(ctx, &[], Shell::Bash, false).remove(0);
                 let step = step.for_build(ros, build_dirs);
                 plan.steps
                     .push(crate::plan::Step::Conda(Box::new(step.clone())));
@@ -963,9 +1052,9 @@ impl Provider for Native {
         let deactivate = match (&conda, &ctx.host.conda.active) {
             (None, Some(active)) => {
                 plan.note(msg!("native.build.conda_active", prefix = active.display()));
-                Some(deactivate_unusable_conda(
-                    &msg!("native.build.conda_deactivated", prefix = active.display()).to_string(),
-                    &msg!("native.build.conda_stale", prefix = active.display()).to_string(),
+                Some((
+                    msg!("native.build.conda_deactivated", prefix = active.display()).to_string(),
+                    msg!("native.build.conda_stale", prefix = active.display()).to_string(),
                 ))
             }
             _ => None,
@@ -978,27 +1067,36 @@ impl Provider for Native {
             let ws_path = ctx.root.join(&ws.path);
             let underlays = m.transitive_underlays(name)?;
 
-            let mut cmd = Command::new("colcon").arg("build");
+            let mut args = ws.colcon.build_args.clone();
+            // `--log-base` is an option of colcon itself: `colcon build --log-base` is rejected.
+            let log_base = take_option(&mut args, "--log-base");
+            let mut cmd = Command::new("colcon");
+            if let Some(base) = &log_base {
+                cmd = cmd.args(["--log-base", base]);
+            }
+            cmd = cmd.arg("build");
             if !ws.colcon.mixins.is_empty() {
                 cmd = cmd.arg("--mixin").args(ws.colcon.mixins.iter().cloned());
             }
-            cmd = cmd.args(ws.colcon.build_args.iter().cloned()).cwd(&ws_path);
+            cmd = cmd.args(args).cwd(&ws_path);
             if let Some(defaults) = &ws.colcon.defaults {
                 cmd = cmd.env(
                     "COLCON_DEFAULTS_FILE",
                     ctx.root.join(defaults).to_string_lossy(),
                 );
             }
-            for line in source_lines(ctx, &underlays, Shell::Bash) {
+            for line in source_lines(ctx, &underlays, Shell::Bash, true) {
                 cmd = cmd.preamble(line);
             }
-            if let Some(line) = &deactivate {
-                cmd = cmd.preamble(line);
+            if let Some((note, stale)) = &deactivate {
+                let base = existing_base(colcon_bases(ctx.root, ws, "build-base", "build"));
+                cmd = cmd.preamble(deactivate_unusable_conda(note, stale, base.as_deref()));
             }
             if let Some(conda) = &conda {
                 // colcon keeps only the last `--cmake-args`, so join the
                 // user's (command line, else defaults file) instead of adding one.
-                match cmd.args.iter().position(|a| a == "--cmake-args") {
+                // The last group is the one colcon keeps (command line after the manifest).
+                match cmd.args.iter().rposition(|a| a == "--cmake-args") {
                     Some(i) => {
                         cmd.args
                             .splice(i + 1..i + 1, PYTHON_DEFINES.map(String::from));
@@ -1029,9 +1127,12 @@ impl Provider for Native {
                     .args(["bash", "--noprofile", "--norc", "-c", &script])
                     .cwd(cwd);
             }
-            // shortcut: assumes colcon's default `log` base; parsers fall
-            // back to the combined log when per-package files are missing.
-            let packages = ws_path.join("log/latest_build/<package>/stdout_stderr.log");
+            // colcon's order: `--log-base`, `$COLCON_LOG_PATH`, `log`, from the workspace.
+            let log_dir = log_base
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("COLCON_LOG_PATH").map(PathBuf::from))
+                .map_or_else(|| ws_path.join("log"), |b| ws_path.join(b));
+            let packages = log_dir.join("latest_build/<package>/stdout_stderr.log");
             plan.run(cmd.log(format!(
                 "workspace: {name}\npython: {python}\npackage logs: {}\n",
                 packages.display()
@@ -1041,9 +1142,9 @@ impl Provider for Native {
             plan.note(msg!("conda.shebangs"));
             plan.run(
                 conda.pin_shebangs(
-                    targets
-                        .iter()
-                        .map(|n| ctx.root.join(&m.workspaces[n].path).join("install")),
+                    targets.iter().map(|n| {
+                        colcon_bases(ctx.root, &m.workspaces[n], "install-base", "install")
+                    }),
                 ),
             );
         }
@@ -1053,7 +1154,10 @@ impl Provider for Native {
             let env = self.env_script(ctx, Shell::Bash)?;
             for check in &m.build.verify {
                 let script = match &deactivate {
-                    Some(line) => format!("set -e\n{env}{line}\n{check}"),
+                    Some((note, stale)) => format!(
+                        "set -e\n{env}{}\n{check}",
+                        deactivate_unusable_conda(note, stale, None)
+                    ),
                     None => format!("set -e\n{env}{check}"),
                 };
                 let cmd = match &conda {
@@ -1092,7 +1196,7 @@ impl Provider for Native {
             )?;
             out.push_str(&step.activation(shell));
         }
-        for line in source_lines(ctx, &order, shell) {
+        for line in source_lines(ctx, &order, shell, false) {
             out.push_str(&line);
             out.push('\n');
         }
@@ -1580,7 +1684,9 @@ impl Provider for Native {
                     s,
                 );
             }
-            let built = ws_path.join("install").join("setup.bash").is_file();
+            let built = colcon_bases(ctx.root, ws, "install-base", "install")
+                .iter()
+                .any(|b| b.join("setup.bash").is_file());
             r.push(
                 "workspace",
                 format!("{name}: {}", ws.path.display()),
@@ -1633,7 +1739,7 @@ mod tests {
         }
         let script = format!(
             "set -e\n{}\necho \"PATH=$PATH\"; echo \"PREFIX=${{CONDA_PREFIX:-none}}\"",
-            super::deactivate_unusable_conda("NOTE", "STALE")
+            super::deactivate_unusable_conda("NOTE", "STALE", Some(&dir.join("build")))
         );
         let out = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &script])
@@ -1674,7 +1780,84 @@ mod tests {
         let (ok, out, err) = run_deactivation("stale", 1, true);
         assert!(!ok);
         assert_eq!(out, "");
-        assert_eq!(err, "NOTE\nSTALE\nbuild/pkg/CMakeCache.txt\n");
+        assert!(
+            err.starts_with("NOTE\nSTALE\n") && err.ends_with("/build/pkg/CMakeCache.txt\n"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn colcon_bases_prefer_build_args_then_the_defaults_file_then_the_default() {
+        use std::path::{Path, PathBuf};
+        let root = std::env::temp_dir().join(format!("rospm-bases-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("d.yaml"), "build:\n  build-base: from_file\n").unwrap();
+        let ws = |args: &[&str], defaults: Option<&str>| {
+            let mut ws: crate::manifest::Workspace = toml::from_str("path = 'w'").unwrap();
+            ws.colcon.build_args = args.iter().map(|a| a.to_string()).collect();
+            ws.colcon.defaults = defaults.map(PathBuf::from);
+            ws
+        };
+        let bases = |ws: &crate::manifest::Workspace, key, default| {
+            super::colcon_bases(&root, ws, key, default)
+        };
+        let w = root.join("w");
+        let with_args = ws(
+            &["--build-base", "a", "--build-base=b", "--install-base=/abs"],
+            Some("d.yaml"),
+        );
+        assert_eq!(
+            bases(&with_args, "build-base", "build"),
+            [w.join("b"), w.join("build")]
+        );
+        assert_eq!(
+            bases(&with_args, "install-base", "install"),
+            [PathBuf::from("/abs"), w.join("install")]
+        );
+        let from_file = ws(&["--symlink-install"], Some("d.yaml"));
+        assert_eq!(
+            bases(&from_file, "build-base", "build"),
+            [w.join("from_file"), w.join("build")]
+        );
+        assert_eq!(
+            bases(&from_file, "install-base", "install"),
+            [w.join("install")]
+        );
+        let same = ws(&["--build-base", "./build"], None);
+        assert_eq!(bases(&same, "build-base", "build"), [w.join("build")]);
+        assert_eq!(
+            super::existing_base(vec![w.join("b"), root.clone()]).as_deref(),
+            Some(root.as_path())
+        );
+        assert_eq!(
+            super::existing_base(vec![Path::new("/nonexistent/x").into()]),
+            None
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn take_option_removes_every_occurrence_and_keeps_the_last_value() {
+        let mut args: Vec<String> = [
+            "--log-base",
+            "a",
+            "-x",
+            "--log-base=b",
+            "--log-basement",
+            "--log-base",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            super::take_option(&mut args, "--log-base").as_deref(),
+            Some("b")
+        );
+        // A trailing flag without a value is left for colcon to reject.
+        assert_eq!(args, ["-x", "--log-basement", "--log-base"]);
+        assert_eq!(
+            super::take_option(&mut vec!["-x".into()], "--log-base"),
+            None
+        );
     }
 
     #[test]

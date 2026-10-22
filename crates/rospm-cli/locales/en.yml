@@ -142,7 +142,8 @@ cli:
     workspace: "Build only this workspace (its underlays must already be built)"
     conda_env: "Use this Conda environment name for this build, overriding build.conda (mutually exclusive with --conda-prefix)"
     conda_prefix: "Use this Conda prefix for this build (relative to the current directory), overriding build.conda (mutually exclusive with --conda-env)"
-    clean_offer: "The build failed. Stale build outputs (for example CMake caches naming another Python interpreter) are a common cause. Delete these directories and rebuild?"
+    colcon_args: "Extra `colcon build` arguments after `--`, appended to the manifest's build_args for this run only (later ones win; never written back). Without <workspace> they apply to every workspace built. Only `colcon build`: other verbs run in `rospm shell`"
+    clean_offer: "The build failed. Stale build outputs (for example CMake caches naming another Python interpreter) are a common cause. Delete these whole directories (including packages not built this time) and rebuild?"
     clean_confirm: "delete them and retry the build? [y/N] "
     clean_retry: "deleted; retrying the build"
   env:
@@ -467,6 +468,7 @@ native:
     conda_active: "Conda environment %{prefix} is active in this terminal but build.conda is not set: if its python3 cannot import catkin_pkg, em and rclpy, each build command runs with it deactivated (pass --conda-env / --conda-prefix to build inside a Conda environment)"
     conda_deactivated: "rospm: the active Conda environment %{prefix} cannot build ROS (python3 cannot import catkin_pkg, em or rclpy); running this command with it deactivated"
     conda_stale: "rospm: these CMake caches still refer to the Conda environment %{prefix} and would keep using it; delete the build and install directories of the listed packages and retry, or build inside a Conda environment with --conda-env / --conda-prefix:"
+    underlay_missing: "workspace `%{name}` is not built (no setup file in %{paths}); build it first with `rospm build %{name}`"
 
 probe:
   present: "present"

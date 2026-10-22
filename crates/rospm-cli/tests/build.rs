@@ -401,6 +401,36 @@ fn apply_build_previews_preparation_then_build_and_verify_without_writing() {
     let build = plan.find("colcon build").expect(&plan);
     let verify = plan.rfind("ros2 pkg list").expect(&plan);
     assert!(build < verify, "{plan}");
+    // Command line colcon arguments are for `build` only: a restore depends on the manifest alone.
+    let out = rospm()
+        .current_dir(&dir)
+        .args([
+            "apply",
+            "--build",
+            "--dry-run",
+            "--",
+            "--packages-select",
+            "a",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let shown = preview(
+        &dir,
+        &[
+            "main",
+            "--",
+            "--packages-select",
+            "a b",
+            "--build-base",
+            "b2",
+        ],
+    );
+    assert!(
+        shown.contains("--packages-select 'a b' --build-base b2"),
+        "{shown}"
+    );
+    assert!(!preview(&dir, &[]).contains("--build-base"));
     // Plain `build` never runs the verify commands.
     assert!(!preview(&dir, &[]).contains("ros2 pkg list"));
     assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), text);

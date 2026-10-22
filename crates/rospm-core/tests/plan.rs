@@ -628,7 +628,7 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
         assert!(deps_script.contains("COLCON_DEFAULTS_FILE=/proj/colcon/deps.defaults.yaml"));
         let main_script = &commands[1].args[8];
         assert!(main_script.contains("deps_ws/install/setup.bash"));
-        // A not-yet-built underlay must not stop the `&&` chain before colcon.
+        // An underlay built in neither install base stops the build with a reason.
         let guard = main_script
             .split(" && ")
             .find(|l| l.contains("deps_ws/install/setup.bash"))
@@ -637,9 +637,88 @@ fn conda_build_wraps_every_workspace_and_preserves_colcon_configuration() {
             .args(["-c", &format!("set -e\n{guard} && echo colcon")])
             .output()
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&ran.stdout), "colcon\n", "{guard}");
+        assert!(!ran.status.success(), "{guard}");
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "", "{guard}");
+        assert!(String::from_utf8_lossy(&ran.stderr)
+            .contains("native.build.underlay_missing(name=deps"));
         assert!(main_script.contains("--mixin release ccache --symlink-install"));
     }
+}
+
+#[test]
+fn underlays_are_sourced_from_the_configured_install_base_then_the_default() {
+    let root = std::env::temp_dir().join(format!("rospm-underlay-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("colcon")).unwrap();
+    std::fs::write(
+        root.join("colcon/deps.defaults.yaml"),
+        "build:\n  install-base: out/inst\n",
+    )
+    .unwrap();
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = bare_host();
+    let mut context = ctx(&m, &host);
+    context.root = &root;
+    let plan = provider::for_manifest(&m)
+        .plan_build(&context, Some("main"), false)
+        .unwrap();
+    let Step::Run(c) = &plan.steps[0] else {
+        panic!("unexpected plan {plan:?}")
+    };
+    let line = c.preamble[1].clone();
+    let run = |line: &str| {
+        std::process::Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                &format!("set -e\n{line}\necho done"),
+            ])
+            .output()
+            .unwrap()
+    };
+    let setup = |dir: &str| {
+        let dir = root.join("deps_ws").join(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("setup.bash"), format!("echo {}\n", dir.display())).unwrap();
+    };
+
+    let out = run(&line);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("native.build.underlay_missing(name=deps"),
+        "{err}"
+    );
+    assert!(
+        err.contains("deps_ws/out/inst, ") && err.contains("deps_ws/install)"),
+        "{err}"
+    );
+
+    setup("install");
+    let out = String::from_utf8(run(&line).stdout).unwrap();
+    assert!(
+        out.starts_with(&format!("{}\n", root.join("deps_ws/install").display())),
+        "{out}"
+    );
+    setup("out/inst");
+    let out = String::from_utf8(run(&line).stdout).unwrap();
+    assert!(
+        out.starts_with(&format!("{}\n", root.join("deps_ws/out/inst").display())),
+        "{out}"
+    );
+
+    // `rospm env` skips a workspace built in neither base instead of failing.
+    std::fs::remove_dir_all(root.join("ws")).ok();
+    let env = provider::for_manifest(&m)
+        .env_script(&context, Shell::Bash)
+        .unwrap();
+    let ws_line = env
+        .lines()
+        .find(|l| l.contains("/ws/install/setup.bash"))
+        .unwrap();
+    assert!(run(ws_line).status.success());
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
@@ -672,12 +751,26 @@ fn conda_build_pins_python_shebangs_to_the_environment() {
     let data = node("data.py", "#!/usr/bin/python3\n", 0o644);
     let linked = dir.join("lib/pkg/linked");
     std::os::unix::fs::symlink(&data, &linked).unwrap();
+    // One argument per workspace: configured base, then the default.
+    assert_eq!(pin.args[8..], ["/proj/deps_ws/install", "/proj/ws/install"]);
+    let missing = dir.join("missing");
     let out = std::process::Command::new("python3")
         .args(&pin.args[5..8])
-        .arg(&dir)
+        .arg(format!("{}\n{}", missing.display(), dir.display()))
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
+    let none = std::process::Command::new("python3")
+        .args(&pin.args[5..8])
+        .arg(format!(
+            "{}\n{}",
+            missing.display(),
+            missing.join("x").display()
+        ))
+        .output()
+        .unwrap();
+    assert!(!none.status.success());
+    assert!(String::from_utf8_lossy(&none.stderr).contains("install base not found"));
     let python = String::from_utf8(
         std::process::Command::new("python3")
             .args(["-I", "-c", "import sys; print(sys.executable)"])
@@ -745,6 +838,61 @@ fn conda_build_passes_the_environment_interpreter_to_cmake() {
         .unwrap();
     assert!(String::from_utf8_lossy(&ran.stdout)
         .starts_with("-DPython3_EXECUTABLE=/env dir/bin/python\n"));
+}
+
+#[test]
+fn command_line_build_args_override_the_manifest() {
+    // `rospm build -- …` appends to build_args in memory.
+    let text = FULL.replace(
+        r#"build_args = ["--symlink-install", "--event-handlers""#,
+        r#"build_args = ["--cmake-args", "-DFOO=1", "--log-base", "old", "--symlink-install", "--event-handlers""#,
+    );
+    let mut m = Manifest::parse(
+        &format!("{text}\n[build.conda]\nname = 'robot'\n"),
+        Path::new("t"),
+    )
+    .unwrap();
+    m.workspaces["main"].colcon.build_args.extend(
+        [
+            "--packages-select",
+            "a",
+            "--cmake-args",
+            "-DCMAKE_BUILD_TYPE=Debug",
+            "--log-base=lg",
+        ]
+        .map(String::from),
+    );
+    let host = bare_host();
+    let plan = provider::for_manifest(&m)
+        .plan_build(&ctx(&m, &host), Some("main"), false)
+        .unwrap();
+    let Some(Step::Run(c)) = plan.steps.iter().find(|s| matches!(s, Step::Run(_))) else {
+        panic!("no build command")
+    };
+    let script = &c.args[8];
+    // The interpreter joins the last `--cmake-args`, the group colcon keeps.
+    assert!(
+        script.contains(r#"--cmake-args "-DPython3_EXECUTABLE=$CONDA_PREFIX/bin/python""#)
+            && script.ends_with(
+                r#""-DPYTHON_EXECUTABLE=$CONDA_PREFIX/bin/python" -DCMAKE_BUILD_TYPE=Debug"#
+            ),
+        "{script}"
+    );
+    assert!(
+        script.contains("--cmake-args -DFOO=1 --symlink-install"),
+        "{script}"
+    );
+    // `--log-base` moves before the verb; the command line value wins.
+    assert!(
+        script.contains("colcon --log-base lg build --mixin"),
+        "{script}"
+    );
+    assert_eq!(script.matches("--log-base").count(), 1, "{script}");
+    assert!(c
+        .log
+        .as_deref()
+        .unwrap()
+        .contains("package logs: /proj/ws/lg/latest_build/<package>/stdout_stderr.log"));
 }
 
 #[test]

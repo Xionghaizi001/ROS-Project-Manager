@@ -124,6 +124,8 @@ enum Cmd {
         no_env_check: bool,
         #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
+        #[arg(last = true, value_name = "COLCON_BUILD_ARGS", help = tr("cli.build.colcon_args"))]
+        colcon_args: Vec<String>,
     },
 
     #[command(about = tr("cli.env.about"))]
@@ -302,11 +304,13 @@ fn main() -> ExitCode {
             conda_prefix,
             no_env_check,
             dry_run,
+            colcon_args,
         } => commands::build(
             &global,
             workspace.as_deref(),
             conda_env,
             conda_prefix,
+            colcon_args,
             no_env_check,
             dry_run,
         ),

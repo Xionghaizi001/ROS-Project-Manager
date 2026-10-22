@@ -137,7 +137,8 @@ cli:
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
     conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
     conda_prefix: "本次构建使用此 Conda 环境路径（相对于当前目录），覆盖 build.conda（与 --conda-env 互斥）"
-    clean_offer: "构建失败。旧的构建产物（如记录了其它 Python 解释器的 CMake 缓存）是常见原因。是否删除以下目录后重新构建？"
+    colcon_args: "`--` 之后的 `colcon build` 参数，仅本次追加在清单 build_args 之后（同名参数后者生效，不写回清单）。未指定 <workspace> 时作用于每个要构建的 workspace。只透传 `colcon build`，其它子命令请在 `rospm shell` 中执行"
+    clean_offer: "构建失败。旧的构建产物（如记录了其它 Python 解释器的 CMake 缓存）是常见原因。是否删除以下整个目录（包括本次未选择的包）后重新构建？"
     clean_confirm: "删除并重试构建？[y/N] "
     clean_retry: "已删除，重新构建"
   env:
@@ -462,6 +463,7 @@ native:
     conda_active: "当前终端激活了 Conda 环境 %{prefix}，但清单未设置 build.conda：若其 python3 无法导入 catkin_pkg、em 与 rclpy，每条构建命令都会先取消激活该环境再执行（如需在 Conda 环境中构建，请使用 --conda-env / --conda-prefix）"
     conda_deactivated: "rospm：当前激活的 Conda 环境 %{prefix} 无法构建 ROS（python3 无法导入 catkin_pkg、em 或 rclpy），本条命令取消激活该环境后执行"
     conda_stale: "rospm：以下 CMake 缓存仍引用 Conda 环境 %{prefix}，会继续使用该环境；请删除所列包的 build 与 install 目录后重试，或使用 --conda-env / --conda-prefix 在 Conda 环境中构建："
+    underlay_missing: "workspace `%{name}` 尚未构建（%{paths} 中均无 setup 文件）；请先执行 `rospm build %{name}`"
 
 probe:
   present: "存在"
