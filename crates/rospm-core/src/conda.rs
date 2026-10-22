@@ -36,6 +36,7 @@ const MANAGED_PREFIX: &str = ".rospm/conda/env";
 const DEFINITION: &str = ".rospm/conda/environment.yml";
 const READY: &str = ".rospm/conda/ready.sha256";
 const DEFAULT_LOCK: &str = "conda-{platform}.lock";
+const PENDING: &str = "pending\n";
 
 /// The explicit lock of `platform`, relative to the manifest directory.
 pub fn lock_path(managed: &ManagedConda, platform: Platform) -> String {
@@ -249,6 +250,22 @@ impl CondaStep {
             Some(bootstrap) => crate::Message::text(bootstrap.render()),
             None => msg!("conda.tool_path_only", minimum = miniforge().minimum_conda),
         };
+        let prefix = managed.prefix.display();
+        if managed.is_ready() {
+            return format!("{tool}\n{}", msg!("conda.reused", prefix = prefix));
+        }
+        // What perform will do with a prefix that is already there.
+        let tool = match (
+            fs::symlink_metadata(&managed.prefix).is_ok(),
+            managed.ready.exists(),
+        ) {
+            (false, _) => tool.to_string(),
+            (true, true) => format!("{tool}\n{}", msg!("conda.recreate", prefix = prefix)),
+            (true, false) => format!(
+                "{tool}\n{}",
+                msg!("conda.managed_conflict", prefix = prefix)
+            ),
+        };
         if let Some(replay) = &managed.replay {
             let mut lines = vec![
                 tool.to_string(),
@@ -333,23 +350,31 @@ impl CondaStep {
                     prefix = managed.prefix.display()
                 )));
             }
-            // Never adopt or overwrite a directory just because it has the
-            // right name. A failed create also remains visibly incomplete.
-            if managed.prefix.exists() {
-                return Err(Error::Host(msg!(
-                    "conda.managed_conflict",
-                    prefix = managed.prefix.display()
-                )));
-            }
-            // Invalidate any stale completion stamp before starting creation.
-            if managed.ready.exists() {
-                fs::remove_file(&managed.ready).map_err(|e| Error::io(&managed.ready, e))?;
+            // A completion record, even a pending or outdated one, means rospm
+            // created the prefix: an interrupted or outdated environment is
+            // recreated. Never adopt or overwrite a directory without one.
+            if fs::symlink_metadata(&managed.prefix).is_ok() {
+                if !managed.ready.exists() {
+                    return Err(Error::Host(msg!(
+                        "conda.managed_conflict",
+                        prefix = managed.prefix.display()
+                    )));
+                }
+                writeln!(
+                    out,
+                    "{}",
+                    msg!("conda.recreate", prefix = managed.prefix.display())
+                )
+                .map_err(|e| Error::io("<stdout>", e))?;
+                fs::remove_dir_all(&managed.prefix).map_err(|e| Error::io(&managed.prefix, e))?;
             }
             let parent = managed
                 .definition
                 .parent()
                 .expect("project definition has a parent");
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+            // Claims the prefix before creation; never a valid stamp.
+            fs::write(&managed.ready, PENDING).map_err(|e| Error::io(&managed.ready, e))?;
             fs::write(&managed.definition, &managed.contents)
                 .map_err(|e| Error::io(&managed.definition, e))?;
             match &managed.replay {
@@ -1233,18 +1258,19 @@ mod tests {
             .step(&config, false)
             .perform_with(&mut Vec::new(), &fake)
             .unwrap();
+        // A changed definition recreates the environment rospm created.
         let mut changed = config;
         changed.managed.as_mut().unwrap().python = "3.11".into();
-        let error = project
-            .step(&changed, true)
-            .perform_with(&mut Vec::new(), &fake)
-            .unwrap_err();
-        assert!(error.to_string().contains("conda.managed_conflict"));
-        assert_eq!(fake.creates.borrow().len(), 1);
+        let step = project.step(&changed, true);
+        assert!(step.render().contains("conda.recreate("));
+        step.perform_with(&mut Vec::new(), &fake).unwrap();
+        assert_eq!(fake.creates.borrow().len(), 2);
+        assert!(step.managed.as_ref().unwrap().is_ready());
+        assert!(step.render().contains("conda.reused("));
     }
 
     #[test]
-    fn failed_create_and_unprepared_build_never_mark_ready_or_adopt_directories() {
+    fn failed_create_is_redone_but_foreign_directories_are_never_adopted() {
         let project = Project::new();
         let config = project.managed();
         let fake = Fake {
@@ -1259,11 +1285,37 @@ mod tests {
         let step = project.step(&config, true);
         let result = step.perform_with(&mut Vec::new(), &fake);
         assert!(matches!(result, Err(Error::CommandFailed { .. })));
-        assert!(!project.0.join(READY).exists());
-        // The partial environment is neither adopted nor recreated.
-        assert!(step.perform_with(&mut Vec::new(), &fake).is_err());
-        assert_eq!(fake.creates.borrow().len(), 1);
-        assert!(!project.0.join(READY).exists());
+        // The partial environment is never ready, not even for build.
+        assert!(!step.managed.as_ref().unwrap().is_ready());
+        assert!(project
+            .step(&config, false)
+            .perform_with(&mut Vec::new(), &fake)
+            .is_err());
+        // Rerunning apply recreates it from scratch.
+        assert!(step.render().contains("conda.recreate("));
+        fs::write(project.0.join(MANAGED_PREFIX).join("partial"), "").unwrap();
+        step.perform_with(&mut Vec::new(), &Fake::default())
+            .unwrap();
+        assert!(!project.0.join(MANAGED_PREFIX).join("partial").exists());
+        assert!(step.managed.as_ref().unwrap().is_ready());
+
+        // A prefix without rospm's record is someone else's: left untouched.
+        let foreign = Project::new();
+        fs::create_dir_all(foreign.0.join(MANAGED_PREFIX).join("conda-meta")).unwrap();
+        fs::write(
+            foreign.0.join(MANAGED_PREFIX).join("conda-meta/history"),
+            "theirs",
+        )
+        .unwrap();
+        let step = foreign.step(&config, true);
+        assert!(step.render().contains("conda.managed_conflict("));
+        let error = step.perform_with(&mut Vec::new(), &fake).unwrap_err();
+        assert!(error.to_string().contains("conda.managed_conflict"));
+        assert_eq!(
+            fs::read_to_string(foreign.0.join(MANAGED_PREFIX).join("conda-meta/history")).unwrap(),
+            "theirs"
+        );
+        assert!(!foreign.0.join(READY).exists());
     }
 
     #[test]
@@ -1550,14 +1602,13 @@ mod tests {
         let text = explicit("linux-64", &PACKAGES[..1]);
         fs::write(solved.0.join(&other.lock), &text).unwrap();
         other.lock_sha256 = sha256_hex(&text);
-        let error = locked_step(&solved, &config, &lock_with(vec![other]))
-            .unwrap()
-            .perform_with(&mut Vec::new(), &fake)
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("conda.managed_conflict"),
-            "{error}"
-        );
+        // apply --locked replaces it with the replay instead.
+        let step = locked_step(&solved, &config, &lock_with(vec![other])).unwrap();
+        assert!(step.render().contains("conda.recreate("));
+        let replayer = Fake::default();
+        step.perform_with(&mut Vec::new(), &replayer).unwrap();
+        assert!(replayer.creates.borrow().is_empty());
+        assert!(step.managed.as_ref().unwrap().is_ready());
     }
 
     #[test]

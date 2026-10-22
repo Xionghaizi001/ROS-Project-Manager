@@ -159,7 +159,7 @@ sign = false
 
 `environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理（`dependencies` 中的 `pip:` 子列表由 Conda 调用 pip 安装），不合并清单的 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
 
-规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要加 Conda subdir（如 `linux-aarch64`，从其它架构拷来的 prefix 因此不会被当作就绪），按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。已存在但无匹配完成记录的目录（包括创建中断或定义变化）不会被覆盖，当前提示用户先移走目录再执行 `apply`；自动恢复与更新属于后续幂等性任务。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
+规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要加 Conda subdir（如 `linux-aarch64`，从其它架构拷来的 prefix 因此不会被当作就绪），按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。创建开始前先写入 `pending` 记录以标明该 prefix 归 rospm 所有；`apply` 遇到有记录但不匹配的 prefix（创建中断、定义变化，或 `--locked` 时非按该锁重放的环境）会删除后重建，`--dry-run` 预先说明；完全没有记录的已有目录视为外部目录，不覆盖并提示用户先移走再执行 `apply`。该记录只表示创建完成及定义一致，不是包版本锁，也不检测用户手动修改包造成的漂移。
 
 #### 受管环境的锁定与重放
 
