@@ -15,6 +15,8 @@ use crate::Message;
 
 mod cpp;
 pub use cpp::parse_cpp;
+mod python;
+pub use python::parse_python;
 
 /// Stable rule identifiers, shared by tools reporting the same kind of error.
 /// Adding a code does not imply that its parser has been implemented.

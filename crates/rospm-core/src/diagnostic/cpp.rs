@@ -466,7 +466,7 @@ fn split_location(line: &str) -> Option<(Location, &str)> {
 }
 
 /// Remove CSI (`ESC [ … final`) and OSC (`ESC ] … BEL|ESC \`) sequences.
-fn strip_ansi(s: &str) -> String {
+pub(super) fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
