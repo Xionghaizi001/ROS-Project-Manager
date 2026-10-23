@@ -634,6 +634,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "rospm-core",
  "rust-i18n",
  "serde",

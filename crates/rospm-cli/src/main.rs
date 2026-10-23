@@ -1,3 +1,4 @@
+mod build_summary;
 mod commands;
 mod i18n;
 
@@ -255,6 +256,18 @@ fn main() -> ExitCode {
         json: cli.json,
     };
 
+    let build_json = global.json && matches!(&cli.command, Cmd::Build { .. } | Cmd::Apply { .. });
+    let redirect = if build_json {
+        match build_summary::JsonOutput::redirect() {
+            Ok(guard) => Some(guard),
+            Err(err) => {
+                eprintln!("{err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let result = match cli.command {
         Cmd::Init {
             from_env,
@@ -327,14 +340,27 @@ fn main() -> ExitCode {
         Cmd::Help { command } => print_help(&command),
     };
 
+    drop(redirect);
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            if build_json {
+                println!("{}", serde_json::json!({"ok": true}));
+            }
+            ExitCode::SUCCESS
+        }
         Err(err) => {
             let text = commands::describe(&err);
             if global.json {
-                let payload = serde_json::json!({ "ok": false, "error": text });
+                let mut payload = serde_json::json!({ "ok": false, "error": text });
+                if let Some(summary) = err.downcast_ref::<build_summary::Summary>() {
+                    payload["build_summary"] =
+                        serde_json::to_value(summary).expect("serializable summary");
+                }
                 println!("{payload}");
             } else {
+                if let Some(summary) = err.downcast_ref::<build_summary::Summary>() {
+                    build_summary::print(summary);
+                }
                 eprintln!("{}", rospm_core::msg!("cli.err.prefix", text = text));
             }
             ExitCode::FAILURE

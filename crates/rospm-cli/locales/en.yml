@@ -138,7 +138,7 @@ cli:
     confirm: "proceed with the plan above? [y/N] "
     aborted: "aborted"
   build:
-    about: "Build workspaces with colcon in overlay order [produces artifacts]"
+    about: "Build workspaces with colcon in overlay order; summarize failures with the full log path (--json keeps stdout machine-readable) [produces artifacts]"
     workspace: "Build only this workspace (its underlays must already be built)"
     conda_env: "Use this Conda environment name for this build, overriding build.conda (mutually exclusive with --conda-prefix)"
     conda_prefix: "Use this Conda prefix for this build (relative to the current directory), overriding build.conda (mutually exclusive with --conda-env)"
@@ -679,3 +679,8 @@ diagnostic:
   dependency_skipped: "Dependency %{dependency} is in rosdep skip_keys; deps install will not restore it. Verify the alternative provider or intentionally revise the skip configuration"
   dependency_rosdep_disabled: "rosdep is disabled in the manifest; deps install will not restore these keys. Verify how dependencies are supplied before changing that setting"
   dependency_rosdep_missing: "Native rosdep/dpkg checks report dependency %{dependency} unresolved at installation level: not all of [%{packages}] are installed. Review `rospm deps install --dry-run`, then `rospm deps install`; if ROS/rosdep prerequisites are absent, review `rospm apply --dry-run` first. This does not prove it is the only cause of the build failure"
+
+build_summary:
+  title: "Build failure summary (reported errors, not a root-cause verdict):"
+  consequences: "%{count} downstream failure/result lines; see the full log."
+  log: "Full log: %{path} (summary may be abbreviated)"

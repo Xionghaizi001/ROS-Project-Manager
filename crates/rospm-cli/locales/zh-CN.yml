@@ -133,7 +133,7 @@ cli:
     confirm: "按上面的计划继续？[y/N] "
     aborted: "已中止"
   build:
-    about: "按叠加顺序用 colcon 编译 workspace [产出产物]"
+    about: "按叠加顺序用 colcon 编译 workspace；失败时显示摘要和完整日志路径（--json 保证 stdout 为机器可读结果）[产出产物]"
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
     conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
     conda_prefix: "本次构建使用此 Conda 环境路径（相对于当前目录），覆盖 build.conda（与 --conda-env 互斥）"
@@ -674,3 +674,8 @@ diagnostic:
   dependency_skipped: "依赖 %{dependency} 在 rosdep skip_keys 中，deps install 不会还原它；请核对替代来源，或明确调整跳过配置"
   dependency_rosdep_disabled: "清单已禁用 rosdep，deps install 不会还原这些键；更改配置前请核对依赖的实际提供方式"
   dependency_rosdep_missing: "native 的 rosdep / dpkg 检查报告依赖 %{dependency} 的安装集合不完整：[%{packages}] 未全部安装。请先审阅 `rospm deps install --dry-run`，再执行 `rospm deps install`；若缺少 ROS / rosdep 前置环境，先审阅 `rospm apply --dry-run`。这不代表它是构建失败的唯一原因"
+
+build_summary:
+  title: "构建失败摘要（工具报错，不代表唯一根因）："
+  consequences: "%{count} 条后续失败 / 汇总信息，见完整日志。"
+  log: "完整日志：%{path}（摘要可能省略部分内容）"

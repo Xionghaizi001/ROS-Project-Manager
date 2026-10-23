@@ -372,6 +372,98 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     assert!(saved.contains("==> exit status: 19"), "{saved}");
     assert!(dir.join("ws/build/pkg").is_dir());
     assert!(!String::from_utf8_lossy(&out.stderr).contains("retry the build"));
+
+    // Exercise real CLI execution/tee, per-package parsing, deduplication and
+    // both languages without requiring ROS or a working compiler on the host.
+    let script = fs::read_to_string(&conda).unwrap().replace(
+        "exit 19\n",
+        r#"
+/bin/mkdir -p log/latest_build/alpha log/latest_build/beta
+/bin/cat > log/latest_build/alpha/stdout_stderr.log <<'LOG'
+src/main.cpp:42:10: error: expected ';' before 'return'
+src/main.cpp:42:10: error: expected ';' before 'return'
+gmake[2]: *** [main.o] Error 1
+LOG
+/bin/cat > log/latest_build/beta/stdout_stderr.log <<'LOG'
+Traceback (most recent call last):
+  File "src/node.py", line 7, in <module>
+    import numpy
+ModuleNotFoundError: No module named 'numpy'
+LOG
+/bin/cat log/latest_build/alpha/stdout_stderr.log
+/bin/cat log/latest_build/beta/stdout_stderr.log
+printf 'Failed   <<< alpha [1s, exited with code 2]\nSummary: 0 packages finished\n'
+exit 19
+"#,
+    );
+    fs::write(&conda, script).unwrap();
+    for (lang, title) in [("en", "Build failure summary"), ("zh", "构建失败摘要")] {
+        for json in [false, true] {
+            let mut command = rospm();
+            command
+                .current_dir(&dir)
+                .env("PATH", &bin)
+                .env("CONDA_CALL", &call)
+                .env("FAKE_ENV", &environment)
+                .args(["--lang", lang, "build"]);
+            if json {
+                command.arg("--json");
+            }
+            let out = command.output().unwrap();
+            assert_eq!(out.status.code(), Some(1));
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if json {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout)
+                    .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)));
+                assert_eq!(value["ok"], false);
+                assert!(value["error"].as_str().unwrap().contains("19"));
+                let summary = &value["build_summary"];
+                assert_eq!(summary["log"], log.to_str().unwrap());
+                let groups = summary["groups"].as_array().unwrap();
+                assert_eq!(groups.len(), 3, "{summary}");
+                assert_eq!(groups[0]["package"], "alpha");
+                assert_eq!(groups[0]["workspace"], "main");
+                assert_eq!(groups[0]["diagnostics"].as_array().unwrap().len(), 1);
+                assert_eq!(groups[0]["diagnostics"][0]["location"]["line"], 42);
+                assert_eq!(groups[0]["consequences"].as_array().unwrap().len(), 1);
+                assert_eq!(groups[1]["package"], "beta");
+                assert_eq!(groups[1]["diagnostics"][0]["code"], "module_not_found");
+                assert!(groups[1]["diagnostics"][0]
+                    .to_string()
+                    .contains("conda -n robot"));
+                assert!(groups[2]["diagnostics"].as_array().unwrap().is_empty());
+                assert_eq!(groups[2]["consequences"].as_array().unwrap().len(), 2);
+                assert!(stderr.contains("ModuleNotFoundError"));
+            } else {
+                assert!(stderr.contains(title), "{stderr}");
+                assert!(stderr.contains("[main / alpha]"));
+                assert!(stderr.contains("[main / beta]"));
+                assert!(stderr.contains("src/main.cpp:42:10"));
+                assert!(stderr.contains(log.to_str().unwrap()));
+            }
+        }
+    }
+    // A successful run emits no stale diagnostic summary, even with old logs.
+    fs::write(
+        &conda,
+        fs::read_to_string(&conda)
+            .unwrap()
+            .replace("exit 19", "exit 0"),
+    )
+    .unwrap();
+    let out = rospm()
+        .current_dir(&dir)
+        .env("PATH", &bin)
+        .env("CONDA_CALL", &call)
+        .env("FAKE_ENV", &environment)
+        .args(["build", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap(),
+        serde_json::json!({"ok": true})
+    );
 }
 
 #[test]

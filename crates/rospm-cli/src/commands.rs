@@ -816,7 +816,15 @@ pub fn apply(
         Ok(()) if build => {
             // Re-probe: apply may just have installed ROS or Miniforge.
             let host = if dry_run { host } else { Host::probe() };
-            run_build(&loaded, &host, None, true, no_env_check, dry_run)
+            run_build(
+                &loaded,
+                &host,
+                None,
+                true,
+                no_env_check,
+                dry_run,
+                global.json,
+            )
         }
         Ok(()) => Ok(()),
     }
@@ -1209,6 +1217,7 @@ pub fn build(
         false,
         no_env_check,
         dry_run,
+        global.json,
     )
 }
 
@@ -1221,6 +1230,7 @@ fn skip_env_checks(plan: &mut Plan) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_build(
     loaded: &Loaded,
     host: &Host,
@@ -1228,6 +1238,7 @@ fn run_build(
     verify: bool,
     no_env_check: bool,
     dry_run: bool,
+    json: bool,
 ) -> Result<()> {
     let ctx = context(loaded, host, false, None, false, mirror::OFFICIAL)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
@@ -1235,6 +1246,7 @@ fn run_build(
         skip_env_checks(&mut plan);
     }
     let mut out = std::io::stdout().lock();
+    let started = std::time::SystemTime::now();
     let Err(err) = plan.execute(dry_run, &mut out) else {
         out.flush()?;
         return Ok(());
@@ -1260,8 +1272,8 @@ fn run_build(
         .flatten()
         .collect();
     let stdin = std::io::stdin();
-    if !(stale_cache || colcon_failed) || dirs.is_empty() || !stdin.is_terminal() {
-        return Err(err.into());
+    if json || !(stale_cache || colcon_failed) || dirs.is_empty() || !stdin.is_terminal() {
+        return Err(build_failure(&plan, err, started));
     }
     eprintln!("{}", tr("cli.build.clean_offer"));
     for dir in &dirs {
@@ -1271,16 +1283,27 @@ fn run_build(
     let mut answer = String::new();
     stdin.read_line(&mut answer)?;
     if !matches!(answer.trim(), "y" | "Y" | "yes") {
-        return Err(err.into());
+        return Err(build_failure(&plan, err, started));
     }
     for dir in &dirs {
         // Does not follow symlinks: `--symlink-install` links into sources stay intact.
         std::fs::remove_dir_all(dir).with_context(|| dir.display().to_string())?;
     }
     writeln!(out, "# {}", tr("cli.build.clean_retry"))?;
-    plan.perform(&mut out)?;
+    let started = std::time::SystemTime::now();
+    plan.perform(&mut out)
+        .map_err(|err| build_failure(&plan, err, started))?;
     out.flush()?;
     Ok(())
+}
+
+fn build_failure(plan: &Plan, err: Error, started: std::time::SystemTime) -> anyhow::Error {
+    let summary = crate::build_summary::collect(plan, &err, started);
+    let error = anyhow::Error::from(err);
+    match summary {
+        Some(summary) => error.context(summary),
+        None => error,
+    }
 }
 
 // ---------------------------------------------------------------- deps

@@ -20,6 +20,7 @@ tracing-subscriber.workspace = true
 which.workspace = true
 rust-i18n.workspace = true
 toml_edit = "0.22"
+libc = "0.2"
 
 [dev-dependencies]
 serde_yaml.workspace = true
