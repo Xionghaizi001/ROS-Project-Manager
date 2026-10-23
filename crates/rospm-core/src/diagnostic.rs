@@ -13,6 +13,11 @@ use serde::Serialize;
 
 use crate::Message;
 
+mod dependencies;
+pub use dependencies::{
+    suggest_dependencies, DependencyContext, DependencyMapping, DependencyTarget,
+};
+
 mod cpp;
 pub use cpp::parse_cpp;
 mod python;
