@@ -9,7 +9,7 @@
 
 ## 当前状态
 
-当前版本为 **0.0.1，正在准备 Phase 4（1.0 发布与 schema v1 冻结）**，尚未发布稳定版。清单和锁文件虽然已使用 `schema_version = 1`，格式仍处于冻结前阶段。
+当前版本为 **0.0.1，正在准备 Phase 4 的 1.0 发布**，尚未发布稳定版。清单和锁文件的 `schema_version = 1` 已冻结，字段与校验边界见 [schema v1](docs/schema-v1.md)。
 
 - **native 工作流**：支持初始化、主机检查、依赖安装、源码导入、锁定重放、构建、环境加载与卸载；Ubuntu 22.04 / Humble、24.04 / Jazzy 已有真实验收记录。
 - **aarch64**：目标仓库查询、包替换与多平台锁已实现，Docker + QEMU 下完成锁定还原、构建和节点运行；原生 ARM runner 复测仍是发布门槛，不代表 Raspberry Pi / Jetson 驱动已验证。

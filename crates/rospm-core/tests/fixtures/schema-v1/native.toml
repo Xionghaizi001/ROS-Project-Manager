@@ -1,0 +1,54 @@
+schema_version = 1
+[project]
+name = "schema-v1"
+description = "Frozen native contract"
+ros_distro = "jazzy"
+platforms = ["linux-x86_64", "linux-aarch64"]
+[environment]
+provider = "native"
+[environment.native]
+ubuntu = "24.04"
+ros_base = "ros-jazzy-ros-base"
+[build]
+verify = ["ros2 pkg list"]
+[build.conda.managed]
+python = "3.12"
+channels = ["conda-forge"]
+environment_file = "environment.yml"
+lock_file = "conda-{platform}.lock"
+[workspaces.deps]
+path = "deps_ws"
+sources = "deps.repos"
+underlays = []
+[workspaces.deps.colcon]
+defaults = "colcon.yaml"
+mixins = ["release"]
+build_args = ["--symlink-install"]
+[workspaces.main]
+path = "ws"
+underlays = ["deps"]
+[workspaces.main.colcon]
+mixins = []
+build_args = []
+[dependencies]
+apt = ["curl"]
+pip = ["numpy>=1.26"]
+[dependencies.rosdep]
+enabled = true
+skip_keys = ["example"]
+extra_sources = ["https://example.com/rosdep.yaml"]
+[target.linux-aarch64.dependencies]
+apt = ["libfoo-dev"]
+[target.linux-aarch64.replace]
+libfoo-dev = "libbar-dev"
+[target.linux-aarch64.exclude]
+apt = ["curl"]
+[env]
+ROS_DOMAIN_ID = "42"
+[editor]
+vscode = true
+clion = false
+devcontainer = false
+[export]
+compression = "zstd"
+sign = false

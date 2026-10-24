@@ -1,0 +1,38 @@
+schema_version = 1
+generated_at = "2026-10-25T00:00:00Z"
+manifest_sha256 = "sha256:52f25ebb24980a46fd0ca7197ea92c773d07a0a146de7d910ca837fbbb28b296"
+[provider]
+kind = "native"
+[provider.native]
+ubuntu = "24.04"
+ros_snapshot = "2026-09-11"
+ubuntu_snapshot = "20261007T141443Z"
+[[sources]]
+workspace = "deps"
+name = "demo"
+type = "git"
+url = "https://example.com/demo.git"
+rev = "0123456789abcdef0123456789abcdef01234567"
+version = "main"
+[[apt]]
+platform = "linux-x86_64"
+name = "ros-jazzy-ros-base"
+version = "0.11.0-1noble"
+sha256 = "sha256:7b8498d6baee0afef081a8497212a79a0abfa5ad6cbe702c585d7b6d90b087ce"
+[[apt]]
+platform = "linux-aarch64"
+name = "ros-jazzy-ros-base"
+version = "0.11.0-1noble"
+[[pip]]
+name = "numpy"
+version = "1.26.4"
+[[conda]]
+platform = "linux-x86_64"
+lock = "conda-linux-64.lock"
+lock_sha256 = "sha256:5234f01b9dfce6b25e471e0cfaae1add246a5484913fde04d732beac31c6869e"
+definition_sha256 = "sha256:45a950685ba36a6323d79239c5ff39394f2ef361e80c9219f9fe859d75135c38"
+[[conda]]
+platform = "linux-aarch64"
+lock = "conda-linux-aarch64.lock"
+lock_sha256 = "sha256:fef96a4f0b0ad38fd3ae850ab6d306da6dd3e5efc77751b01a9e738524a1f567"
+definition_sha256 = "sha256:45a950685ba36a6323d79239c5ff39394f2ef361e80c9219f9fe859d75135c38"

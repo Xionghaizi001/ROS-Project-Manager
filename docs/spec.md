@@ -1,6 +1,6 @@
-# rospm 规格草案 v0
+# rospm 规格 — manifest / lock schema v1
 
-> 状态：草案，Phase 4 发布准备中；schema v1 尚未冻结，在 Phase 4 冻结并发布 1.0 前允许不兼容变更。冻结与迁移安排见 [Phase 4 启动清单](p4-release-preparation.md)。
+> 状态：manifest / lock schema v1 已于 2026-10-25 冻结；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。软件仍为 0.0.1，1.0 发布验收见 [Phase 4 启动清单](p4-release-preparation.md)。
 > 决策依据见 `decisions.md`。
 
 ## 1. 文件与目录约定

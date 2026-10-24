@@ -1,0 +1,9 @@
+schema_version = 1
+[project]
+name = "minimal"
+ros_distro = "humble"
+platforms = ["linux-x86_64"]
+[environment]
+provider = "native"
+[workspaces.main]
+path = "ws"
