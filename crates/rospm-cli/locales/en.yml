@@ -168,14 +168,14 @@ cli:
     ready: "ready        all external dependencies are installed"
     not_ready: "not ready    %{summary}; `rospm deps install --dry-run` shows what would be installed"
   export:
-    about: "Produce an offline bundle (roadmap P6) [produces artifacts]"
+    about: "Produce an offline bundle (not implemented yet) [produces artifacts]"
     target: "Target platform of the bundle"
     output: "Where to write the bundle"
   import:
-    about: "Verify and install an offline bundle (roadmap P6) [modifies system]"
+    about: "Verify and install an offline bundle (not implemented yet) [modifies system]"
     bundle: "Bundle produced by `rospm export`"
   editor:
-    about: "Generate editor configuration (roadmap P7)"
+    about: "Generate editor configuration (not implemented yet)"
     kind: "vscode | clion | devcontainer (default: all enabled in the manifest)"
   doctor:
     about: "Check that the wrapped tools are available on this machine"
@@ -233,7 +233,7 @@ error:
   schema_version: "unsupported schema_version %{found} (this rospm supports %{supported})"
   validation: "manifest validation failed:\n%{list}"
   unknown_workspace: "unknown workspace `%{name}`"
-  not_implemented: "%{feature} is not implemented yet (planned for roadmap %{phase})"
+  not_implemented: "%{feature} is not implemented yet"
   command_failed: "command failed: %{command} (%{status})"
 
 package_xml:
@@ -344,7 +344,7 @@ lock:
   apt_version_invalid: "rospm.lock: apt package %{name} has invalid version `%{version}` (allowed: letters, digits and . + ~ : -)"
   rev_invalid: "rospm.lock: source %{name} has revision `%{rev}`, expected a hexadecimal commit id"
   os_release_unreadable: "/etc/os-release is unreadable; assuming this host runs Ubuntu %{ubuntu} as the manifest says"
-  foreign_platform: "cannot resolve %{platform} on this %{host} host; run `rospm lock` on such a machine, its entries are merged into the same file (roadmap P5 adds repository queries)"
+  foreign_platform: "cannot resolve %{platform} on this %{host} host; run `rospm lock` on such a machine, its entries are merged into the same file (cross-platform resolution unavailable)"
   no_vcs_no_git: "neither vcs nor git is available; source revisions cannot be recorded"
   vcs_missing: "vcstool is not installed; revisions read with git instead"
   vcs_export_failed: "`vcs export --exact` failed in workspace %{workspace} (%{status}); revisions read with git instead"
@@ -534,7 +534,7 @@ probe:
     not_built: "not built yet (run `rospm build`)"
   provider:
     probing: "environment probing"
-    not_implemented: "not implemented yet (roadmap %{phase})"
+    not_implemented: "not implemented yet"
 
 tool:
   git: "source checkout"
@@ -544,8 +544,8 @@ tool:
   apt_get: "native provider"
   dpkg_query: "native provider: installed package versions"
   python3: "pip versions (lock / verify, recorded only)"
-  pixi: "pixi provider (roadmap P3)"
-  docker: "docker provider (roadmap P4)"
+  pixi: "pixi provider (not implemented yet)"
+  docker: "docker provider (not implemented yet)"
 
 deps:
   plan:
@@ -567,7 +567,7 @@ init:
     host: "project.platforms: host is %{platform}"
     unsupported: "project.platforms: host platform unsupported, defaulted to linux-x86_64"
   provider:
-    pixi: "environment.provider: pixi.toml found, using the pixi provider (roadmap P3)"
+    pixi: "environment.provider: pixi.toml found, using the pixi provider (not implemented yet)"
   ros_distro:
     from_pixi: "project.ros_distro: %{distro} from pixi.toml"
     from_env: "project.ros_distro: %{distro} from $ROS_DISTRO"

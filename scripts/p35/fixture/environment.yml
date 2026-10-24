@@ -1,0 +1,7 @@
+dependencies:
+  - colcon-common-extensions
+  - catkin_pkg
+  - empy=3.3.4
+  - setuptools<80
+  - numpy<2
+  - pyfiglet

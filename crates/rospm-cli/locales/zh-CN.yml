@@ -163,14 +163,14 @@ cli:
     ready: "就绪        全部外部依赖已安装"
     not_ready: "未就绪      %{summary}；`rospm deps install --dry-run` 会显示将要安装的内容"
   export:
-    about: "生成离线包（路线图 P6）[产出产物]"
+    about: "生成离线包（尚未实现）[产出产物]"
     target: "离线包的目标平台"
     output: "离线包写入位置"
   import:
-    about: "校验并安装离线包（路线图 P6）[修改系统]"
+    about: "校验并安装离线包（尚未实现）[修改系统]"
     bundle: "由 `rospm export` 生成的离线包"
   editor:
-    about: "生成编辑器配置（路线图 P7）"
+    about: "生成编辑器配置（尚未实现）"
     kind: "vscode | clion | devcontainer（默认：清单中启用的全部）"
   doctor:
     about: "检查本机是否具备所封装的工具"
@@ -228,7 +228,7 @@ error:
   schema_version: "不支持的 schema_version %{found}（本版 rospm 支持 %{supported}）"
   validation: "清单校验失败：\n%{list}"
   unknown_workspace: "未知的 workspace `%{name}`"
-  not_implemented: "%{feature} 尚未实现（计划于路线图 %{phase}）"
+  not_implemented: "%{feature} 尚未实现"
   command_failed: "命令执行失败：%{command}（%{status}）"
 
 package_xml:
@@ -339,7 +339,7 @@ lock:
   apt_version_invalid: "rospm.lock：apt 包 %{name} 的版本号 `%{version}` 不合法（只允许字母、数字和 . + ~ : -）"
   rev_invalid: "rospm.lock：源 %{name} 的 revision `%{rev}` 不合法，应为十六进制提交号"
   os_release_unreadable: "/etc/os-release 不可读；按清单假定本机为 Ubuntu %{ubuntu}"
-  foreign_platform: "本机是 %{host}，无法解析 %{platform}；请在那种机器上运行 `rospm lock`，其记录会合并进同一个文件（路线图 P5 加入仓库索引查询）"
+  foreign_platform: "本机是 %{host}，无法解析 %{platform}；请在那种机器上运行 `rospm lock`，其记录会合并进同一个文件（跨平台解析不可用）"
   no_vcs_no_git: "vcs 与 git 都不可用，无法记录源码提交"
   vcs_missing: "未安装 vcstool，改用 git 读取提交"
   vcs_export_failed: "workspace %{workspace} 中 `vcs export --exact` 失败（%{status}），改用 git 读取提交"
@@ -529,7 +529,7 @@ probe:
     not_built: "尚未编译（请运行 `rospm build`）"
   provider:
     probing: "环境探测"
-    not_implemented: "尚未实现（路线图 %{phase}）"
+    not_implemented: "尚未实现"
 
 tool:
   git: "源码检出"
@@ -539,8 +539,8 @@ tool:
   apt_get: "native 提供者"
   dpkg_query: "native 提供者：已安装包的版本"
   python3: "pip 版本（lock / verify，仅记录）"
-  pixi: "pixi 提供者（路线图 P3）"
-  docker: "docker 提供者（路线图 P4）"
+  pixi: "pixi 提供者（尚未实现）"
+  docker: "docker 提供者（尚未实现）"
 
 deps:
   plan:
@@ -562,7 +562,7 @@ init:
     host: "project.platforms：本机为 %{platform}"
     unsupported: "project.platforms：本机平台不受支持，默认为 linux-x86_64"
   provider:
-    pixi: "environment.provider：发现 pixi.toml，使用 pixi 提供者（路线图 P3）"
+    pixi: "environment.provider：发现 pixi.toml，使用 pixi 提供者（尚未实现）"
   ros_distro:
     from_pixi: "project.ros_distro：%{distro}，来自 pixi.toml"
     from_env: "project.ros_distro：%{distro}，来自 $ROS_DISTRO"

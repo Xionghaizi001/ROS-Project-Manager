@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-23。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-25。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -42,51 +42,23 @@
 
 ## Phase 3.5 — Conda 自动配置与一键还原
 
-状态：**已有环境验收通过，干净机一键验收待执行**（2026-10-22）。支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
+状态：**已有环境与干净 Conda 环境一键验收通过**（2026-10-25）。支持使用已有 Conda 环境，也支持在用户未安装 Conda 时自动安装、创建项目环境并继续还原，不依赖 Phase 8 的 Pixi 提供者或 GUI。
 
 一键还原要求：当清单声明使用 rospm 管理的 Conda 环境时，缺少 Conda 应由还原流程自动补齐，无需用户另行安装、手动激活或重新执行命令。rospm 负责编排工具安装、环境创建、依赖安装与后续还原，依赖求解和包安装交给 Conda；主机仍须满足清单声明的操作系统、架构及驱动等前置条件。
 
 - [x] 验收：未激活 Conda 的终端中，指定名称和路径均能完成最小 ROS Python 包构建并运行节点，能导入仅目标环境安装的依赖；覆盖构建预览不写文件、缺环境与 ABI 冲突诊断、切换环境后的缓存检测；未配置 Conda 的 native 构建回归通过。
   - 2026-10-22：清理并重建 Ubuntu 22.04 / Humble 虚拟实例后，真实验收 13 项通过，CLI 构建回归 8/8 通过；记录、环境依赖与复跑脚本见 [P3.5 已有 Conda 环境验收](p35-existing-conda-validation.md)。
-- [ ] 干净机一键验收：在满足 ROS 主机前置条件、未安装 Conda 的机器上，仅凭项目清单、目标平台锁文件和源码入口，一条命令完成 Conda 安装、项目环境创建、依赖与源码还原、编译和最小节点运行验证。覆盖 x86_64 / aarch64 安装器选择、重复执行复用、安装中断后重试、摘要错误、缺少锁记录，以及 shell 启动文件保持不变；锁定重放在另一干净环境中得到相同包记录。
+- [x] 干净机一键验收：在满足 ROS 主机前置条件、未安装 Conda 的机器上，仅凭项目清单、目标平台锁文件和源码入口，一条命令完成 Conda 安装、项目环境创建、依赖与源码还原、编译和最小节点运行验证。覆盖 x86_64 / aarch64 安装器选择、重复执行复用、安装中断后重试、摘要错误、缺少锁记录，以及 shell 启动文件保持不变；锁定重放在另一干净环境中得到相同包记录。
+  - 2026-10-25：Ubuntu 24.04 / Jazzy 的两个独立 x86_64 容器真实 `apply --locked --build`、节点运行及 `verify` 均通过，84 个 Conda 包记录一致；复用、安装残留恢复、锁摘要与缺记录拒绝、shell 文件不变均验证。双架构安装器选择与下载摘要错误等由核心测试覆盖，未宣称原生 ARM 实测；脚本、证据与边界见 [P3.5 干净 Conda 环境验收](p35-managed-conda-validation.md)。
 - **产出**：已有 Conda 用户可直接指定环境；未安装 Conda 的用户可一条命令自动准备工具和项目环境并完成还原、编译与验证；不兼容环境在构建前得到明确诊断。
-
----
-
-## Phase 3.6 — 常见 C++ / Python 错误诊断
-
-状态：**已完成**（2026-10-24，日志采集、统一诊断、首批规则、CLI 摘要与未知格式兜底及真实工具验收均已完成；验收记录见 [p36-diagnostics-validation.md](p36-diagnostics-validation.md)）。排在 Phase 3.5 之后、Phase 4 发布之前；首期服务 CLI 构建与一键还原，诊断结构供后续 GUI / 编辑器复用。
-
-需求与合理性：项目管理器掌握构建命令、workspace、依赖清单与实际 Python 环境，可将编译器 / 解释器已有的错误信息整理为“文件与行列 + 问题说明 + 排查建议”，帮助用户从长日志中定位问题。当前执行层直接显示子进程输出，失败时仅记录命令与退出状态，尚需补充日志采集和诊断解析。首期使用可测试的规则与工具原生诊断，不依赖在线 AI；只能解释捕获到的报错，不承诺推断任意业务逻辑错误或准确找出所有根因。
-
-- [x] 构建日志采集：执行子进程时同时转发并保存 stdout / stderr，记录命令、工作目录、workspace / ROS 包、退出状态和所选 Python 环境；避免管道阻塞与无界内存缓存，兼容 ANSI 颜色及 colcon 多包并行输出，优先按包归属解析日志。首期覆盖 `build`、一键还原中的构建与非交互验证命令；用户在交互 shell 中自行启动的程序不自动获得诊断。
-  - [x] 已实现（2026-10-22）：`Plan` 新增日志路径、`Command` 新增日志头；`build` / `apply --build` 的 colcon 与 `build.verify` 命令以两条读线程、8 KiB 固定缓冲转发 stdout / stderr 并原样（含 ANSI）写入 `.rospm/log/build.log`（每次覆盖，首个记录命令前提示路径），写入失败仍持续读取以免子进程阻塞，退出状态照常决定成败。日志头记录命令、工作目录、workspace 或验证命令、所选 Python 环境（`system` / `conda -n|-p …`）及 colcon 按包日志路径——包归属直接取 colcon 自身的 `log/latest_build/<包>/stdout_stderr.log`，不从并行交错输出中拆分（log base 依次取 `--log-base`、`$COLCON_LOG_PATH`、`log`）。子进程输出改经管道后，GCC 等工具检测到非终端可能不再输出颜色。Conda 检查与 shebang 改写不记录。测试：核心测试覆盖转发与保存、ANSI 原样、stderr、未标记命令不记录、失败后停止且保留退出状态、仅提示一次路径、含空格目录；计划测试覆盖 workspace / 验证命令的日志头与 Conda 环境；CLI 测试覆盖预览不建日志、真实失败构建写入日志头与退出状态。真实验收（2026-10-22，本机 Ubuntu 22.04 / Humble、GCC 11.4，项目路径含空格）：一个缺分号的 ament_cmake 包与一个 ament_python 包并行构建，合并日志完整保存日志头、并行交错的 colcon 输出、GCC `main.cpp:3:3: error` 及源码摘录、gmake 级联报错与 `exit status: 2`，记录的按包日志路径存在且含同一报错。同时发现：调用终端激活 Conda base 时，native 构建的 CMake 选中 Conda 的 `python3`，报 `ModuleNotFoundError: No module named 'catkin_pkg'`，已由下一项处理。
-- [x] 构建环境基准（2026-10-22 新增并完成）：native 构建（未声明 `build.conda`）时调用终端激活的 Conda 环境不是目标环境，若其中缺少构建所需模块，则对构建命令取消激活后再编译。
-  - [x] 已实现：`Host` 记录 `$CONDA_PREFIX`；有激活环境且未选择 Conda 时计划加一条说明，每条 colcon 与 `build.verify` 命令在加载 ROS / underlay 后检查 `python3` 能否导入 `catkin_pkg`、`em`、`rclpy._rclpy_pybind11`，能导入则保持环境，否则从 `PATH` 去掉该环境及其 Conda 根目录（含 `conda-meta` 才视为根，避免 `/usr/bin/conda` 误删 `/usr`）的条目、`unset CONDA_PREFIX` 等变量（CMake FindPython 同样读取 `CONDA_PREFIX`）并在 stderr 说明。旧 `build/*/CMakeCache.txt` 仍引用该环境时 CMake 会继续使用它，因此列出缓存并失败，提示删除对应 build / install 或改用 `--conda-env` / `--conda-prefix`，与 Conda 构建的旧缓存策略一致、不自动删除。只在执行时检查，`--dry-run` 不启动子进程。测试：单元测试真实执行该脚本（不可用环境被取消激活、可用环境保留、旧缓存报错并列出），计划测试覆盖仅在“有激活环境且未选择 Conda”时加入、位于 ROS 加载之后、覆盖验证命令。真实验收（本机 22.04 / Humble，激活 miniconda base）：此前失败的 C++ + Python 工作区构建成功且 CMake 使用 `/usr/bin/python3`；先用 Conda Python 配置过的工作区报出旧缓存，按提示删除后构建成功。
-  - [x] 兜底（2026-10-22）：构建仍失败时（colcon 命令失败，或 Conda 构建的旧缓存检查失败），交互终端中列出所构建 workspace 现有的 `build/` / `install/` 并询问是否删除后重试，默认否；确认后删除（Rust `remove_dir_all` 不跟随符号链接，`--symlink-install` 指向的源码不受影响）并重新执行一次整个构建计划。非交互（CI、管道）或无可删目录时不询问，保持原失败与退出状态；验证命令失败不触发。真实验收：旧缓存引用 miniconda 的工作区，非交互直接失败不删除；答 `n` 保留目录、退出 1；答 `y` 删除后重建成功且 CMake 使用 `/usr/bin/python3`，源码完好。CLI 测试覆盖非交互时不询问、不删除。
-- [x] 自定义 build / install / log base（2026-10-22 新增并完成）：路径依次取命令行透传、清单 `build_args`（`--x v` / `--x=v`，取最后一个）、colcon 默认文件 `build.build-base` / `build.install-base`、默认值，相对 workspace 目录；`--log-base` 是 colcon 全局参数（`colcon build --log-base` 会被拒绝，本机已核实），从参数中移到 `build` 之前，日志头按包路径依次取 `--log-base`、`$COLCON_LOG_PATH`、`log`。使用处：underlay 的 setup 在执行时依次查找配置与默认 base（同一次构建中先构建的 underlay 也能找到），均无则以“workspace 未构建”报错并列出查找路径；`rospm env` / `shell` 均无时跳过（首次构建前仍可进入）；Conda 旧缓存扫描、取消激活时的旧缓存检查与删除重试取第一个存在的目录，均无则不扫描 / 不询问；shebang 改写依次查找，均无时报错；`check` 的“已构建”同样依次查找。mixin 中设置的 base 不识别（代码中 `shortcut:` 注明）。测试：单元测试覆盖两种写法、最后一个生效、默认文件、绝对路径、去重；计划测试真实执行 underlay 查找的三种状态与 `env` 跳过、shebang 回退与报错、`--log-base` 前移与去重。
-- [x] `rospm build [<workspace>] -- <colcon build 参数…>`（2026-10-22 新增并完成）：日常临时参数（`--packages-select`、`--parallel-workers`、`--cmake-args -DCMAKE_BUILD_TYPE=Debug` 等）不必写进清单，也不必绕过 rospm 直接运行 colcon 而失去日志、Conda 取消激活、旧缓存检查与删除重试。仅本次追加在所构建 workspace 的 `build_args` 之后、不写回清单（与 `--conda-env` 一致），colcon 同名参数取最后一个，因此命令行覆盖清单；只透传 `colcon build`，其它子命令在 `rospm shell` 中执行；`apply --build` 不接受透传，一键还原只依赖清单与锁。Conda 构建把解释器定义并入最后一组 `--cmake-args`（colcon 保留的那组）；透传的 base 参数优先级最高；未指定 workspace 时作用于每个 workspace（帮助与 `spec.md` 说明）；删除重试的确认提示写明删除整个目录、含本次未选择的包。测试：计划测试覆盖 `--cmake-args` 合并、`--log-base` 前移与日志路径；CLI 测试覆盖预览中的透传（含空格参数）、不写回清单、`apply --build` 拒绝透传。真实验收（本机 Humble）：`rospm build main -- --packages-select a_cpp --cmake-args -DCMAKE_BUILD_TYPE=Debug --build-base b2 --log-base lg` 只构建 a_cpp、`CMAKE_BUILD_TYPE=Debug`，使用 `b2` / `lg`，日志头指向 `lg/latest_build`，清单未变；`b2` 中引用 miniconda 的旧缓存被检出，删除重试提示列出 `b2` 与 `install`。
-- [x] 在 `rospm-core` 定义统一诊断结构：稳定错误码、类别、严重程度、工具、文件 / 行 / 列、原始报错片段、关联诊断、解释与建议，并区分“工具已明确报告的事实”与“待验证的可能原因”。位置缺失时不编造行号；显示编译器报告的位置，不把它当作根因必然所在的位置。
-  - [x] 已实现（2026-10-22）：公开 `diagnostic` 模块提供 `Diagnostic`、`Code`、`Category`、`Severity` 与 `Location`；机器枚举序列化为稳定 snake_case 标识，未知工具 / 位置为 `null`，行列使用可选的非零一基坐标。`raw` 保留原始片段，`related` 保留有序关联上下文；`explanation` 仅解释工具明确报告的事实，`possible_causes` 单列待验证假设，`suggestions` 提供排查建议，三者复用 `Message` 国际化。JSON 契约测试覆盖原始 ANSI、含空格路径、关联诊断、事实与假设分离、缺失位置 / 行列；本项仅定义共享结构，解析规则与 CLI 接入仍由后续条目完成。
-- [x] C++ 首批规则：GCC / Clang 的语法与类型错误、缺少头文件；CMake 的 `find_package` 失败；链接器的 `cannot find -l...` / `undefined reference`。保留模板实例化和 include 链等关联上下文，区分语法、包发现、头文件搜索与链接问题；优先使用工具支持的结构化诊断，兼容常见文本输出与无法识别的格式。
-  - [x] 已实现（2026-10-22）：`diagnostic::parse_cpp` 把构建日志（可含 ANSI）解析为按出现顺序的诊断，`raw` 保留原始行（含颜色）。编译器按 `文件:行[:列]: error|fatal error|note:` 识别（路径可含空格），语法 / 类型错误按消息前缀分类，其余编译错误为 `unknown` 但保留位置；缺少头文件识别 GCC `x.h: <strerror>`（strerror 随语言变化）与 Clang `'x.h' file not found`。include 链、`In function` / `In instantiation of` / `required from` 作为 `related` 挂到其后的错误，`note:` 挂到其前的错误，`N | …` 源码摘录并入 `raw`。CMake 取 `CMake Error at 文件:行 (命令):` 及缩进续行与 `Call Stack`，`find_package` 失败（配置文件模式与 `Could NOT find X` 模块模式）归为包发现并提取包名，其它 CMake 错误为 `unknown`。链接器识别 GNU ld / lld 的 `cannot find -l…`（含中文 `找不到 -l…`）、`unable to find library`、`undefined reference to`（`file:(.text+…)` 只给文件、带调试信息时给行）与 `undefined symbol`，`in function` 行作为关联上下文。警告、`collect2` / gmake 级联行不产出诊断（汇总留给 CLI 摘要）。解释 / 可能原因 / 建议的中英文文本已加入 locale。未采用 `-fdiagnostics-format=json` / SARIF：会替换用户实时看到的文本输出，故解析默认文本格式。Clang 摘录行没有 `|` 前缀，不并入 `raw`（代码中 `shortcut:` 注明）。测试：用 GCC 11.4 / ld 2.38 / CMake 3.22 的真实输出（含 ANSI、zh_CN 本地化、含空格路径）及 Clang / lld 文档格式覆盖各规则、模板链、note 归属、未知错误保留位置、成功日志与 OSC 超链接不误报。真实核对（本机 Humble，路径含空格、zh_CN）：一次 `colcon build --continue-on-error` 中缺分号、缺头文件、`find_package` 缺包、缺库、未定义引用五个包的合并日志，五条诊断类别、位置与名称均正确，无多余诊断。
-- [x] Python 首批规则：`SyntaxError`、`IndentationError` / `TabError`、`ModuleNotFoundError`、常见 `ImportError` 及 traceback 位置；保留异常链与项目调用帧，对运行时异常按实际异常类型解释。模块缺失时检查本次构建 / 验证所用解释器，避免把“装在另一个环境”误报为完全未安装。
-  - [x] 已实现（2026-10-23）：核心库 `diagnostic::parse_python(output, interpreter)` 解析默认 Python 文本输出，覆盖语法、缩进、制表符、模块缺失、导入失败及运行时异常；解释保留实际异常类型与消息，调用方可传入本次构建 / 验证命令的解释器或环境标识。文件与行号取工具报告，路径含空格与 Unicode 均保留；caret 摘录不换算列号（缩进与制表符展开有歧义），无位置时不编造。`raw` 保留 ANSI、源码和 caret，`related` 保留有序调用帧；显式 `raise … from …` 与隐式异常链均关联到最终异常，独立失败不串联。导入错误建议在失败命令环境中核查 `sys.executable`、`sys.path` 与模块导入，并检查循环导入、同名遮蔽或扩展 ABI；可能原因与事实分离，不断言模块全局未安装，不把模块名当作安装包名。解析器不启动解释器，实际环境检查作为建议交给调用方 / 用户；CLI 接入仍属后续待办。中英文 locale 已补齐。测试覆盖 ANSI、含空格路径、异常链、缺失 / 零行号、自定义异常、常见 ImportError、成功日志和命令边界；真实运行隔离的 `python3 -I -S`，验证 SyntaxError、IndentationError、TabError、ModuleNotFoundError、ImportError、ZeroDivisionError 及 KeyError → ValueError 链。按单命令 / 包日志解析，不尝试拆解交错 traceback；ExceptionGroup 树等未知格式留在原始日志。
-- [x] 依赖建议结合 `package.xml`、rosdep、项目清单及当前提供者：有明确映射和检查证据时提示缺少的依赖及对应还原 / 安装步骤；无法确认时提示“未找到头文件 / 模块，可能缺少依赖或搜索路径未配置”，不把 Python 模块名直接当作 pip / Conda 包名，不把所有链接错误归为缺包。诊断提供排查建议，不自动修改源码或安装依赖。
-  - [x] 已实现（2026-10-23）：核心库 `diagnostic::suggest_dependencies` 在已解析诊断上追加、去重建议，递归覆盖异常链；复用 `PackageXml`、项目 `Manifest`、native `DepsReport` / `EnvReport`，不执行探测、安装或源码修改，不改写工具事实与原始日志。头文件、CMake 包、链接库与 Python 模块只接受调用方提供的精确 `DependencyMapping`（需带文件索引 / 上游元数据等来源）；rosdep 只证明键到安装包的映射，不能证明模块 / 文件归属，不内置猜测映射。仅映射、有效声明与 Missing 检查同时存在时建议审阅并运行 `deps install` 或 `apply`；多包 rosdep 解析只称“未全部安装”，不误称每个包均缺失。无映射 / 检查、冲突检查、已安装、禁用 rosdep、skip_keys、条件不成立、未知包归属和项目内依赖均提供对应排查建议；CMake 同名声明仅作为待检查键。非 native 提供者不套用主机 apt 证据，Python 仅在调用方确认系统解释器且未声明 Conda 时使用主机缺包证据，其他环境提示核对实际解释器 / Conda 环境文件与锁；`dependencies.pip` 明确仅记录，不从模块名生成安装命令。未定义符号不追加缺包结论。中英文文本已补齐；测试覆盖各证据门槛、提供者 / Python 环境隔离、项目内依赖、部分安装集合、重复调用、异常链、目标平台 apt 替换 / 排除及原诊断不变。此项完成建议层，映射证据与报告由调用方传入，自动采集及 CLI 展示仍在后续接入范围内。
-- [x] CLI 在失败后输出简短摘要，按包归组、合并重复诊断并优先展示直接报错，将 colcon / make 的失败汇总关联为后续结果；不将日志中的第一个错误武断视为唯一根因。示例：`src/main.cpp:42:10：编译器报告此处缺少分号；请检查此处及前一条语句。`、`节点使用的 Python 环境中未找到模块 numpy；请核对项目依赖和环境配置。` 保留完整日志路径，解释与建议走中英文 i18n；`--json` 输出稳定字段，原始子进程输出不混入 JSON 数据流。
-  - [x] 已实现（2026-10-24）：`build` / `apply --build` 失败后解析当前失败命令，优先读取本次更新的 colcon 按包日志，按 workspace / 包分组；重复诊断合并并保留关联上下文，make / colcon 结果单列为后续信息，不断言唯一根因。终端最多展示 8 组、8 条直接诊断及首条建议，始终提示完整日志；JSON 保留稳定字段、完整已解析诊断与关联上下文，`apply` / `build --json` 的计划及子进程输出转 stderr，stdout 只输出一个结果对象，JSON 模式不询问清理重试。测试覆盖中英文、多包、重复与级联、Python 环境、旧包日志和先前命令隔离、成功不输出旧摘要、JSON 可解析及原失败状态。每份日志最多解析 4 MiB，完整日志不裁剪；未识别格式的进一步兜底及真实工具端到端验收见下两项。
-- [x] 未识别错误时保留原始报错并提示查看日志；解析失败不得覆盖原命令失败状态，不得将失败改为成功。同步命令帮助、日志位置、诊断覆盖范围和 JSON 约定。
-  - [x] 已实现（2026-10-24）：未知格式保留实时原始输出及日志（含 ANSI），中英文提示查看日志；日志缺失、不可读或读取范围内缺少失败命令边界时仍返回摘要和日志路径，不覆盖原命令错误。JSON 新增稳定 `diagnostic_status`（`parsed` / `unrecognized` / `unavailable`），空诊断不代表成功，CLI 仍退出 1 并保留子命令状态。同步 `build` / `apply --build` 中英文帮助与 `spec.md` 的覆盖范围、日志位置及 JSON 契约；单元与 CLI 测试覆盖未知格式、缺失日志 / 命令边界、ANSI 原文、中英文提示及 JSON 失败状态。
-- [x] 验收：用 GCC / Clang、CMake / 链接器及 Python 的真实失败样例验证位置、类别和建议；覆盖多包并行、重复与级联错误、模板上下文、异常链、路径含空格、ANSI 颜色、缺失位置、未知格式与成功日志不误报。增加最小 C++ / Python 失败项目的 CLI 集成验收，验证实时输出、完整日志、中英文摘要、JSON 可解析及失败退出状态。
-  - [x] 已验收（2026-10-24）：新增 `scripts/p36-diagnostics-check.py` 和显式启用的 `diagnostics_acceptance` CLI 集成测试，在 Ubuntu 22.04 / Humble 上使用 GCC 11.4、Clang 14、CMake 3.22、GNU ld 2.38、Python 3.10 真实执行。两套含空格路径的最小项目各 11 个包，共 18 次 CLI 执行全部通过，覆盖多包并行、位置 / 类别 / 建议、模板上下文、异常链、重复合并、级联、ANSI 原文、缺失位置、未知格式及旧日志后的成功构建；子进程退出前收到输出，中英文摘要及 JSON 均保留日志路径与原始失败状态。现有单元与 CLI 测试补充格式边界；复跑方法、证据及覆盖限制见 [验收记录](p36-diagnostics-validation.md)。
-- **产出**：常见 C++ / Python 报错可定位、可解释并提供有依据的排查建议；未知错误仍可追溯完整日志，CLI / GUI 共用诊断结果。
 
 ---
 
 ## Phase 4 — Release 与 schema v1
 
-状态：**未开始**。
+状态：**准备中**（2026-10-25）。中文 README 已同步当前能力；验收缺口、schema 审计与发布步骤见 [Phase 4 启动清单](p4-release-preparation.md)。尚未冻结 schema 或发布 1.0，Phase 3.5 干净 Conda 环境验收已通过，原生 ARM 验收仍为发布前置条件。
+
+- [x] 更新中文 README，建立 Phase 4 启动清单并明确未完成验收与发布边界。
 
 - [ ] 完成 aarch64 与 Phase 3.5 Conda 自动配置、一键还原验收后的回归测试、文档与示例清单整理。
 - [x] 完成 Phase 3.6 常见错误诊断验收，确认原始日志、失败状态与机器可读输出不受影响（2026-10-24，见 [验收记录](p36-diagnostics-validation.md)）。

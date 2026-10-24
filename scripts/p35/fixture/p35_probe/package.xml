@@ -1,0 +1,4 @@
+<package format="3"><name>p35_probe</name><version>0.0.0</version>
+<description>P35 real acceptance</description><maintainer email="test@example.com">Test</maintainer>
+<license>MIT</license><buildtool_depend>ament_python</buildtool_depend><exec_depend>rclpy</exec_depend>
+<export><build_type>ament_python</build_type></export></package>

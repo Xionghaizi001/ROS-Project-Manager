@@ -1,0 +1,21 @@
+schema_version = 1
+[project]
+name = "p35-managed"
+ros_distro = "jazzy"
+platforms = ["linux-x86_64", "linux-aarch64"]
+[environment]
+provider = "native"
+[environment.native]
+ubuntu = "24.04"
+ros_base = "ros-jazzy-ros-base"
+[dependencies.rosdep]
+enabled = false
+[workspaces.main]
+path = "ws"
+sources = "main.repos"
+[build]
+verify = ["ros2 run p35_probe probe"]
+[build.conda.managed]
+python = "3.12"
+channels = ["conda-forge"]
+environment_file = "environment.yml"
