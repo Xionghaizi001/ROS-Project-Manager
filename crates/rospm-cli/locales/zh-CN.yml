@@ -96,7 +96,7 @@ cli:
     lock_line: "锁文件      %{path}"
   apply:
     about: "准备清单声明的 Conda 环境、配置 ROS apt 源、安装 ROS 底包、导入源码并解析依赖 [修改系统]"
-    build: "准备好环境后按叠加顺序编译全部 workspace，并执行 build.verify 中的验证命令（可与 --locked 组合）"
+    build: "准备好环境后按叠加顺序编译全部 workspace，并执行 build.verify 中的验证命令（可与 --locked 组合；仅摘要常见 C++ / Python 错误，原始输出见 .rospm/log/build.log；--json 保持 stdout 机器可读）"
     distro: "选择 humble | jazzy | rolling 并写回清单（dry-run 只预览）"
     locked_distro_conflict: "--locked 不能更改清单的发行版；请先运行 `rospm apply --distro <名>`，再运行 `rospm lock`"
     locked: "遵循 rospm.lock（快照仓库、固定版本）"
@@ -133,7 +133,7 @@ cli:
     confirm: "按上面的计划继续？[y/N] "
     aborted: "已中止"
   build:
-    about: "按叠加顺序用 colcon 编译 workspace；失败时显示摘要和完整日志路径（--json 保证 stdout 为机器可读结果）[产出产物]"
+    about: "按叠加顺序用 colcon 编译 workspace；失败时显示摘要和完整日志路径（仅摘要常见 C++ / Python 错误；未知错误请查看原始输出及 .rospm/log/build.log；--json 保证 stdout 为机器可读结果）[产出产物]"
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
     conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
     conda_prefix: "本次构建使用此 Conda 环境路径（相对于当前目录），覆盖 build.conda（与 --conda-env 互斥）"
@@ -679,3 +679,5 @@ build_summary:
   title: "构建失败摘要（工具报错，不代表唯一根因）："
   consequences: "%{count} 条后续失败 / 汇总信息，见完整日志。"
   log: "完整日志：%{path}（摘要可能省略部分内容）"
+  unrecognized: "未识别到支持的错误格式，命令仍然失败；请查看原始输出及完整日志，可能存在未支持或未纳入摘要的报错。"
+  unavailable: "无法读取日志或定位失败命令的输出，命令仍然失败；请查看终端原始输出并检查日志路径（日志可能缺失或不完整）。"

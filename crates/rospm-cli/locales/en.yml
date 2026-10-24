@@ -101,7 +101,7 @@ cli:
     lock_line: "lock        %{path}"
   apply:
     about: "Prepare declared Conda environments, set up the ROS apt source, install the ROS base, import sources and resolve dependencies [modifies system]"
-    build: "After preparing the environment, build every workspace in overlay order and run the build.verify commands (combine with --locked)"
+    build: "After preparing the environment, build every workspace in overlay order and run the build.verify commands (combine with --locked; common C++/Python failure summaries, original output in .rospm/log/build.log; --json keeps stdout machine-readable)"
     distro: "Select humble | jazzy | rolling and save it to the manifest (dry-run only previews)"
     locked_distro_conflict: "--locked cannot change the manifest distribution; run `rospm apply --distro <name>` first, then `rospm lock`"
     locked: "Honour rospm.lock (snapshot repositories, pinned revisions)"
@@ -138,7 +138,7 @@ cli:
     confirm: "proceed with the plan above? [y/N] "
     aborted: "aborted"
   build:
-    about: "Build workspaces with colcon in overlay order; summarize failures with the full log path (--json keeps stdout machine-readable) [produces artifacts]"
+    about: "Build workspaces with colcon in overlay order; summarize failures with the full log path (common C++/Python errors only; unknown errors: see original output and .rospm/log/build.log; --json keeps stdout machine-readable) [produces artifacts]"
     workspace: "Build only this workspace (its underlays must already be built)"
     conda_env: "Use this Conda environment name for this build, overriding build.conda (mutually exclusive with --conda-prefix)"
     conda_prefix: "Use this Conda prefix for this build (relative to the current directory), overriding build.conda (mutually exclusive with --conda-env)"
@@ -684,3 +684,5 @@ build_summary:
   title: "Build failure summary (reported errors, not a root-cause verdict):"
   consequences: "%{count} downstream failure/result lines; see the full log."
   log: "Full log: %{path} (summary may be abbreviated)"
+  unrecognized: "No supported error format was recognized; the command still failed. See the original output and full log. Unsupported or omitted errors may be present."
+  unavailable: "Could not read or locate the failed command output in the log; the command still failed. See the original terminal output and check the log path (the log may be missing or incomplete)."

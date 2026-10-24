@@ -15,6 +15,15 @@ pub struct Summary {
     pub cwd: Option<PathBuf>,
     pub python: Option<String>,
     pub groups: Vec<Group>,
+    pub diagnostic_status: DiagnosticStatus,
+}
+/// Diagnostic availability never determines the command's success or failure.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticStatus {
+    Parsed,
+    Unrecognized,
+    Unavailable,
 }
 #[derive(Debug, Serialize)]
 pub struct Group {
@@ -95,10 +104,12 @@ pub fn collect(plan: &Plan, error: &Error, started: SystemTime) -> Option<Summar
     })?;
     let header = cmd.log.as_deref()?;
     let log = plan.log.clone()?;
-    let text = read(&log)?;
+    let contents = read(&log);
     // Earlier successful workspaces/verification commands must not be diagnosed.
     let marker = format!("==> command: {command}\n");
-    let text = text.rsplit_once(&marker)?.1;
+    let text = contents
+        .as_deref()
+        .and_then(|s| s.rsplit_once(&marker).map(|(_, output)| output));
     let workspace = field(header, "workspace: ").map(str::to_owned);
     let python = field(header, "python: ");
     let mut groups = Vec::new();
@@ -130,7 +141,7 @@ pub fn collect(plan: &Plan, error: &Error, started: SystemTime) -> Option<Summar
             }
         }
     }
-    let mut fallback = group(text, workspace, None, python);
+    let mut fallback = group(text.unwrap_or_default(), workspace, None, python);
     // Keep command-level diagnostics absent from the package logs, without
     // repeating colcon's echoed excerpts or attributing them to another package.
     fallback.diagnostics.retain(|d| {
@@ -150,7 +161,15 @@ pub fn collect(plan: &Plan, error: &Error, started: SystemTime) -> Option<Summar
         groups.push(fallback);
     }
     groups.sort_by_key(|g| g.diagnostics.is_empty());
+    let diagnostic_status = if text.is_none() {
+        DiagnosticStatus::Unavailable
+    } else if groups.iter().all(|g| g.diagnostics.is_empty()) {
+        DiagnosticStatus::Unrecognized
+    } else {
+        DiagnosticStatus::Parsed
+    };
     Some(Summary {
+        diagnostic_status,
         log,
         command: command.clone(),
         status: status.clone(),
@@ -170,6 +189,15 @@ pub fn print(summary: &Summary) {
                 interpreter = python
             )
         );
+    }
+    match summary.diagnostic_status {
+        DiagnosticStatus::Unrecognized => {
+            eprintln!("  {}", rospm_core::msg!("build_summary.unrecognized"));
+        }
+        DiagnosticStatus::Unavailable => {
+            eprintln!("  {}", rospm_core::msg!("build_summary.unavailable"));
+        }
+        DiagnosticStatus::Parsed => {}
     }
     let mut remaining = 8;
     for group in summary.groups.iter().take(8) {
@@ -283,7 +311,16 @@ mod tests {
         );
         // Missing/truncated/unreadable logs never replace the command failure.
         fs::write(plan.log.as_ref().unwrap(), "unknown output").unwrap();
-        assert!(collect(&plan, &error, SystemTime::now()).is_none());
+        for missing in [false, true] {
+            if missing {
+                fs::remove_file(plan.log.as_ref().unwrap()).unwrap();
+            }
+            let report = collect(&plan, &error, SystemTime::now()).unwrap();
+            assert_eq!(report.diagnostic_status, DiagnosticStatus::Unavailable);
+            assert_eq!(report.status, "exit status: 2");
+            assert_eq!(report.command, "false");
+            assert!(report.groups.iter().all(|g| g.diagnostics.is_empty()));
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

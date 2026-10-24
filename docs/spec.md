@@ -319,9 +319,11 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 
 全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`（P1.5 起，见 §4.2）。
 
+诊断首期覆盖常见 GCC / Clang 语法、类型及缺头文件、CMake 包发现、链接库 / 符号缺失，以及 Python 语法、缩进、导入与 traceback 异常；自定义工具格式、交错 traceback、ExceptionGroup 树等不保证识别，依赖建议不自动安装依赖或修改源码。交互 shell 中自行运行的命令不在采集范围内。
+
 `build` / `apply --build` 的失败摘要按 workspace / 包归组，优先使用本次更新的 colcon 包日志，合并重复诊断，保留直接报错及建议；make / colcon 级联结果不作为独立根因。终端摘要最多 8 组、8 条诊断，完整日志仍为 `.rospm/log/build.log`。每份日志最多读取前 4 MiB，超出部分仍保存在日志中；包归属未知时为 `null`，不从并行交错输出猜测包名；已有包诊断时不再从合并流重建 Python traceback。
 
-`build --json` / `apply --json` 将计划、准备步骤和原始子进程输出送到 stderr，stdout 仅一个 JSON 对象：成功（含预览）为 `{ "ok": true }`；失败保留 `{ "ok": false, "error": "…" }`，有构建诊断时增加 `build_summary: { log, command, status, cwd, python, groups: [{ workspace, package, diagnostics, consequences }] }`。`diagnostics` 使用统一诊断结构（`code`、`category`、`severity`、`tool`、`location`、`raw`、`related`、`explanation`、`possible_causes`、`suggestions`），解释及建议随语言变化，字段名和枚举稳定；`consequences` 保留工具原文，不表示因果已证实。JSON 模式不交互询问清理重试，失败仍退出 1，底层退出状态保留在 `status` / `error`。
+`build --json` / `apply --json` 将计划、准备步骤和原始子进程输出送到 stderr，stdout 仅一个 JSON 对象：成功（含预览）为 `{ "ok": true }`；失败保留 `{ "ok": false, "error": "…" }`，失败命令启用日志采集时增加 `build_summary: { log, command, status, cwd, python, diagnostic_status, groups: [{ workspace, package, diagnostics, consequences }] }`。`diagnostics` 使用统一诊断结构（`code`、`category`、`severity`、`tool`、`location`、`raw`、`related`、`explanation`、`possible_causes`、`suggestions`），解释及建议随语言变化，字段名和枚举稳定；`consequences` 保留工具原文，不表示因果已证实。`diagnostic_status` 为稳定枚举：`parsed` 表示至少解析到一条诊断（不保证覆盖全部错误），`unrecognized` 表示未识别到支持的错误格式（即使存在 make / colcon 汇总），`unavailable` 表示合并日志无法读取或读取范围内没有失败命令边界，此时仍可保留可读取的本次包诊断。空诊断不表示成功；未知格式的原始输出仍实时转发并保存在日志中，不强行生成错误类别。终端在未识别或日志不可用时明确提示查看原始输出与日志路径；日志缺失 / 不完整时应查看终端输出。诊断收集失败不会替换原命令错误。JSON 模式不交互询问清理重试，失败仍退出 1，底层退出状态保留在 `status` / `error`。
 
 `check --target aarch64`（也接受 `linux-aarch64` / `arm64`）的仓库检查独立输出为 JSON 的 `repositories.items`；未指定 `--target` 时该字段为 `null`，不联网查询索引。native 查询官方 ROS 与 Ubuntu 的目标架构索引（arm64 使用 Ubuntu ports），覆盖 release / updates / security 的四个组件，检查平台覆盖合并后的 apt 包、底包及三个构建工具包。pixi 读取配置的 `pixi.toml`，不存在则在内存中生成默认配置；查询各 channel 的目标子目录及 `noarch` 的完整 `repodata.json.bz2`，包含普通、host、build 与适用 target 依赖，暂不支持 feature 环境。需安装 `gzip`（apt）或 `bzip2`（conda）。
 

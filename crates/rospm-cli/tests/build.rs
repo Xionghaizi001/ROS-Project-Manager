@@ -373,6 +373,76 @@ fn build_invokes_conda_and_propagates_its_failure_without_fallback() {
     assert!(dir.join("ws/build/pkg").is_dir());
     assert!(!String::from_utf8_lossy(&out.stderr).contains("retry the build"));
 
+    // Unknown bytes must survive the tee; unavailable logs must not hide failure.
+    let original_script = fs::read_to_string(&conda).unwrap();
+    for unavailable in [false, true] {
+        let output = if unavailable {
+            "printf '\\033[31mopaque tool failure\\033[0m\\n' >&2\n/bin/rm -f \"$FAILURE_LOG\"\nexit 19\n"
+        } else {
+            "printf '\\033[31mopaque tool failure\\033[0m\\n' >&2\nexit 19\n"
+        };
+        fs::write(&conda, original_script.replace("exit 19\n", output)).unwrap();
+        for (lang, hint) in [
+            ("en", "No supported error format"),
+            ("zh", "未识别到支持的错误格式"),
+        ] {
+            for json in [false, true] {
+                let mut command = rospm();
+                command
+                    .current_dir(&dir)
+                    .env("PATH", &bin)
+                    .env("CONDA_CALL", &call)
+                    .env("FAKE_ENV", &environment)
+                    .env("FAILURE_LOG", &log)
+                    .args(["--lang", lang, "build"]);
+                if json {
+                    command.arg("--json");
+                }
+                let out = command.output().unwrap();
+                assert_eq!(out.status.code(), Some(1));
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                assert!(
+                    stderr.contains("\x1b[31mopaque tool failure\x1b[0m"),
+                    "{stderr}"
+                );
+                if json {
+                    let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                    assert_eq!(value["ok"], false);
+                    assert!(value["error"].as_str().unwrap().contains("19"));
+                    assert_eq!(value["build_summary"]["status"], "exit status: 19");
+                    assert_eq!(value["build_summary"]["log"], log.to_str().unwrap());
+                    assert_eq!(
+                        value["build_summary"]["diagnostic_status"],
+                        if unavailable {
+                            "unavailable"
+                        } else {
+                            "unrecognized"
+                        }
+                    );
+                } else {
+                    let hint = if unavailable {
+                        if lang == "en" {
+                            "Could not read or locate"
+                        } else {
+                            "无法读取日志或定位"
+                        }
+                    } else {
+                        hint
+                    };
+                    assert!(stderr.contains(hint), "{stderr}");
+                    assert!(stderr.contains(log.to_str().unwrap()), "{stderr}");
+                    assert!(stderr.contains("19"));
+                }
+                if !unavailable {
+                    assert!(fs::read_to_string(&log)
+                        .unwrap()
+                        .contains("\x1b[31mopaque tool failure\x1b[0m"));
+                }
+            }
+        }
+    }
+    fs::write(&conda, original_script).unwrap();
+
     // Exercise real CLI execution/tee, per-package parsing, deduplication and
     // both languages without requiring ROS or a working compiler on the host.
     let script = fs::read_to_string(&conda).unwrap().replace(
