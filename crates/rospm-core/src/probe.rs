@@ -596,6 +596,8 @@ impl Host {
 
     /// A host with nothing installed and no way to query packages. Tests start
     /// from this and fill in what they need.
+    /// The platform is still the running machine's platform; synthetic tests
+    /// with a fixed target must explicitly set `platform` to match their fixture.
     pub fn empty() -> Host {
         Host {
             platform: Platform::current(),

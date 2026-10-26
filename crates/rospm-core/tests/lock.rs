@@ -71,6 +71,9 @@ fn project(name: &str, import: bool) -> (PathBuf, String) {
 
 fn synthetic_host() -> Host {
     let mut h = Host::empty();
+    // Match ctx() and the canned amd64 repository indexes, independently of
+    // the runner architecture. The ARM test overrides both host and context.
+    h.platform = Some(Platform::LinuxX86_64);
     for t in ["git", "vcs"] {
         h.tools.insert(t.to_string(), which::which(t).ok());
     }
