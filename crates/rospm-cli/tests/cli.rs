@@ -472,6 +472,8 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
     );
     let text = fs::read_to_string(dir.join("rospm.toml")).unwrap();
     assert!(text.contains("TODO") && has_cjk(&text), "{text}");
+    // init --from-env selects the host's distro (e.g. Jazzy on Ubuntu 24.04).
+    let manifest = rospm_core::manifest::Manifest::parse(&text, &dir.join("rospm.toml")).unwrap();
 
     // check: Chinese table, same exit codes as English.
     let out = rospm_zh().current_dir(&dir).arg("check").output().unwrap();
@@ -525,7 +527,10 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("sudo apt-get install -y ros-humble-ros-base"),
+        stdout.contains(&format!(
+            "sudo apt-get install -y {}",
+            manifest.ros_base_package()
+        )),
         "{stdout}"
     );
 
