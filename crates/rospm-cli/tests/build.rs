@@ -142,6 +142,8 @@ fn conda_help_and_configuration_errors_are_localized() {
 
 #[test]
 fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_external() {
+    let platform = rospm_core::platform::Platform::current().expect("supported test platform");
+    let subdir = rospm_core::pixi::conda_platform(platform);
     let dir = fixture("managed-conda-preview");
     // Use init's host-matching distro: apply deliberately rejects a Jazzy
     // manifest on an Ubuntu 22.04 development machine.
@@ -194,7 +196,7 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
                     .contains("89b786c8d2c8b0fda7553914c1314ae4ddaa094503802f279377b19ac4463cb2")
         );
         assert!(preview.contains(
-            user.join("data/rospm/conda/miniforge3-26.7.2-0-linux-64")
+            user.join(format!("data/rospm/conda/miniforge3-26.7.2-0-{subdir}"))
                 .to_str()
                 .unwrap()
         ));

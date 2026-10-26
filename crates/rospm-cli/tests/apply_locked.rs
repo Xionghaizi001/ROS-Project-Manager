@@ -34,6 +34,7 @@ fn host_distro() -> Option<(&'static str, &'static str, &'static str)> {
 /// A project fixture: one workspace, one git source (`demo_pkg`), rosdep
 /// disabled (kept out of the plan so assertions stay focused on `--locked`).
 fn fixture_dir(name: &str, ubuntu: &str, distro: &str, ros_base: &str) -> PathBuf {
+    let platform = Platform::current().expect("supported test platform");
     let dir = std::env::temp_dir().join(format!("rospm-cli-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("ws/src/my_pkg")).unwrap();
@@ -55,7 +56,7 @@ fn fixture_dir(name: &str, ubuntu: &str, distro: &str, ros_base: &str) -> PathBu
 [project]
 name = "locked_demo"
 ros_distro = "{distro}"
-platforms = ["linux-x86_64"]
+platforms = ["{platform}"]
 
 [environment]
 provider = "native"
@@ -79,7 +80,7 @@ enabled = false
 }
 
 /// A lock consistent with the manifest at `dir/rospm.toml`: pinned apt for
-/// `linux-x86_64` only, the `demo_pkg` git source pinned to a revision, and
+/// the host platform only, the `demo_pkg` git source pinned to a revision, and
 /// (unless overridden by the caller) both snapshots recorded.
 fn write_lock(
     dir: &Path,
@@ -111,7 +112,7 @@ fn write_lock(
             version: None,
         }],
         apt: vec![LockedApt {
-            platform: Platform::LinuxX86_64,
+            platform: Platform::current().expect("supported test platform"),
             name: ros_base.into(),
             version: "1.2.3-1noble.20260910.000000".into(),
             sha256: None,
@@ -252,6 +253,9 @@ fn apply_locked_replays_the_managed_conda_lock_or_refuses_without_a_record() {
         eprintln!("skipping: host is neither 22.04 nor 24.04");
         return;
     };
+    let platform = Platform::current().expect("supported test platform");
+    let subdir = rospm_core::pixi::conda_platform(platform);
+    let lock_path = format!("locks/conda-{subdir}.lock");
     let dir = fixture_dir("conda-lock", ubuntu, distro, ros_base);
     let manifest_path = dir.join("rospm.toml");
     let text = fs::read_to_string(&manifest_path).unwrap()
@@ -277,26 +281,26 @@ fn apply_locked_replays_the_managed_conda_lock_or_refuses_without_a_record() {
             .unwrap()
     };
     for (lang, expected) in [
-        ("en", "no managed Conda lock record for linux-x86_64"),
-        ("zh", "没有 linux-x86_64 的受管 Conda 锁记录"),
+        ("en", format!("no managed Conda lock record for {platform}")),
+        ("zh", format!("没有 {platform} 的受管 Conda 锁记录")),
     ] {
         let out = run(lang);
         assert!(!out.status.success());
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(stderr.contains(expected), "{stderr}");
-        assert!(stderr.contains(&dir.join("locks/conda-linux-64.lock").display().to_string()));
+        assert!(stderr.contains(&expected), "{stderr}");
+        assert!(stderr.contains(&dir.join(&lock_path).display().to_string()));
     }
 
-    let explicit = "# platform: linux-64\n@EXPLICIT\nhttps://conda.anaconda.org/conda-forge/linux-64/python-3.12.7-hc5c86c4_0_cpython.conda#0123456789abcdef0123456789abcdef\n";
+    let explicit = format!("# platform: {subdir}\n@EXPLICIT\nhttps://conda.anaconda.org/conda-forge/{subdir}/python-3.12.7-test_0_cpython.conda#0123456789abcdef0123456789abcdef\n");
     fs::create_dir(dir.join("locks")).unwrap();
-    fs::write(dir.join("locks/conda-linux-64.lock"), explicit).unwrap();
+    fs::write(dir.join(&lock_path), &explicit).unwrap();
     let mut lock = Lock::load(&dir.join("rospm.lock")).unwrap();
     let parsed = rospm_core::manifest::Manifest::load(&manifest_path).unwrap();
     let managed = parsed.build.conda.unwrap().managed.unwrap();
     lock.conda.push(LockedConda {
-        platform: Platform::LinuxX86_64,
-        lock: "locks/conda-linux-64.lock".into(),
-        lock_sha256: sha256_hex(explicit),
+        platform,
+        lock: lock_path.clone(),
+        lock_sha256: sha256_hex(&explicit),
         definition_sha256: rospm_core::conda::definition_sha256(&managed, &dir).unwrap(),
     });
     lock.save(&dir.join("rospm.lock")).unwrap();
@@ -312,7 +316,7 @@ fn apply_locked_replays_the_managed_conda_lock_or_refuses_without_a_record() {
         stdout.contains(&format!(
             "conda create --yes --prefix {} --file {}",
             dir.join(".rospm/conda/env").display(),
-            dir.join("locks/conda-linux-64.lock").display()
+            dir.join(&lock_path).display()
         )),
         "{stdout}"
     );
