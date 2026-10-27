@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [changelog.md]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.notes.outputs.tag }}
+      version: ${{ steps.notes.outputs.version }}
+      title: ${{ steps.notes.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 -m unittest discover -s scripts -p 'test_release_notes.py'
+      - id: notes
+        run: python3 scripts/release_notes.py
+      - name: Reject an existing tag
+        env:
+          RELEASE_TAG: ${{ steps.notes.outputs.tag }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            echo "Tag $RELEASE_TAG already exists; use a new version." >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86
+            manifest: examples/minimal-humble/rospm.toml
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            manifest: examples/minimal-humble/rospm.toml
+    runs-on: ${{ matrix.os }}
+    container: ubuntu:22.04
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates curl git
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - if: matrix.arch == 'x86'
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: cargo build --release --locked -p rospm-cli
+      - name: Smoke test on Ubuntu 22.04
+        env:
+          MANIFEST: ${{ matrix.manifest }}
+        run: |
+          test "$(target/release/rospm --version)" = "rospm $VERSION"
+          target/release/rospm --help
+          target/release/rospm --manifest "$MANIFEST" check
+          target/release/rospm --manifest "$MANIFEST" apply --dry-run
+      - name: Package
+        run: |
+          package="rospm_${VERSION}.${ARCH}"
+          mkdir -p "dist/$package"
+          cp target/release/rospm README.md changelog.md LICENSE "dist/$package/"
+          cp -r docs examples "dist/$package/"
+          tar -C dist -czf "dist/$package.tar.gz" "$package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_TITLE: ${{ needs.prepare.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Publish release with checksums
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            echo "Tag $RELEASE_TAG already exists; refusing to replace it." >&2
+            exit 1
+          fi
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
+          gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS \
+            --target "$GITHUB_SHA" --title "$RELEASE_TITLE" \
+            --notes-file release-notes.md --draft
+          gh release edit "$RELEASE_TAG" --draft=false

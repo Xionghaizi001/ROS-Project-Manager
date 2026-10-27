@@ -127,7 +127,7 @@ sign = false
 | 表 | 必填 | 规则 |
 |---|---|---|
 | `schema_version` | 是 | 整数，当前为 1 |
-| `project.ros_distro` | 是 | 枚举，见决策 #5 |
+| `project.ros_distro` | 是 | 枚举 |
 | `project.platforms` | 是 | 至少一项；`lock` 按每个平台分别解析 |
 | `environment.provider` | 是 | 只允许存在对应的 `environment.<provider>` 子表，多余子表报错 |
 | `build.verify` | 否 | 字符串列表，每项为一条 Bash 命令；空白或含 NUL 报错。只由 `apply --build` 在全部 workspace 编译后按顺序执行，工作目录为清单目录，环境与 `rospm env` 相同（ROS、全部 workspace、`env.*`），声明 Conda 时在同一 `conda run` 中执行；任一命令失败即停止并以非零退出。`build` 不执行 |
@@ -163,7 +163,7 @@ sign = false
 
 #### 受管环境的锁定与重放
 
-锁记录分两层（决策 #4 的引用方式）：每个平台一份 Conda 显式锁（`conda list --explicit --sha256` 格式：`# platform: <subdir>`、`@EXPLICIT`，每行为带 MD5 / SHA256 摘要的包 URL），路径由 `lock_file` 决定，与清单一起提交；`rospm.lock` 的 `[[conda]]` 只记录平台、锁文件相对路径、锁文件摘要及规范化定义摘要，不复制包列表。普通 `apply` 始终按定义求解，不读取锁文件。
+锁记录分两层：每个平台一份 Conda 显式锁（`conda list --explicit --sha256` 格式：`# platform: <subdir>`、`@EXPLICIT`，每行为带 MD5 / SHA256 摘要的包 URL），路径由 `lock_file` 决定，与清单一起提交；`rospm.lock` 的 `[[conda]]` 只记录平台、锁文件相对路径、锁文件摘要及规范化定义摘要，不复制包列表。普通 `apply` 始终按定义求解，不读取锁文件。
 
 `rospm lock` 只为本机平台记录受管环境：要求环境存在且完成记录第一行与当前定义一致（否则说明并不记录，提示先 `apply`）；用选定的 Conda 执行 `conda list --explicit --sha256 --prefix <prefix>`，校验平台与摘要后写入锁文件（内容不变则不重写），随后在完成记录中补写锁文件摘要，使本机随后的 `apply --locked` 直接复用该环境。其它平台的 `[[conda]]` 记录与 apt 一样原样保留。
 
@@ -231,12 +231,12 @@ name = "ros-jazzy-navigation2"
 version = "1.3.5-1noble.20260901.120000"
 sha256 = "…"
 
-# ---------- pip 层（只记录，供 verify 对比，决策 #6） ----------
+# ---------- pip 层（只记录，供 verify 对比） ----------
 [[pip]]
 name = "numpy"
 version = "1.26.4"
 
-# ---------- 受管 Conda 环境（按平台，只记引用与哈希，§2 受管环境的锁定与重放） ----------
+# ---------- 受管 Conda 环境（按平台，只记引用与哈希） ----------
 [[conda]]
 platform = "linux-x86_64"
 lock = "conda-linux-64.lock"               # conda list --explicit --sha256，与清单一起提交
@@ -255,7 +255,7 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 | pip | 无 | 始终仅记录 | — |
 | 受管 Conda | 显式锁（每包摘要）+ 锁文件哈希 + 定义哈希 | 无：缺记录、摘要或定义不符直接失败，不重新求解 | — |
 
-**`apply --locked` 的做法（P2）**：
+**`apply --locked` 的做法**：
 
 - 前置：`rospm.lock` 必须存在且 `manifest_sha256` 与清单原文一致，`provider.kind` 须为 native，锁文件里须有本机平台的 apt 记录且含清单的底包；任一不满足直接报错提示重新 `rospm lock`（陈旧的锁是用户错误，不是降级）。
 - ROS 源：复用 P1 的源文件管理——同一个 `/etc/apt/sources.list.d/ros2.list` 改写为 `deb [arch=<arch> signed-by=/usr/share/keyrings/ros2-snapshots-archive-keyring.gpg] http://snapshots.ros.org/<distro>/<date>/ubuntu <codename> main`；keyring 先从 `keyserver.ubuntu.com` 下载、按指纹 `4B63…CBF125EA` 核验，keyserver 返回的是 ASCII armor 格式，须 `gpg --dearmor` 成二进制后才安装（apt 不接受 `.gpg` 路径下的 armor 格式文件）；已存在且为二进制则跳过，armor 格式的旧文件会被重装。文件已指向同一快照则不动；文件不是 rospm 写的（如 `ros2-apt-source`）则不动并说明快照未应用。
@@ -265,7 +265,7 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 - 计划起始的 `apt-get update` 之前，先 `rm -f` 本次会重写的 rospm 自有源文件（`ros2.list` 需要改指向或 keyring 需要重装、`rospm-ubuntu-snapshot.list` 时间戳不同）：上次失败的 `apply --locked` 可能留下不可用的源，否则起始 update 就失败、修复步骤轮不到执行。不是 rospm 写的文件与无需重写的文件不动。
 - `uninstall` 连同 `ros2.list` 一并删除快照 keyring 与 `rospm-ubuntu-snapshot.list`；`ros2.list` 已不存在（例如中断的 `apply --locked` 之后）或 ROS 源不是 rospm 写的（如 `ros2.sources`）时也删除这两个残留，`--keep-source` 时保留。
 
-### 3.3 `lock` 的解析规则（P2）
+### 3.3 `lock` 的解析规则
 
 `rospm lock` 只读地解析**本机**，写出 `rospm.lock`；它描述的是已经 `apply` 过的状态，不是意图。
 
@@ -274,14 +274,14 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 | 源码 | 按叠加顺序对每个带 `sources` 的 workspace 运行 `vcs export --exact src`，与 `.repos` 中声明的仓库逐一对应：`rev` 取导出的提交 SHA，`url` 取 `.repos` 里的写法（检出的 origin 不同只加说明），`version` 记录 `.repos` 请求的分支 / 标签供人阅读。vcs 缺失或导出失败时对 git 仓库退回 `git rev-parse HEAD` 并说明 | 任一声明的仓库未导入 → 报错列出（先 `rospm apply`）；vcs 与 git 都没有 → 报错 |
 | apt | 本机 dpkg：全部已安装的 `ros-<distro>-*`、底包、平台覆盖后的额外 apt 包、`python3-rosdep` / `python3-vcstool` / `python3-colcon-common-extensions`，按名字排序；`.deb` 的 sha256 尽力从 `apt-cache show <名>=<版本>` 取；取不到时沿用旧 lock 中同名同版本的值，仍没有则留空（仅作记录，当前不校验） | 底包 / 额外包 / 工具未安装 → 不记录并说明；`dpkg-query` 不可用 → 报错；主机 Ubuntu 与清单不符 → 报错（与 `apply` 同一规则，否则记录的版本对不上快照） |
 | 快照 | ROS：GET `snapshots.ros.org/<distro>/` 目录索引，取最新的日期，读其 `dists/<codename>/Release` 核对 `Suite` / `Architectures` 含本机架构，下载 `main/binary-<arch>/Packages.gz` 核对本机全部锁定的 `ros-<distro>-*` 版本都在其中，再用 keyserver 取得并按指纹 `4B63…CBF125EA` 核验的密钥 `gpgv` 验证 `Release.gpg`；最新的三个日期依次尝试，都不含锁定版本（本机在最新快照之后从实时源安装）则不记录 ROS 快照并列出缺失的版本，提示下一个快照发布后重新 `lock`。Ubuntu：取本机 `/var/lib/dpkg/status` 的修改时间（最后一次装 / 卸包，此时本机装的版本都在实时源中；重复 `lock` 不变，保持幂等），取不到才退回 ROS 快照 `Release` 的 `Date:`，换算成 `YYYYMMDDTHHMMSSZ`，GET `snapshot.ubuntu.com/ubuntu/<ts>/dists/<codename>/InRelease` 须 200，并用 `/usr/share/keyrings/ubuntu-archive-keyring.gpg` 验签（无该文件则跳过并说明）。gpg / gpgv 缺失时记录日期但说明"签名未检查"；签名**失败**则不记录该日期。之后其余锁定包（不在 ROS 快照索引中的）逐个在 Ubuntu 快照的 `<codename>-security` / `-updates` / `<codename>` × `main universe restricted multiverse` 索引中查找（找齐即停，`universe` 索引有数十 MB），仍找不到的列出数量与示例；索引下载失败则说明未能核对 | 任一层失败 → 该字段为空 + `DEGRADED` 说明（`apply --locked` 用实时源）；`ROSPM_NO_NETWORK=1` 跳过整层并说明 |
-| pip | `python3 -m pip list --format=freeze`，只记录 `[dependencies].pip` 里点名的包（PEP 503 规范化名字） | pip 不可用或包未装 → 不记录并说明（决策 #6） |
-| 受管 Conda | 已就绪的受管环境：`conda list --explicit --sha256` 写入 `lock_file`，记录其哈希与定义哈希（§2 受管环境的锁定与重放） | 未就绪、PyPI 包未精确固定或与固定不一致、Conda 查询失败 → 不记录并说明（`apply --locked` 在该平台失败）；外部环境 → 不记录并说明 |
+| pip | `python3 -m pip list --format=freeze`，只记录 `[dependencies].pip` 里点名的包（PEP 503 规范化名字） | pip 不可用或包未装 → 不记录并说明 |
+| 受管 Conda | 已就绪的受管环境：`conda list --explicit --sha256` 写入 `lock_file`，记录其哈希与定义哈希 | 未就绪、PyPI 包未精确固定或与固定不一致、Conda 查询失败 → 不记录并说明（`apply --locked` 在该平台失败）；外部环境 → 不记录并说明 |
 
 - 只能解析本机平台：`--platform` 与本机不同直接报错（P5 起查仓库索引）。已有锁文件中**其它平台**的 apt 记录原样保留，本平台的记录整体替换，因此一份锁文件可由多台机器各自 `lock` 累积。
 - 幂等：解析结果与现有文件除 `generated_at` 外完全一致时不重写文件、`generated_at` 保持，输出 `unchanged`。apt 按（平台，名字）排序，源码按叠加顺序与 `.repos` 顺序。
 - `manifest_sha256` 是 `--manifest` 所指文件的原文哈希。
 
-### 3.4 `verify` 的对比规则（P2）
+### 3.4 `verify` 的对比规则
 
 只读。输出与 `check` 相同的期望 vs 实际表：
 
@@ -298,26 +298,26 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 
 ## 4. CLI 动词表
 
-命令名 `rospm`。分级依据决策 #2。
+命令名 `rospm`。
 
 | 命令 | 级别 | 作用 | `--dry-run` |
 |---|---|---|---|
 | `init [--from-env] [--distro <名>] [--base ros-base\|desktop]` | 写项目文件 / 幂等 | 生成清单模板；`--distro humble\|jazzy\|rolling` 指定模板发行版，不指定时 Ubuntu 22.04 → Humble、24.04 → Jazzy，无法识别时 → Jazzy；`--from-env` 尽力探测（决策 #3），不与 `--distro` 同用；`--base` 选底包元包（默认 `ros-base`，`desktop` 含 RViz / demos），写入 `environment.native.ros_base`；已存在不覆盖，需 `--force` | — |
 | `check [--target <platform>] [--strict]` | 只读 | 校验清单、拓扑排序、探测底包 / rosdep / apt / 源码差异并输出期望 vs 实际表；显式 `--target` 查询 apt / conda 目标仓库索引，跨架构时跳过主机探测；默认只报告（退出码 0），`--strict` 在所执行的检查有缺失或未知项时退出 1 | — |
-| `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`（§3.3）：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期、受管 Conda 环境的显式锁（写入 `lock_file`）；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 与 Conda 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
-| `verify` | 只读 | 对比锁文件与当前环境（§3.4）：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、受管 Conda 锁记录（与 apt 分开）、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
-| `apply [--distro <名>] [--locked] [--build] [--no-env-check] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（§4.1.1，`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源（见 §4.1）→ 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装（§3.2），受管 Conda 环境按本平台显式锁重放、缺记录即失败（§2）；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像；`--build`（可与 `--locked` 组合）在上述步骤成功后，重新探测主机（同一次运行中刚装好的 ROS / Miniforge 生效），按拓扑顺序编译全部 workspace（与 `build` 相同，含 Conda 就绪检查）并执行 `build.verify`；`--dry-run` 依次预览两段计划 | 必须 |
+| `lock [--platform <p>]` | 写项目文件 / 幂等 | 把本机解析成 `rospm.lock`：源码提交、apt 版本、pip 版本、经签名验证的 ROS / Ubuntu 快照日期、受管 Conda 环境的显式锁（写入 `lock_file`）；同一输入产生同一输出（内容不变则不重写、`generated_at` 保持）；只能解析本机平台，其它平台的 apt 与 Conda 记录原样保留；`ROSPM_NO_NETWORK=1` 跳过快照探测（降级并告警） | — |
+| `verify` | 只读 | 对比锁文件与当前环境：清单哈希、提供者、Ubuntu 版本、每个源码检出的 HEAD 与 origin、本机平台的 apt 版本、受管 Conda 锁记录（与 apt 分开）、pip 版本；输出与 `check` 同样的期望 vs 实际表，快照日期作 `info` 展示；全部一致退出 0，有 MISSING / MISMATCH / unknown 退出 1；清单哈希不一致提示重新 `lock` | — |
+| `apply [--distro <名>] [--locked] [--build] [--no-env-check] [--offline] [--mirror <name>]` | 修改系统 | `--distro humble\|jazzy\|rolling` 与清单不同时，先核对主机 Ubuntu（Humble → 22.04，Jazzy / Rolling → 24.04），不符或无法识别则报错且不改文件；相符则将 `project.ros_distro` 写回清单，`ros_base` 的 `ros-<旧发行版>-` 前缀同步改名，显式的 `environment.native.ubuntu` 同步为目标版本，保留注释；`--locked` 下发行版不同直接报错，提示先 `apply --distro` 再 `lock`。随后测速（`--dry-run` / `--offline` 跳过），再按顺序：ROS apt 源 → 底包 → 源码导入 → rosdep → 额外 apt；主机 Ubuntu 版本与清单不符直接报错；其他已装发行版只在计划中说明并保留（`uninstall` 只卸清单发行版）；`--dry-run` 只预览，包括清单写回；`--locked` 要求 `rospm.lock` 存在且与清单哈希一致（否则报错提示 `rospm lock`），把源切到快照并按锁定版本安装，受管 Conda 环境按本平台显式锁重放、缺记录即失败；`--mirror official\|tuna\|ustc\|aliyun`（或 `ROSPM_MIRROR`）指定源集，`--locked` 下只作用于 rosdistro / rosdep，快照没有镜像；`--build`（可与 `--locked` 组合）在上述步骤成功后，重新探测主机（同一次运行中刚装好的 ROS / Miniforge 生效），按拓扑顺序编译全部 workspace（与 `build` 相同，含 Conda 就绪检查）并执行 `build.verify`；`--dry-run` 依次预览两段计划 | 必须 |
 | `uninstall [--keep-source] [--yes]` | 修改系统 | 卸载清单所述 ROS 发行版：显式列出并 `apt-get remove` 全部已装 `ros-<distro>-*`（不跑 `autoremove`，只提示用户自行运行，以免删除计划外的包）；随后删除 rospm 写入的 apt 源与 keyring（`--keep-source`、机器上还有其它发行版、或源文件非 rospm 所写时保留）。不动项目文件、源码与 workspace，不卸 rosdep / vcstool / colcon。非 `--dry-run` 须交互确认或 `--yes`，stdin 非终端且无 `--yes` 时拒绝执行 | 必须 |
 | `build [<workspace>] [--conda-env <name> \| --conda-prefix <path>] [--no-env-check] [-- <colcon build 参数…>]` | 产出产物 | 按拓扑顺序调用 colcon，注入清单中的 colcon 配置；可覆盖项目默认的 Conda 环境选择。`--` 之后的参数仅本次追加在所构建 workspace 的 `build_args` 之后（未指定 `<workspace>` 时作用于每个 workspace，`--packages-select` 在不含该包的 workspace 中不构建任何包），同名参数由 colcon 取最后一个，不写回清单；只透传给 `colcon build`，不接受其它子命令，`apply --build` 不接受透传以保证只依赖清单与锁。`--log-base`（来自 `build_args` 或透传）是 colcon 全局参数，移到 `build` 之前。所构建 workspace 的 build / install base 依次取透传参数、清单 `build_args`、colcon 默认文件的 `build.build-base` / `build.install-base`、默认 `build` / `install`（相对 workspace 目录）：underlay 的 setup 文件在执行时按“配置的 base → 默认 base”查找，均无则报错未构建（`rospm env` / `shell` 跳过未构建 workspace），旧缓存扫描与删除重试取第一个存在的目录，shebang 改写在两者都不存在时报错；通过 mixin 设置的 base 不识别。colcon 与 `build.verify`（`apply --build`）命令的 stdout / stderr 实时转发并原样（含 ANSI 颜色）保存到 `<清单目录>/.rospm/log/build.log`，每次执行覆盖；每条命令前记录 `command` / `cwd` / `workspace` 或 `verify` / `python`（`system` 或 `conda -n …` / `-p …`）/ `package logs`（colcon 的按包日志 `<log base>/latest_build/<包>/stdout_stderr.log`，log base 依次取 `--log-base`、`$COLCON_LOG_PATH`、`log`，相对 workspace 目录），后记录退出状态；其它步骤（Conda 检查、shebang 改写）不写入。`--dry-run` 不创建日志。未声明 `build.conda`（也未用 `--conda-env` / `--conda-prefix`）而调用终端激活了 Conda（`$CONDA_PREFIX`）时，计划中说明，每条 colcon 与验证命令在加载 ROS / underlay 后先检查 `python3` 能否导入 `catkin_pkg`、`em`、`rclpy._rclpy_pybind11`：能则保持原环境；不能则对该命令取消激活（从 `PATH` 去掉该环境及其 Conda 根目录下的条目，`unset CONDA_PREFIX` 等变量，CMake 的 FindPython 也读取 `CONDA_PREFIX`）并在 stderr 说明；若 build base 下的 `*/CMakeCache.txt` 仍引用该环境则列出并失败，提示删除对应 build / install 或改用 Conda 构建，不自动删除。`build` / `apply --build` 因 colcon 命令失败或 Conda 旧缓存检查失败时，若 stdin 是终端且所构建 workspace 存在 build / install base，列出这些整个目录（含本次未选择的包）并询问 `[y/N]`，确认后删除（不跟随 `--symlink-install` 的符号链接）并重新执行一次构建计划；否认或非交互时保持原失败与退出状态 | 必须 |
-| `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本；声明 Conda 时先激活所选环境（§2） | — |
+| `env [--shell bash\|zsh\|fish]` | 只读 | 输出可 `source` 的环境脚本；声明 Conda 时先激活所选环境 | — |
 | `shell` | 启动子进程 | 在已 source 的子 shell 中工作（同 `env`，含 Conda 激活） | — |
 | `deps check` / `deps install` | 只读 / 修改系统 | `check`：解析全部 workspace 的 `package.xml`，把依赖键分为内部（项目内某个包提供）、外部（交给 rosdep）、跳过（`skip_keys`）；外部键经 `rosdep check` / `rosdep resolve` 映射到 apt 包并查 dpkg，输出期望 vs 实际表（未装 `MISSING`、rosdep 无法解析或未安装 rosdep 为 `unknown`），`package.xml` 解析失败为 `MISMATCH`；始终退出 0；`--json` 为 `{ ok, workspaces[], internal[], external[], skipped[], environment }`。`install`：与 `apply` 的 rosdep 步骤同一命令（未 `rosdep update` 时先 update，按叠加顺序逐 workspace `rosdep install`，`--skip-keys`，`ROSPM_MIRROR` 生效），但不做 `rosdep init`（提示先 `rospm apply`）、不测速 | install 必须 |
-| `export [--target <p>] [-o <path>]` | 产出产物 | 生成离线包，见 §5 | 必须 |
+| `export [--target <p>] [-o <path>]` | 产出产物 | 生成离线包 | 必须 |
 | `import <bundle>` | 修改系统 | 校验并解包，然后等价于 `apply --locked --offline` | 必须 |
 | `editor [vscode\|clion\|devcontainer]` | 写项目文件 / 幂等 | 生成编辑器配置 | — |
-| `doctor [--no-network]` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用；ROS apt 源 / `universe` / locale 状态；官方源与各镜像的测速表（§4.1.1） | — |
+| `doctor [--no-network]` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用；ROS apt 源 / `universe` / locale 状态；官方源与各镜像的测速表 | — |
 
-全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`（P1.5 起，见 §4.2）。
+全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`。
 
 诊断首期覆盖常见 GCC / Clang 语法、类型及缺头文件、CMake 包发现、链接库 / 符号缺失，以及 Python 语法、缩进、导入与 traceback 异常；自定义工具格式、交错 traceback、ExceptionGroup 树等不保证识别，依赖建议不自动安装依赖或修改源码。交互 shell 中自行运行的命令不在采集范围内。
 
@@ -343,11 +343,11 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 | 5 | `apt-get install -y <ros_base> python3-rosdep python3-vcstool python3-colcon-common-extensions` | 无（apt 自身幂等） |
 
 - rospm 自己写 keyring + `sources.list.d`，而不是安装 `ros2-apt-source` 包：P2 `apply --locked` 要把同一文件指向 `snapshots.ros.org` 并以 `signed-by=` 引用快照密钥，两者共用一套源文件管理代码（决策 #14）。
-- locale 只看**系统默认值**（`/etc/default/locale`，PAM 登录时读取、`update-locale` 写入），不看调用 rospm 的进程环境：`LANG=C rospm apply`（CI、脚本、临时切英文输出）不得改写用户的系统 locale。文件里非 UTF-8 的值来自 `LC_ALL` / `LC_CTYPE` 时，`update-locale` 以裸变量名把它移除（注释掉）而不是覆盖，让新的 `LANG` 生效。没有 `/etc/default/locale`（裸容器）时退回进程环境判断。`check` / `doctor` 分两行：`system locale`（`apply` 会修的那个，非 UTF-8 为 `MISSING`）与 `shell locale`（仅当前 shell，非 UTF-8 为 `info`，`--strict` 不受影响）；计划注释写明改的是哪个文件、原值是什么。rospm 自身的输出语言选择（§4.2）与此无关，仍只看进程环境。
+- locale 只看**系统默认值**（`/etc/default/locale`，PAM 登录时读取、`update-locale` 写入），不看调用 rospm 的进程环境：`LANG=C rospm apply`（CI、脚本、临时切英文输出）不得改写用户的系统 locale。文件里非 UTF-8 的值来自 `LC_ALL` / `LC_CTYPE` 时，`update-locale` 以裸变量名把它移除（注释掉）而不是覆盖，让新的 `LANG` 生效。没有 `/etc/default/locale`（裸容器）时退回进程环境判断。`check` / `doctor` 分两行：`system locale`（`apply` 会修的那个，非 UTF-8 为 `MISSING`）与 `shell locale`（仅当前 shell，非 UTF-8 为 `info`，`--strict` 不受影响）；计划注释写明改的是哪个文件、原值是什么。rospm 自身的输出语言选择与此无关，仍只看进程环境。
 - `--dry-run` 会完整打印将写入的源文件内容。
 - 密钥指纹内置于二进制（`probe::ROS_KEY_FINGERPRINT`）。指纹不符或下载失败（404、超时）时 `apply` 报错退出，不写 keyring；不能因为网络停滞无限等待（P1 实测中 `curl` 曾在 HTTP/2 连接上挂起 2 分钟以上）。
 - `[workspaces.<name>.colcon].mixins` 依赖 `python3-colcon-mixin`，该包不在 `python3-colcon-common-extensions` 的依赖里，且 mixin 仓库需要用户自行 `colcon mixin add/update`（决策 #8）。清单声明了 mixins 时，`check` 额外探测 `colcon mixin` 是否可用。
-- 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动（§7）。
+- 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动。
 
 #### 4.1.1 源镜像与网络探测（决策 #17）
 
@@ -368,7 +368,7 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 
 **不做**：不改 Ubuntu 自身的 apt 源（用户系统配置）；不为 git 提供镜像；`--dry-run` 不测速（保持离线可用与确定性，可用 `--mirror` 看镜像版计划）。计划中官方源步骤失败时的错误信息会提示 `rospm doctor` 与 `--mirror`。
 
-### 4.2 输出语言（i18n，P1.5，决策 #16）
+### 4.2 输出语言（i18n）
 
 **语言选择**：按 GNU gettext 的优先级读环境变量 `LANGUAGE`（冒号分隔列表，取第一个能匹配的）→ `LC_ALL` → `LC_MESSAGES` → `LANG`。值以 `zh` 开头（`zh_CN.UTF-8`、`zh_TW`、`zh_Hans` 等）→ 简体中文；其余（含未设置、`C`、`POSIX`）→ 英文。`ROSPM_LANG=zh|en` 覆盖环境 locale，`--lang` 再覆盖 `ROSPM_LANG`。语言在解析命令行参数之前确定，因此 `--help` 也随之切换。
 
@@ -389,7 +389,7 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 - 每个键必须同时存在于两种语言，由单元测试保证；缺失键回退英文并在 `-v` 下告警，不 panic。
 - P1.5 之后新增的面向用户字符串一律走 i18n 层；review 时把裸英文字符串视为缺陷。
 
-**实现说明（P1.5 落地后，2026-09-26）**：
+**实现说明**：
 - 库：`rust-i18n`，资源 `crates/rospm-cli/locales/{en,zh-CN}.yml` 编译进二进制。`rospm-core` 只产出 `Message`（`Text` 原样文本，或 `Key { key, args }`），`plan` 注释 / 标题、`check` 报告的 `subject` / `expected` / `actual`、`Error`、`init --from-env` 的说明与草稿注释全部是 `Message`；CLI 启动时通过 `rospm_core::message::set_renderer` 安装一个渲染函数，`Message` 的 `Display` / `Serialize` 由它完成，未安装时显示开发者形式 `key(arg=value)`（核心库的单测看到的就是这种形式）。
 - `LANGUAGE` 列表中只有 `zh*` / `en*` 条目算"匹配"，其它条目跳过；列表无匹配时继续按 `LC_ALL` → `LC_MESSAGES` → `LANG` 判断。`--lang` 只接受 `zh` / `en`。
 - `--help` 的章节标题（用法 / 命令 / 参数 / 选项）通过自定义 help 模板翻译，`help` 子命令由 rospm 自己实现；但 clap 自身的解析错误（如 `error: unexpected argument`、`invalid value`）与 `[OPTIONS]` / `<COMMAND>` 这类占位符仍为英文，属已知限制。
@@ -397,7 +397,7 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 
 ## 5. 离线导出包格式
 
-决策 #10：`manifest + data`，校验必选，签名可选，压缩可选。
+`manifest + data`，校验必选，签名可选，压缩可选。
 
 ```
 <name>-<platform>-<date>.rospm/           # 或 .rospm.tar / .rospm.tar.zst
@@ -421,18 +421,16 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 
 ## 6. 测试矩阵
 
-决策 #11。全部在容器内运行。
-
 | 维度 | 取值 |
 |---|---|
 | 架构 | x86_64、aarch64（GitHub ARM runner，缺失时 QEMU） |
 | Ubuntu / ROS | 22.04 + Humble、24.04 + Jazzy；Rolling 仅冒烟。发行版 EOL 后矩阵不缩减 |
-| 提供者 | native（P1 起）、pixi（P3 起）、docker（P4 起） |
+| 提供者 | native、pixi、docker |
 | 场景 | `check` → `apply --dry-run` → `apply` → `build` → `env` 后 `ros2 run` 冒烟；P2 起加 `lock` → 新容器 `apply --locked` → `verify` |
 
 单元测试重点：清单解析与校验、拓扑排序、平台覆盖合并、锁文件读写往返、bundle 校验。
 
-## 7. 非目标（记录，决策 #9）
+## 7. 非目标
 
 - ROS 1、非 Ubuntu 平台、Windows / macOS
 - 安装、升级或更换 Ubuntu 本身（native `apply` 只在版本匹配的主机上安装 ROS，否则报错）
@@ -443,11 +441,3 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 - Nix 路线
 - 从已有环境完整还原 colcon 配置与叠加顺序（只 best-effort）
 
-## 8. P0 外部事实验证状态
-
-实测过程、命令、证据及未完成项见 [P0 核验报告](p0-external-validation.md)。
-
-- ROS：日期目录和 Jazzy noble 的 amd64/arm64 索引已读取，索引大小及 SHA256 与 Release 一致；快照间隔不固定，必须发现实际日期；当前 Rolling 路径 404。快照由独立密钥 `4B63CF8FDE49746E98FA01DDAD19BAB3CBF125EA`（"ROS Snapshot builder"，官方 wiki 指定从 `keyserver.ubuntu.com` 获取，有效期至 2027-06-01）签名，`gpgv` 验证 Release.gpg / InRelease 通过；`apply --locked` 必须以 `signed-by=` 引用该 keyring。
-- Ubuntu：22.04 的 APT **2.4.11 起已回移植快照支持**；本机 2.4.14 的原生 `--snapshot` 与直接 URL 两种方案均更新成功，直接 URL 下载指定版本样例包成功。
-- pixi-pack：pixi 0.81.0 + pixi-pack 0.7.11 在 x86_64 上为 `linux-aarch64` 完成 RoboStack 最小项目的 `pixi lock` 与打包，归档内 34 个包 SHA256 与 `pixi.lock` 全部一致；ARM 主机解包运行待 P3/P5。
-- rosdep：RoboStack 默认列表加载 `ros-noetic/master/conda.yaml`；使用独立源/缓存及 `--os=conda:linux`。系统键映射已实测；ROS 包映射依赖 conda-forge 补丁：未经补丁的上游对 Humble `rclcpp` 解析失败，conda-forge 0.26.0 build 1 解析为 `ros-humble-rclcpp`。该构建的 `check`/`install` 仅兼容 micromamba 1.x，rospm 只用其 `resolve`/`keys`。`skip_keys` 共用原始键，但 Pixi keys/resolve 流程须在解析前自行过滤，安装由 Pixi 执行。
