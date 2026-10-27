@@ -42,6 +42,7 @@ jobs:
   smoke:
     needs: test
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: "ubuntu:22.04"
@@ -67,14 +68,26 @@ jobs:
       - run: bin/rospm --manifest ${{ matrix.manifest }} build --dry-run
       - run: bin/rospm --manifest ${{ matrix.manifest }} env
       - run: bin/rospm doctor --json || true   # tools are absent here; report only
-      # P2: deps / lock / verify on a bare container. Sources are not imported,
-      # so `lock` must refuse (a lock describes a resolved state) and `verify`
+      # P2: deps / lock / verify on a bare container. Neither vcs nor git is installed,
+      # so `lock` must refuse (source revisions cannot be recorded) and `verify`
       # must ask for one; neither may touch the network or the system.
       - run: bin/rospm --manifest ${{ matrix.manifest }} deps check --json | grep -q '"external"'
       - run: |
           bin/rospm --manifest ${{ matrix.manifest }} deps install --dry-run | grep -q 'dry-run: nothing executed'
-      - run: "! ROSPM_NO_NETWORK=1 bin/rospm --manifest ${{ matrix.manifest }} lock 2> /tmp/lock.txt; grep -q 'not imported' /tmp/lock.txt"
-      - run: "! bin/rospm --manifest ${{ matrix.manifest }} verify 2> /tmp/verify.txt; grep -q 'rospm lock' /tmp/verify.txt"
+      - run: |
+          if ROSPM_NO_NETWORK=1 bin/rospm --manifest ${{ matrix.manifest }} lock 2> /tmp/lock.txt; then
+            echo 'lock unexpectedly succeeded' >&2
+            exit 1
+          fi
+          cat /tmp/lock.txt
+          grep -q 'neither vcs nor git is available' /tmp/lock.txt
+      - run: |
+          if bin/rospm --manifest ${{ matrix.manifest }} verify 2> /tmp/verify.txt; then
+            echo 'verify unexpectedly succeeded' >&2
+            exit 1
+          fi
+          cat /tmp/verify.txt
+          grep -q 'rospm lock' /tmp/verify.txt
       # i18n (P1.5): the other Chinese output is covered by cargo test; only the
       # ros2.list line needs a bare system to be planned. The runner's own
       # locale is C, which the English steps above rely on.
