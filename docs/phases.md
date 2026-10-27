@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-25。
+> 记录当前及后续阶段任务，状态更新日期：2026-10-27。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -12,19 +12,8 @@
 
 - [x] `apply --locked` 的长期实测与相关修复：
   - [x] 时间点 1（2026-09-26，22.04 / Humble）非破坏性核验，脚本 `scripts/p2-locked-sandbox-check.sh`：真实 `lock` 发现并验签 `2026-08-07` / `20260808T004205Z`；隔离 apt 目录中两个快照的索引可下载；按快照合成的锁在空 dpkg 状态下完整解析 645 个包，`--allow-downgrades` 对 `python3-rosdep` 生效。
-  - [x] 修复：写 `rospm-ubuntu-snapshot.list` 后缺少 `apt-get update`，锁定安装原本看不到 Ubuntu 快照索引（`tests/plan.rs` 加断言）。
-  - [x] 真实闭环：实时 `apply` → `build` / 运行节点 → `lock` → `verify` → `uninstall`，已装包列表与基线完全一致；快照锁真实 `apply --locked` 成功（212 个包、`python3-rosdep` 降级、`git checkout --detach`），`verify` / `deps check` / `check --strict` 全部就绪，节点用锁定的 rclcpp 16.0.19 编译运行，重新 `lock` 与输入逐条一致，`uninstall` 后只剩按设计保留的工具版本差异。
-  - [x] 修复：keyserver 返回的快照密钥为 armor 格式，原样写入 `.gpg` 导致 apt 报 `NO_PUBKEY`；现在先 `gpg --dearmor`，探测识别 armor 格式的 keyring 并重装。
-  - [x] 修复：`uninstall` 在 `ros2.list` 已不存在时漏删快照 keyring 与 `rospm-ubuntu-snapshot.list`。
-  - [x] 修复（2026-09-27）：失败的 `apply --locked` 留下坏源后，计划起始的 `apt-get update` 使重跑失败，只能 `uninstall` 恢复。现在起始 update 之前先删除本次会重写的 rospm 自有源文件（`ros2.list`、`rospm-ubuntu-snapshot.list`），外来文件与无需重写的文件不动；`tests/plan.rs` 用"armor keyring + 旧 Ubuntu 快照"的残留状态断言删除先于首个 update、两文件随后重写。
-  - [x] 修复（2026-09-27）：`tests/apply_locked.rs` 依赖主机 keyring 状态。现在只在主机没有可用（二进制）快照 keyring 时断言计划含密钥指纹；快照 URL 与 Ubuntu 快照文件的断言对"写入"与"已配置"两种输出都成立。两种主机状态的完整断言由 `tests/plan.rs` 在伪造主机上覆盖。
-  - [x] 设计问题（2026-09-27 解决）：`lock` 记录的版本可能不在所选快照里（实时 ROS 源底包构建于 2026-09-08，最新快照为 2026-08-07；Ubuntu 快照由 ROS `Release` 日期换算，晚于它的 Ubuntu 更新同样缺失）。现在 `lock` 下载快照 `Packages.gz`（系统 `gzip -dc` 解压，不加依赖）逐包核对：ROS 快照取最新三个日期中第一个含全部锁定 `ros-<distro>-*` 版本的，都不含则不记录并列出缺失版本；Ubuntu 快照时间戳改取本机 `/var/lib/dpkg/status` 修改时间（最后一次装包），取不到才退回 ROS `Release` 日期；其余包在两个快照中都找不到的列出。本机实测（22.04，未装 ROS）：真实 `lock` 下载并核对 ROS 与 Ubuntu 索引，4 个包全部命中，Ubuntu 快照 `20260926T105514Z` 验签通过，约 11 秒。缺版本的分支由罐装服务器测试覆盖。
-  - [x] 设计问题（2026-09-27 解决）：锁文件只记录顶层 Ubuntu 包，系统库比快照新的主机上 `curl=<旧版本>` 因依赖精确版本而使整条安装失败（模拟退出 100）。现在 ROS 层（`ros-<distro>-*`、底包）与三个工具包仍精确安装、可降级；其余 Ubuntu 包本机已装且更新时保持不变并在计划中列出，`verify` 报 `info`（新增 `debver` 模块按 dpkg 规则比较版本，用例与真实 `dpkg --compare-versions` 对照一致）。本机 `apply --locked --dry-run` 实测：锁定 `curl …1ubuntu1.25`、本机 `…1ubuntu1.29` 时计划只保留说明、不再点名 `curl=`。
-  - [x] 修复（2026-09-27）：锁文件缺底包时 `verify` 仍报就绪。现在本机平台没有底包记录（含完全没有 apt 记录）时底包一行 `MISSING`、退出 1，与 `apply --locked` 拒绝该锁一致；核心与 CLI 测试覆盖。
   - [x] 时间点 2（2026-10-07，Ubuntu 24.04 / Jazzy）用同一脚本复测：ROS 快照 `2026-09-11`、Ubuntu 快照 `20261007T141443Z`；锁定版本 1/1 在快照中，干净机模拟 669 包、当前主机模拟 126 包均成功。日志见 [p2-locked-validation.md](p2-locked-validation.md)。
   - [x] 在卸载恢复干净的 Ubuntu 24.04 虚拟机上真实执行新的 `apply --locked`（2026-10-07）：快照源安装 205 个锁定 apt 条目，随后 `check --strict`、`verify`、`deps check` 均退出 0，并再次 `uninstall --yes` 收尾。
-
-- [ ] 在 GitHub 实际跑通 CI（含 `ubuntu-24.04-arm` runner）。
 - [ ] `env --shell fish`（原 P1 未完成项）。
 - [ ] 两台机器、间隔数周执行真实 `apply --locked`，`verify` 报告一致（22.04 / Humble 与 24.04 / Jazzy 的已有记录见上；独立机器同锁比较与后续间隔复测仍待执行）。
 - [ ] CI 增加 `lock` → 新容器 `apply --locked` → `verify` 场景。
@@ -33,24 +22,24 @@
 
 ## Phase 3 — aarch64 与平台覆盖（约 3 周）
 
-状态：**QEMU 开发验收完成，原生 ARM 发布验收待执行**。目标仓库索引查询已完成并通过回归验证；内置替换映射表已完成；已搭建 Docker + QEMU 环境并通过 aarch64 集成验收，正式发布前再使用原生 ARM runner 复测。
+状态：**开发阶段预设支持已完成，原生 ARM 实机验收由用户在发布后完成**。目标仓库索引查询已完成并通过回归验证；内置替换映射表已完成；已搭建 Docker + QEMU 环境并通过 aarch64 集成验收。2026-10-27 原生 ARM runner 的 workspace 测试与 release 构建已通过；开发阶段以预设支持、QEMU 集成验收及双架构 CI 为边界，不承诺原生 ARM 实机闭环已验证。
 
-- [ ] 正式发布前使用 GitHub `ubuntu-24.04-arm` 原生 runner 复测同一 fixture 的锁定还原、编译和节点运行，保留日志（发布门槛，当前不依赖 runner）。
-- **产出**：开发阶段已验证 x86 最终生成的多平台锁在 QEMU aarch64 上 `apply --locked`、构建和节点运行成功，缺失包有明确替代或明确报错。正式发布前通过原生 ARM runner 复测；当前未验证 Raspberry Pi / Jetson 的硬件接口与驱动。
+- [ ] 发布后由用户在原生 ARM 设备上验收锁定还原、编译和节点运行，反馈环境信息与日志（发布后跟踪项，不作为开发完成或 1.0 发布门槛）。
+- **产出**：开发阶段已验证 x86 最终生成的多平台锁在 QEMU aarch64 上 `apply --locked`、构建和节点运行成功，缺失包有明确替代或明确报错。原生 ARM 实机验收留待发布后由用户完成；当前未验证 Raspberry Pi / Jetson 的硬件接口与驱动。
 
 ---
 
 ## Phase 4 — Release 与 schema v1
 
-状态：**准备中**（2026-10-25）。中文 README 已同步当前能力；验收缺口、schema 审计与发布步骤见 [Phase 4 启动清单](p4-release-preparation.md)。manifest / lock schema v1 已冻结，尚未发布 1.0，Phase 3.5 干净 Conda 环境验收已通过，原生 ARM 验收仍为发布前置条件。
+状态：**准备中**（2026-10-27）。中文 README 已同步当前能力；验收缺口、schema 审计与发布步骤见 [Phase 4 启动清单](p4-release-preparation.md)。manifest / lock schema v1 已冻结，尚未发布 1.0，Phase 3.5 干净 Conda 环境验收与 GitHub CI 已通过；原生 ARM 实机验收不再作为发布前置条件。下一步整理发布回归、文档与示例，并完成打包、摘要及发布流程。
 
 - [x] 更新中文 README，建立 Phase 4 启动清单并明确未完成验收与发布边界。
 
-- [ ] 完成 aarch64 与 Phase 3.5 Conda 自动配置、一键还原验收后的回归测试、文档与示例清单整理。
+- [ ] 基于 aarch64 预设支持、QEMU 与双架构 CI，以及 Phase 3.5 Conda 自动配置、一键还原的已有验收，完成发布回归、文档与示例清单整理；注明原生 ARM 实机验收由用户在发布后完成。
 - [x] 完成 Phase 3.6 常见错误诊断验收，确认原始日志、失败状态与机器可读输出不受影响（2026-10-24，见 [验收记录](p36-diagnostics-validation.md)）。
 - [x] 冻结 manifest / lock schema v1（2026-10-25，见 [冻结规范与测试基线](schema-v1.md)）。
 - [ ] 构建并发布 1.0 版本及 aarch64 产物。
-- **产出**：1.0 发布，native 提供者、aarch64 目标与 schema v1 作为稳定基线。
+- **产出**：1.0 发布，native 提供者与 schema v1 作为稳定基线，提供 aarch64 预设支持与产物，并注明实机验收边界。
 
 ---
 
@@ -168,7 +157,7 @@
 ## Phase 8 — Pixi 提供者（约 3 周）
 
 状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库（`rospm-core::pixi`）已合并，尚未接入 CLI。
-前置：Phase 3 的 aarch64 验收、Phase 4 的 1.0 release 与 Phase 7 的 GUI；P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
+前置：Phase 3 的 aarch64 开发阶段预设支持、Phase 4 的 1.0 release 与 Phase 7 的 GUI；P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
 
 - [~] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。
   - [x] 核心库 `rospm-core::pixi`：`generate` 输出 RoboStack channel、`linux-64` / `linux-aarch64` 平台、底包与构建工具、`[activation.env]`、按叠加顺序的 `build-<ws>` 任务与汇总 `build` 任务；`read_summary` 读取现有 `pixi.toml`（含 `[project]` 与表形式 channel）。2026-09-26 已合并到 main。
@@ -185,7 +174,7 @@
 
 ## Phase 9 — Docker 提供者（约 2–3 周）
 
-状态：**未开始**。`ProviderKind::Docker` 目前为 `Unimplemented` 占位，前置为 Phase 3 的 aarch64 验收、Phase 4 的 1.0 release 与 Phase 7 的 GUI。
+状态：**未开始**。`ProviderKind::Docker` 目前为 `Unimplemented` 占位，前置为 Phase 3 的 aarch64 开发阶段预设支持、Phase 4 的 1.0 release 与 Phase 7 的 GUI。
 
 - [ ] 从清单生成 `Dockerfile`（分层：底包 → rosdep 依赖 → 源码 → 编译）、`compose.yaml`、`devcontainer.json`。
 - [ ] 锁定记录 image digest；`apply` 即 build，`shell` 即 `exec`。
