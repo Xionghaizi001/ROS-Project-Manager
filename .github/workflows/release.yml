@@ -50,10 +50,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-24.04
+          - os: ubuntu-22.04
             arch: x86
             manifest: examples/minimal-humble/rospm.toml
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             arch: arm64
             manifest: examples/minimal-humble/rospm.toml
     runs-on: ${{ matrix.os }}
