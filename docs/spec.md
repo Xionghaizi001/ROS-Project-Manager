@@ -1,6 +1,6 @@
 # rospm 规格 — manifest / lock schema v1
 
-> 状态：manifest / lock schema v1 已于 2026-10-25 冻结；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。软件仍为 0.0.1，1.0 发布验收见 [Phase 4 启动清单](p4-release-preparation.md)。
+> 状态：manifest / lock schema v1 已于 2026-10-25 冻结；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。软件版本已设为 1.0.0，1.0 发布验收见 [Phase 4 启动清单](p4-release-preparation.md)。
 > 决策依据见 `decisions.md`。
 
 ## 1. 文件与目录约定
@@ -349,7 +349,7 @@ native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 
 - `[workspaces.<name>.colcon].mixins` 依赖 `python3-colcon-mixin`，该包不在 `python3-colcon-common-extensions` 的依赖里，且 mixin 仓库需要用户自行 `colcon mixin add/update`（决策 #8）。清单声明了 mixins 时，`check` 额外探测 `colcon mixin` 是否可用。
 - 不做：安装 / 升级 / 更换 Ubuntu 本身，内核、驱动。
 
-#### 4.1.1 源镜像与网络探测（决策 #17）
+#### 4.1.1 源镜像与网络探测
 
 内置源集（`rospm-core::mirror`）：
 

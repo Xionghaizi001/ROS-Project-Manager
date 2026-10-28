@@ -1,6 +1,6 @@
 # Manifest / lock schema v1
 
-冻结日期：2026-10-25。本文与 [spec.md §2–3](spec.md) 定义磁盘格式 v1；实现为 `crates/rospm-core/src/{manifest,lock}.rs`，固定样本位于 `crates/rospm-core/tests/fixtures/schema-v1/`，契约测试为 `tests/schema_v1.rs`。冻结基线为引入本文与这些 fixtures 的 Git 提交（可用 `git log --diff-filter=A -- docs/schema-v1.md` 定位），不另外创建发布 tag。软件版本仍为 `0.0.1`，格式冻结不代表 1.0 发布或原生 ARM 验收完成。
+冻结日期：2026-10-25。本文与 [spec.md §2–3](spec.md) 定义磁盘格式 v1；实现为 `crates/rospm-core/src/{manifest,lock}.rs`，固定样本位于 `crates/rospm-core/tests/fixtures/schema-v1/`，契约测试为 `tests/schema_v1.rs`。冻结基线为引入本文与这些 fixtures 的 Git 提交（可用 `git log --diff-filter=A -- docs/schema-v1.md` 定位），不另外创建发布 tag。软件版本已设为 `1.0.0`，格式冻结不代表 1.0 发布或原生 ARM 验收完成。
 
 当前没有实际用户，不提供冻结前数据迁移或向后兼容方案。以后改变这里冻结的字段、类型或默认语义须显式评审 schema 版本，不能仅修改 Rust 类型而继续声称满足此基线。CLI JSON、Conda 内部完成标记、未来运行配置及离线 bundle 不属于本次冻结。
 

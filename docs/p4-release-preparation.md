@@ -1,6 +1,6 @@
 # Phase 4 启动清单：Release 与 schema v1
 
-更新日期：2026-10-27。当前为发布准备阶段，版本仍为 `0.0.1`；manifest / lock schema v1 已冻结，1.0 尚未发布。阶段总状态见 [phases.md](phases.md)。
+更新日期：2026-10-28。当前为发布准备阶段，版本已设为 `1.0.0`；manifest / lock schema v1 已冻结，1.0 尚未发布。阶段总状态见 [phases.md](phases.md)。
 
 ## 已有基线与发布前缺口
 
@@ -11,7 +11,7 @@
 | Conda | [已有环境验收](p35-existing-conda-validation.md)、[干净环境一键验收](p35-managed-conda-validation.md) | 纳入发布回归；原生 ARM 实机验收按 Phase 3 留待发布后由用户完成 |
 | 常见错误诊断 | [P3.6 验收](p36-diagnostics-validation.md) | 纳入发布回归，保持原始日志、失败状态和 JSON 契约 |
 | CI | 2026-10-27 用户确认 GitHub lint、双架构 test/build 与 Ubuntu 22.04 / 24.04 容器 smoke 已通过 | 补充运行链接；补充新容器锁定还原场景 |
-| 分发 | Cargo workspace 版本 `0.0.1`，CI 上传构建产物 | 制定版本、打包、摘要与发布流程，验证运行时兼容性 |
+| 分发 | Cargo workspace 版本 `1.0.0`，CI 上传构建产物 | 制定版本、打包、摘要与发布流程，验证运行时兼容性 |
 
 当前 CI 的 x86_64 构建产物已通过 Ubuntu 22.04 / 24.04 裸容器 smoke。候选发布产物仍需按声明的 Ubuntu / glibc 基线复核；该结果不代表原生 ARM 实机或硬件驱动已通过验收。
 

@@ -238,6 +238,11 @@ fn lock_discovers_snapshots_from_canned_servers() {
             release("noble"),
         )
         .with(
+            snapshot::packages_url(&ros_base, "noble", "main", "amd64"),
+            200,
+            "Package: ros-jazzy-rclcpp\nVersion: 28.1.5-1noble\n\nPackage: ros-jazzy-ros-base\nVersion: 0.11.0-1noble\n",
+        )
+        .with(
             snapshot::inrelease_url(&snapshot::ubuntu_snapshot_url("20260911T182146Z"), "noble"),
             200,
             release("noble"),
@@ -254,7 +259,21 @@ fn lock_discovers_snapshots_from_canned_servers() {
         assert!(keys.contains(&"lock.ros_snapshot_failed"), "{keys:?}");
     } else {
         assert_eq!(native.ros_snapshot.as_deref(), Some("2026-09-11"));
-        assert_eq!(native.ubuntu_snapshot.as_deref(), Some("20260911T182146Z"));
+    }
+    // Ubuntu verifies with gpgv alone; minimal images can have it without gpg.
+    // Without a ROS snapshot, this host also has no timestamp to query Ubuntu.
+    if native.ros_snapshot.is_none()
+        || (which::which("gpgv").is_ok() && Path::new(snapshot::UBUNTU_ARCHIVE_KEYRING).is_file())
+    {
+        assert_eq!(native.ubuntu_snapshot, None, "{keys:?}");
+        assert!(keys.contains(&"lock.ubuntu_snapshot_failed"), "{keys:?}");
+    } else {
+        assert_eq!(
+            native.ubuntu_snapshot.as_deref(),
+            Some("20260911T182146Z"),
+            "{keys:?}"
+        );
+        assert!(keys.contains(&"lock.ubuntu_snapshot_recorded"), "{keys:?}");
     }
     // Index down: degraded, not an error.
     fetch.0.clear();

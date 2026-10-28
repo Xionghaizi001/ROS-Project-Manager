@@ -630,7 +630,7 @@ dependencies = [
 
 [[package]]
 name = "rospm-cli"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -648,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "rospm-core"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "indexmap",
  "roxmltree",

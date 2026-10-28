@@ -20,7 +20,7 @@
 
 ---
 
-## Phase 3 — aarch64 与平台覆盖（约 3 周）
+## Phase 3 — aarch64 与平台覆盖
 
 状态：**开发阶段预设支持已完成，原生 ARM 实机验收由用户在发布后完成**。目标仓库索引查询已完成并通过回归验证；内置替换映射表已完成；已搭建 Docker + QEMU 环境并通过 aarch64 集成验收。2026-10-27 原生 ARM runner 的 workspace 测试与 release 构建已通过；开发阶段以预设支持、QEMU 集成验收及双架构 CI 为边界，不承诺原生 ARM 实机闭环已验证。
 
@@ -154,9 +154,9 @@
   - [ ] 安全约束：所有操作显示等价的 CLI 命令；发布 / 调用前标明目标名称、类型与生效的 `ROS_DOMAIN_ID`（及 `ROS_LOCALHOST_ONLY` 等）并需确认，避免误操作真实机器人；按频率发布、启动的节点和 GUI 自己拉起的 daemon 都在界面上列出并可停止，关闭 GUI 时只结束自己启动的进程。
 ---
 
-## Phase 8 — Pixi 提供者（约 3 周）
+## Phase 8 — Pixi 提供者
 
-状态：**进行中**（2026-09-26）。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库（`rospm-core::pixi`）已合并，尚未接入 CLI。
+状态：**未开始**。`ProviderKind::Pixi` 仍为 `Unimplemented` 占位；`pixi.toml` 生成的核心库（`rospm-core::pixi`）已合并，尚未接入 CLI。
 前置：Phase 3 的 aarch64 开发阶段预设支持、Phase 4 的 1.0 release 与 Phase 7 的 GUI；P0 的"补丁版 rosdep ROS 包映射"与"真实 ARM pixi-pack"两项核验。
 
 - [~] 从清单生成 `pixi.toml`（RoboStack channel、ROS 发行版、任务定义）。

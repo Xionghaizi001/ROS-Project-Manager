@@ -9,15 +9,13 @@
 
 ## 当前状态
 
-当前版本为 **0.0.1，正在准备 Phase 4 的 1.0 发布**，尚未发布稳定版。清单和锁文件的 `schema_version = 1` 已冻结，字段与校验边界见 [schema v1](docs/schema-v1.md)。
+当前版本为 **v1.0.0**。
 
-- **native 工作流**：支持初始化、主机检查、依赖安装、源码导入、锁定重放、构建、环境加载与卸载；Ubuntu 22.04 / Humble、24.04 / Jazzy 已有真实验收记录。
-- **aarch64**：目标仓库查询、包替换与多平台锁已实现，Docker + QEMU 下完成锁定还原、构建和节点运行；原生 ARM runner 复测仍是发布门槛，不代表 Raspberry Pi / Jetson 驱动已验证。
-- **Conda**：支持已有环境及自动安装 Miniforge、创建受管环境；已有环境与 x86_64 干净 Conda 环境一键还原[验收通过](docs/p35-managed-conda-validation.md)。
-- **错误诊断**：构建日志、常见 C++ / Python 错误摘要、中英文与 JSON 输出已验收；未知错误保留原始日志和失败状态。
-- **后续功能**：完整 TUI、离线导出 / 导入、编辑器集成、GUI、Pixi / Docker 提供者尚未完成，不能作为当前可用工作流。
-
-详细进度见 [阶段清单](docs/phases.md)，发布准备见 [Phase 4 启动清单](docs/p4-release-preparation.md)。
+- **native 工作流**：支持初始化、主机检查、依赖安装、源码导入、锁定重放、构建、环境加载与卸载；在 Ubuntu 22.04 / Humble、24.04 / Jazzy 实机测试通过。
+- **aarch64**：arm64 架构已在设计上支持，但未进行实机验证（因为开发者手上暂时没有）。
+- **Conda**：支持已有环境及自动安装 Miniforge、创建受管环境。
+- **错误诊断**：构建日志、常见 C++ / Python 错误摘要；未知错误保留原始日志和失败状态。
+- **后续功能**：完整 TUI、离线导出 / 导入、编辑器集成、GUI、Pixi / Docker 提供者、ROS1 支持。
 
 ## 从源码构建
 
@@ -46,7 +44,7 @@ rospm verify
 rospm shell                              # 进入项目环境
 ```
 
-`--base desktop` 可选择桌面底包。仓库中提供 [Jazzy / 24.04 示例](examples/minimal/rospm.toml) 与 [Humble / 22.04 示例](examples/minimal-humble/rospm.toml)，可用 `--manifest <路径>` 指定清单：
+`--base desktop` 可选择桌面版底包。仓库中提供 [Jazzy / 24.04 示例](examples/minimal/rospm.toml) 与 [Humble / 22.04 示例](examples/minimal-humble/rospm.toml)，可用 `--manifest <路径>` 指定清单：
 
 ```sh
 rospm --manifest examples/minimal/rospm.toml check
@@ -62,7 +60,7 @@ rospm apply --locked --build
 rospm verify
 ```
 
-`--locked` 要求清单哈希一致且锁中有本机平台所需记录；`lock` 只解析本机平台，保留其它平台记录。锁定还原依赖锁中指定的软件源与包仍然可访问，不等于离线还原。较新的非 ROS Ubuntu 系统包可能按规则保留，详见 [锁定与核验语义](docs/spec.md#32-锁定严格度与降级)。
+`--locked` 要求清单哈希一致且锁中有本机平台所需记录；`lock` 只解析本机平台，保留其它平台记录。锁定还原依赖锁中指定的软件源与包仍然可访问，不等于离线还原。较新的非 ROS Ubuntu 系统包可能按规则保留。
 
 ## 常用操作
 
@@ -91,7 +89,7 @@ rospm build --conda-env robot-dev
 rospm build --conda-prefix /path/to/env
 ```
 
-已有环境须自行准备兼容 ROS 的 Python、构建工具与依赖，rospm 不接管其包版本。受管模式使用 `[build.conda.managed]` 声明 Python、channels 等，由 `apply` 自动准备；锁定重放还需携带对应平台的 Conda 显式锁文件。Python ABI、配置字段和自动安装规则见 [文件与命令规范](docs/spec.md)。x86_64 干净 Conda 环境端到端验收已通过，复跑脚本与覆盖边界见[验收记录](docs/p35-managed-conda-validation.md)。
+已有环境须自行准备兼容 ROS 的 Python、构建工具与依赖，rospm 不接管其包版本。受管模式使用 `[build.conda.managed]` 声明 Python、channels 等，由 `apply` 自动准备；锁定重放还需携带对应平台的 Conda 显式锁文件。Python ABI、配置字段和自动安装规则见 [文件与命令规范](docs/spec.md)。
 
 ## 中文 / 英文输出
 
@@ -114,11 +112,6 @@ ROSPM_LANG=zh rospm build
 | `examples/` | 最小项目清单与源码入口 |
 | `scripts/` | 锁定重放、QEMU、Conda 与诊断验收脚本 |
 | `docs/` | 规范、设计决策、实施清单与实测记录 |
-
-- [路线图](ROADMAP.md) · [阶段清单](docs/phases.md) · [设计决策](docs/decisions.md)
-- [文件格式与命令语义](docs/spec.md) · [Phase 4 启动清单](docs/p4-release-preparation.md)
-- [native 验收](docs/p1-native-validation.md) · [锁定重放验收](docs/p2-locked-validation.md)
-- [aarch64 QEMU 验收](docs/p3-qemu-validation.md) · [已有 Conda 环境验收](docs/p35-existing-conda-validation.md) · [错误诊断验收](docs/p36-diagnostics-validation.md)
 
 ## 自行构建与安装（详细步骤）
 
