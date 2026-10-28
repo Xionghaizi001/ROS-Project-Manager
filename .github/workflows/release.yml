@@ -85,17 +85,14 @@ jobs:
           target/release/rospm --help
           target/release/rospm --manifest "$MANIFEST" check
           target/release/rospm --manifest "$MANIFEST" apply --dry-run
-      - name: Package
+      - name: Prepare binary
         run: |
-          package="rospm_${VERSION}.${ARCH}"
-          mkdir -p "dist/$package"
-          cp target/release/rospm README.md changelog.md LICENSE "dist/$package/"
-          cp -r docs examples "dist/$package/"
-          tar -C dist -czf "dist/$package.tar.gz" "$package"
+          mkdir -p dist
+          cp target/release/rospm "dist/rospm_${VERSION}.${ARCH}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch }}
-          path: dist/*.tar.gz
+          path: dist/rospm_*
           if-no-files-found: error
 
   publish:
@@ -117,15 +114,14 @@ jobs:
           pattern: release-*
           path: dist
           merge-multiple: true
-      - name: Publish release with checksums
+      - name: Publish release
         run: |
           if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
             echo "Tag $RELEASE_TAG already exists; refusing to replace it." >&2
             exit 1
           fi
           cd dist
-          sha256sum ./*.tar.gz > SHA256SUMS
-          gh release create "$RELEASE_TAG" ./*.tar.gz SHA256SUMS \
+          gh release create "$RELEASE_TAG" ./rospm_*.x86 ./rospm_*.arm64 \
             --target "$GITHUB_SHA" --title "$RELEASE_TITLE" \
             --notes-file release-notes.md --draft
           gh release edit "$RELEASE_TAG" --draft=false

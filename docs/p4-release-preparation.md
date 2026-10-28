@@ -11,7 +11,7 @@
 | Conda | [已有环境验收](p35-existing-conda-validation.md)、[干净环境一键验收](p35-managed-conda-validation.md) | 纳入发布回归；原生 ARM 实机验收按 Phase 3 留待发布后由用户完成 |
 | 常见错误诊断 | [P3.6 验收](p36-diagnostics-validation.md) | 纳入发布回归，保持原始日志、失败状态和 JSON 契约 |
 | CI | 2026-10-27 用户确认 GitHub lint、双架构 test/build 与 Ubuntu 22.04 / 24.04 容器 smoke 已通过 | 补充运行链接；补充新容器锁定还原场景 |
-| 分发 | Cargo workspace 版本 `1.0.0`，CI 上传构建产物 | 制定版本、打包、摘要与发布流程，验证运行时兼容性 |
+| 分发 | Cargo workspace 版本 `1.0.0`，CI 上传构建产物 | 制定版本、二进制分发与发布流程，验证运行时兼容性 |
 
 当前 CI 的 x86_64 构建产物已通过 Ubuntu 22.04 / 24.04 裸容器 smoke。候选发布产物仍需按声明的 Ubuntu / glibc 基线复核；该结果不代表原生 ARM 实机或硬件驱动已通过验收。
 
@@ -45,22 +45,22 @@ cargo build --release -p rospm-cli
 
 ### 3. 发布工程与候选版本验证
 
-- [x] 确定发布包架构命名：x86_64 使用 `*.x86.*`，aarch64 使用 `*.arm64.*`，具体示例见下文。
+- [x] 确定二进制架构命名：x86_64 使用 `*.x86`，aarch64 使用 `*.arm64`，具体示例见下文。
 - [ ] 验证 Ubuntu / glibc 最低运行要求并补齐安装说明：仓库预编译包以 Ubuntu 22.04 为最低支持目标；Ubuntu 20.04 的程序运行兼容性单独验证。
-- [x] 增加由 `changelog.md` 推送触发的发布流程，解析版本与说明，通过检查后创建 tag、上传双架构发布包与 SHA256 摘要并公开 Release。
-- [x] 已提供根目录 `LICENSE`（AGPL v3），Cargo 声明为 `AGPL-3.0-only`；发布包必须包含该文件，缺失时打包失败。
+- [x] 增加由 `changelog.md` 推送触发的发布流程，解析版本与说明，通过检查后创建 tag、上传双架构二进制文件并公开 Release。
+- [x] 已提供根目录 `LICENSE`（AGPL v3），Cargo 声明为 `AGPL-3.0-only`；许可证文件保留在源码仓库中。
 - [ ] 编写首版 changelog，以功能介绍和使用方法为主，不罗列开发期间的增量变更；整理支持矩阵与已知限制，明确 Pixi / Docker、离线、TUI / GUI 不属于此次稳定基线。
 - [ ] 对 x86_64 候选产物在声明支持的 Ubuntu 版本执行 `--version`、帮助、预览、真实锁定还原、构建及验证，保存证据；aarch64 保留构建与开发阶段验证证据，实机闭环由用户在发布后验收。
 - [ ] 所有发布门槛通过后更新版本与锁文件，发布 1.0，并记录 tag、commit、产物摘要和验收链接。
 
 #### 产物命名与运行基线
 
-| 架构 | 发布包命名 | 1.0 示例 |
+| 架构 | 二进制文件命名 | 1.0 示例 |
 | --- | --- | --- |
-| x86_64 | `*.x86.*` | `rospm_1.0.0.x86.tar.gz` |
-| aarch64 | `*.arm64.*` | `rospm_1.0.0.arm64.tar.gz` |
+| x86_64 | `*.x86` | `rospm_1.0.0.x86` |
+| aarch64 | `*.arm64` | `rospm_1.0.0.arm64` |
 
-归档内的可执行文件统一为 `rospm`；清单与锁文件继续使用 schema v1 的 `linux-x86_64` / `linux-aarch64` 平台名称。
+下载对应架构的文件后，使用 `install -m 755 <下载文件> ~/.local/bin/rospm` 安装（先创建 `~/.local/bin` 并确保其在 PATH 中）；清单与锁文件继续使用 schema v1 的 `linux-x86_64` / `linux-aarch64` 平台名称。
 
 - **仓库预编译包**：最低支持目标为 Ubuntu 22.04（glibc 2.35），覆盖 22.04 / 24.04。当前 CI 在 Ubuntu 24.04 上构建，不能仅凭构建系统版本推断产物最低要求；发布前须检查两种架构产物所需的 glibc 符号版本及其他动态库依赖，确保不超出基线，并保留前述架构验收边界。
 - **Ubuntu 20.04**：可作为程序本身的源码构建与运行兼容目标（glibc 2.31），但尚未验证，不能宣称已支持，也不承诺仓库预编译包可在该系统运行。确认支持前须在该系统构建并验证 `--version`、帮助等基本命令。
@@ -91,7 +91,7 @@ rospm apply --build
 
 首个非空行必须为 `# vX.Y.Z`，可在版本后附标题，仅接受正式版本号；去掉 `# ` 后作为 Release 标题，版本生成 `vX.Y.Z` tag，其余正文原样作为更新说明。版本与 Cargo 不一致、正文为空或 tag 已存在都会阻止发布，不覆盖历史版本。
 
-流程在原生 x86_64 / ARM runner 的 Ubuntu 22.04 容器内执行 workspace 测试、release 构建及基本 smoke，并在 x86_64 执行 fmt / clippy。随后打包 `rospm`、README、changelog、docs、examples 及 `LICENSE`，生成 `SHA256SUMS`。全部成功后，以触发推送的 commit 创建草稿 Release，上传两个架构的压缩包和摘要，最后公开；无需手动推 tag。该流程不替代前述真实 ROS 环境与硬件验收。
+流程在原生 x86_64 / ARM runner 的 Ubuntu 22.04 容器内执行 workspace 测试、release 构建及基本 smoke，并在 x86_64 执行 fmt / clippy。随后将编译出的 `rospm` 按版本和架构重命名。全部成功后，以触发推送的 commit 创建草稿 Release，仅上传两个架构的二进制文件，最后公开；不生成压缩包或额外的摘要附件，changelog 正文仅用于 Release 页面说明；无需手动推 tag。该流程不替代前述真实 ROS 环境与硬件验收。
 
 仓库须允许 GitHub Actions 使用 `GITHUB_TOKEN` 创建 Release（发布 job 申请 `contents: write`，其他 job 仅有读权限）。如果上传或公开失败，可能留下草稿或 tag；检查并清理该次未完成发布后才能重跑，已公开版本应通过新版本更新。当前未创建 `changelog.md`，避免尚未准备好的版本在下次普通推送时发布。
 
@@ -100,7 +100,7 @@ rospm apply --build
 这是第一个发布版本，changelog 直接面向新用户介绍功能和使用方法：
 
 1. **功能介绍**：清单描述、依赖检查与安装、源码导入、锁定还原、构建与验证、环境加载、已有及受管 Conda 环境、错误诊断、中英文与 JSON 输出。
-2. **安装与入门**：按架构选择上述发布包，校验 SHA256，解压并将 `rospm` 放入 PATH；引用 [README 快速开始](../README.md#快速开始)，说明 `init` → `check` → `apply --dry-run` → `apply --build` → `lock` → `verify`，以及另一台匹配机器上的 `apply --locked --build`。
+2. **安装与入门**：按架构下载上述二进制文件，重命名为 `rospm`、赋予执行权限并放入 PATH；引用 [README 快速开始](../README.md#快速开始)，说明 `init` → `check` → `apply --dry-run` → `apply --build` → `lock` → `verify`，以及另一台匹配机器上的 `apply --locked --build`。
 3. **支持范围与限制**：列明预编译包最低 Ubuntu 版本、ROS 发行版、ARM 验收边界和未实现能力，链接现有说明；不把内部阶段编号、重构或开发提交列表作为首版更新内容。
 
 ## 本次准备结果
