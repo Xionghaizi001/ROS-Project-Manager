@@ -38,19 +38,7 @@ impl System for Real {
     }
 
     fn run(&self, command: &Command) -> Result<()> {
-        let status = process::Command::new(&command.program)
-            .args(&command.args)
-            .current_dir(command.cwd.as_ref().expect("Conda command has a cwd"))
-            .stdin(Stdio::null())
-            .status()
-            .map_err(|e| Error::io(&command.program, e))?;
-        if !status.success() {
-            return Err(Error::CommandFailed {
-                command: command.render(),
-                status: status.to_string(),
-            });
-        }
-        Ok(())
+        run(command, None)
     }
 
     /// Streams to `dest` with bounded connect / response waits and retries
@@ -97,5 +85,72 @@ impl System for Real {
             error = last,
             path = dest.with_extension("").display()
         )))
+    }
+}
+
+/// Keep Conda validation/download behavior identical while capturing run output.
+pub(super) struct Observed<'a, 'b>(pub &'a crate::execution::Execution<'b>);
+impl System for Observed<'_, '_> {
+    fn query(&self, program: &str, args: &[&str]) -> Result<String> {
+        Real.query(program, args)
+    }
+    fn download(&self, url: &str, dest: &Path) -> Result<()> {
+        Real.download(url, dest)
+    }
+    fn run(&self, command: &Command) -> Result<()> {
+        run(command, Some(self.0))
+    }
+}
+
+fn run(command: &Command, execution: Option<&crate::execution::Execution<'_>>) -> Result<()> {
+    let mut process = command.to_process(execution.is_some());
+    process.stdin(Stdio::null());
+    let status = crate::plan::run_process(process, execution, None)
+        .map_err(|e| Error::io(&command.program, e))?;
+    if !status.success() {
+        return Err(Error::CommandFailed {
+            command: command.render(),
+            status: status.to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::execution::{Event, Execution, Interaction, Stream};
+    use std::sync::Mutex;
+
+    #[test]
+    fn conda_runs_use_shared_capture_and_preserve_failures() {
+        struct Recorder(Mutex<Vec<u8>>);
+        impl Interaction for Recorder {
+            fn event(&self, event: Event<'_>) {
+                if let Event::Log {
+                    stream: Stream::Stderr,
+                    bytes,
+                    ..
+                } = event
+                {
+                    self.0.lock().unwrap().extend_from_slice(bytes);
+                }
+            }
+        }
+        let recorder = Recorder(Mutex::new(Vec::new()));
+        let execution = Execution {
+            task: "conda",
+            step: 1,
+            interaction: &recorder,
+        };
+        let error = Observed(&execution)
+            .run(
+                &Command::new("bash")
+                    .args(["-c", "printf conda-error >&2; exit 3"])
+                    .cwd("/tmp"),
+            )
+            .unwrap_err();
+        assert!(matches!(error, Error::CommandFailed { .. }));
+        assert_eq!(*recorder.0.lock().unwrap(), b"conda-error");
     }
 }

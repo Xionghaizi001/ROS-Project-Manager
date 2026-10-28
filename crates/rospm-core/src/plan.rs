@@ -12,6 +12,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{Error, Result};
+use crate::execution::{Event, Execution, Interaction, Progress, State, Stream};
 use crate::message::Message;
 use crate::msg;
 
@@ -114,12 +115,12 @@ impl Command {
         out
     }
 
-    fn to_process(&self) -> process::Command {
+    pub(crate) fn to_process(&self, noninteractive: bool) -> process::Command {
         let mut cmd = if !self.preamble.is_empty() {
             // Run through bash so `source` lines take effect.
             let mut inner: Vec<String> = Vec::new();
             if self.sudo {
-                inner.push("sudo".into());
+                inner.push(if noninteractive { "sudo -n" } else { "sudo" }.into());
             }
             inner.push(shell_quote(&self.program));
             inner.extend(self.args.iter().map(|a| shell_quote(a)));
@@ -133,6 +134,9 @@ impl Command {
             c
         } else if self.sudo {
             let mut c = process::Command::new("sudo");
+            if noninteractive {
+                c.arg("-n");
+            }
             c.arg(&self.program).args(&self.args);
             c
         } else {
@@ -329,85 +333,170 @@ impl Plan {
     /// Execute the steps without rendering first. Callers that need a
     /// confirmation between the rendered plan and execution use this.
     pub fn perform(&self, out: &mut dyn Write) -> Result<()> {
+        self.perform_inner(out, None)
+    }
+
+    /// Execute with structured events and captured child output, without writing
+    /// to the frontend terminal. The caller owns task identity and renders the plan.
+    /// Child stdin is closed; interactive sudo/shell authorization is a separate
+    /// frontend responsibility. This does not implement worker isolation.
+    pub fn perform_with(&self, task: &str, interaction: &dyn Interaction) -> Result<()> {
+        interaction.event(Event::Task {
+            task,
+            state: State::Running,
+            total: self.steps.len(),
+            error: None,
+        });
+        let result = self.perform_inner(&mut std::io::sink(), Some((task, interaction)));
+        interaction.event(Event::Task {
+            task,
+            state: if result.is_ok() {
+                State::Succeeded
+            } else {
+                State::Failed
+            },
+            total: self.steps.len(),
+            error: result.as_ref().err().map(Error::message),
+        });
+        result
+    }
+
+    fn perform_inner(
+        &self,
+        out: &mut dyn Write,
+        observer: Option<(&str, &dyn Interaction)>,
+    ) -> Result<()> {
         let stdout = || PathBuf::from("<stdout>");
+        let started = std::time::SystemTime::now();
         let mut log: Option<std::fs::File> = None;
         for (i, step) in self.steps.iter().enumerate() {
-            match step {
-                Step::Conda(step) => {
-                    writeln!(out, "==> [{}] {}", i + 1, step.render())
-                        .map_err(|e| Error::io(stdout(), e))?;
-                    step.perform(out)?;
-                }
-                Step::Run(c) => {
-                    writeln!(out, "==> [{}] {}", i + 1, c.render())
-                        .map_err(|e| Error::io(stdout(), e))?;
-                    let status = match (&self.log, &c.log) {
-                        (Some(path), Some(header)) => {
-                            if log.is_none() {
-                                writeln!(out, "==> # {}", msg!("plan.log", path = path.display()))
+            let execution = observer.map(|(task, interaction)| Execution {
+                task,
+                step: i + 1,
+                interaction,
+            });
+            if let Some(e) = &execution {
+                e.interaction.event(Event::Step {
+                    task: e.task,
+                    step: e.step,
+                    state: State::Running,
+                });
+            }
+            let mut progress = Progress {
+                out,
+                execution: execution.as_ref(),
+            };
+            let out: &mut dyn Write = &mut progress;
+            let result = (|| -> Result<()> {
+                match step {
+                    Step::Conda(step) => {
+                        writeln!(out, "==> [{}] {}", i + 1, step.render())
+                            .map_err(|e| Error::io(stdout(), e))?;
+                        step.perform_observed(out, execution.as_ref())?;
+                    }
+                    Step::Run(c) => {
+                        writeln!(out, "==> [{}] {}", i + 1, c.render())
+                            .map_err(|e| Error::io(stdout(), e))?;
+                        let status = match (&self.log, &c.log) {
+                            (Some(path), Some(header)) => {
+                                if log.is_none() {
+                                    writeln!(
+                                        out,
+                                        "==> # {}",
+                                        msg!("plan.log", path = path.display())
+                                    )
                                     .map_err(|e| Error::io(stdout(), e))?;
-                                log = Some(open_log(path).map_err(|e| Error::io(path, e))?);
+                                    log = Some(open_log(path).map_err(|e| Error::io(path, e))?);
+                                }
+                                out.flush().map_err(|e| Error::io(stdout(), e))?;
+                                let file = log.as_ref().expect("opened above");
+                                run_logged(c, header, file, execution.as_ref())
+                                    .map_err(|e| Error::io(path, e))?
                             }
-                            out.flush().map_err(|e| Error::io(stdout(), e))?;
-                            let file = log.as_ref().expect("opened above");
-                            run_logged(c, header, file).map_err(|e| Error::io(path, e))?
-                        }
-                        _ => c
-                            .to_process()
-                            .status()
+                            _ => run_process(
+                                c.to_process(execution.is_some()),
+                                execution.as_ref(),
+                                None,
+                            )
                             .map_err(|e| Error::io(&c.program, e))?,
-                    };
-                    if !status.success() {
-                        return Err(Error::CommandFailed {
-                            command: c.render(),
-                            status: status.to_string(),
+                        };
+                        if !status.success() {
+                            return Err(Error::CommandFailed {
+                                command: c.render(),
+                                status: status.to_string(),
+                            });
+                        }
+                    }
+                    Step::WriteFile {
+                        path,
+                        contents,
+                        sudo,
+                    } => {
+                        writeln!(
+                            out,
+                            "==> [{}] {}",
+                            i + 1,
+                            msg!("plan.writing", path = path.display())
+                        )
+                        .map_err(|e| Error::io(stdout(), e))?;
+                        if *sudo {
+                            write_file_sudo(path, contents, execution.as_ref())?;
+                        } else {
+                            if let Some(parent) = path.parent() {
+                                std::fs::create_dir_all(parent)
+                                    .map_err(|e| Error::io(parent, e))?;
+                            }
+                            write_atomic(path, contents.as_bytes())
+                                .map_err(|e| Error::io(path, e))?;
+                        }
+                    }
+                    Step::FetchKey {
+                        url,
+                        dest,
+                        fingerprint,
+                    } => {
+                        writeln!(
+                            out,
+                            "==> [{}] {}",
+                            i + 1,
+                            msg!(
+                                "plan.fetching_key",
+                                url = url,
+                                dest = dest.display(),
+                                fingerprint = fingerprint
+                            )
+                        )
+                        .map_err(|e| Error::io(stdout(), e))?;
+                        fetch_key_observed(url, dest, fingerprint, execution.as_ref())?;
+                    }
+                    Step::Note(text) => {
+                        writeln!(out, "==> # {text}").map_err(|e| Error::io(stdout(), e))?;
+                    }
+                }
+                Ok(())
+            })();
+            if let Some(e) = &execution {
+                if let Err(error) = &result {
+                    if let Some(summary) = crate::diagnostic::summary::collect(self, error, started)
+                    {
+                        e.interaction.event(Event::Diagnostics {
+                            task: e.task,
+                            step: e.step,
+                            summary: &summary,
                         });
                     }
                 }
-                Step::WriteFile {
-                    path,
-                    contents,
-                    sudo,
-                } => {
-                    writeln!(
-                        out,
-                        "==> [{}] {}",
-                        i + 1,
-                        msg!("plan.writing", path = path.display())
-                    )
-                    .map_err(|e| Error::io(stdout(), e))?;
-                    if *sudo {
-                        write_file_sudo(path, contents)?;
+                e.interaction.event(Event::Step {
+                    task: e.task,
+                    step: e.step,
+                    state: if result.is_ok() {
+                        State::Succeeded
                     } else {
-                        if let Some(parent) = path.parent() {
-                            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
-                        }
-                        write_atomic(path, contents.as_bytes()).map_err(|e| Error::io(path, e))?;
-                    }
-                }
-                Step::FetchKey {
-                    url,
-                    dest,
-                    fingerprint,
-                } => {
-                    writeln!(
-                        out,
-                        "==> [{}] {}",
-                        i + 1,
-                        msg!(
-                            "plan.fetching_key",
-                            url = url,
-                            dest = dest.display(),
-                            fingerprint = fingerprint
-                        )
-                    )
-                    .map_err(|e| Error::io(stdout(), e))?;
-                    fetch_key(url, dest, fingerprint)?;
-                }
-                Step::Note(text) => {
-                    writeln!(out, "==> # {text}").map_err(|e| Error::io(stdout(), e))?;
-                }
+                        State::Failed
+                    },
+                });
             }
+            result?;
         }
         Ok(())
     }
@@ -428,10 +517,8 @@ fn run_logged(
     c: &Command,
     header: &str,
     mut log: &std::fs::File,
+    execution: Option<&Execution<'_>>,
 ) -> std::io::Result<process::ExitStatus> {
-    use std::io::Read;
-    use std::os::fd::AsFd;
-
     let cwd = c.cwd.as_deref().map_or_else(
         || std::env::current_dir().unwrap_or_default(),
         Path::to_path_buf,
@@ -443,41 +530,112 @@ fn run_logged(
         cwd.display(),
         header
     )?;
-    let mut child = c
-        .to_process()
+    let status = run_process(c.to_process(execution.is_some()), execution, Some(log))?;
+    writeln!(log, "==> {status}\n")?;
+    Ok(status)
+}
+
+/// Shared subprocess path for plans and Conda. Both pipes are always drained.
+pub(crate) fn run_process(
+    mut command: process::Command,
+    execution: Option<&Execution<'_>>,
+    log: Option<&std::fs::File>,
+) -> std::io::Result<process::ExitStatus> {
+    if execution.is_none() && log.is_none() {
+        return command.status();
+    }
+    if execution.is_some() {
+        command.stdin(Stdio::null());
+    }
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let child_out = child.stdout.take().expect("piped");
-    let child_err = child.stderr.take().expect("piped");
-    // A duplicate of fd 1: the caller may hold the `Stdout` lock.
-    let our_out = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
-    let tee = |mut from: Box<dyn Read + Send>, mut to: Box<dyn Write + Send>| {
-        let mut buf = [0u8; 8192];
-        let mut log = log;
-        while let Ok(n) = from.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            // Keep draining on write errors (closed terminal, full disk) so
-            // the child never blocks on a full pipe.
-            let _ = to.write_all(&buf[..n]);
-            let _ = log.write_all(&buf[..n]);
-        }
-    };
-    std::thread::scope(|s| {
-        s.spawn(|| tee(Box::new(child_out), Box::new(our_out)));
-        tee(Box::new(child_err), Box::new(std::io::stderr()));
+    let stdout = child.stdout.take().expect("piped");
+    let stderr = child.stderr.take().expect("piped");
+    let (out, err) = std::thread::scope(|scope| {
+        let reader = scope.spawn(|| drain_output(stdout, Stream::Stdout, execution, log));
+        let err = drain_output(stderr, Stream::Stderr, execution, log);
+        (reader.join().expect("output reader panicked"), err)
     });
     let status = child.wait()?;
-    writeln!(log, "==> {status}\n")?;
+    out?;
+    err?;
     Ok(status)
+}
+
+fn drain_output(
+    mut from: impl std::io::Read,
+    stream: Stream,
+    execution: Option<&Execution<'_>>,
+    mut log: Option<&std::fs::File>,
+) -> std::io::Result<()> {
+    use std::os::fd::AsFd;
+    // Duplicate descriptors to avoid deadlocking the CLI's held StdoutLock.
+    let terminal = if execution.is_none() {
+        Some(
+            match stream {
+                Stream::Stdout => std::io::stdout().as_fd().try_clone_to_owned(),
+                _ => std::io::stderr().as_fd().try_clone_to_owned(),
+            }
+            .map(std::fs::File::from),
+        )
+    } else {
+        None
+    };
+    let mut error = None;
+    let mut terminal = match terminal {
+        Some(Ok(file)) => Some(file),
+        Some(Err(e)) => {
+            error = Some(e);
+            None
+        }
+        None => None,
+    };
+    let mut buf = [0; 8192];
+    loop {
+        let n = match from.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                error.get_or_insert(e);
+                break;
+            }
+        };
+        if let Some(e) = execution {
+            e.log(stream, &buf[..n]);
+        }
+        if let Some(file) = &mut terminal {
+            // A disconnected terminal must not prevent the log from completing.
+            let _ = file.write_all(&buf[..n]);
+        }
+        if let Some(file) = &mut log {
+            if let Err(e) = file.write_all(&buf[..n]) {
+                error.get_or_insert(e);
+            }
+        }
+    }
+    match error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Download `url` as the current user (bounded by timeouts and retries, so a
 /// stalled connection fails instead of hanging `apply` forever), check the
 /// key's fingerprint, and only then `sudo install` it to `dest`.
+#[cfg(test)]
 fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
+    fetch_key_observed(url, dest, fingerprint, None)
+}
+
+fn fetch_key_observed(
+    url: &str,
+    dest: &Path,
+    fingerprint: &str,
+    execution: Option<&Execution<'_>>,
+) -> Result<()> {
     // Unique per process *and* per call: several plans (or tests) in one
     // process must not share the temporary file.
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -503,9 +661,7 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         "-o",
         &tmp.to_string_lossy(),
     ]);
-    let status = curl
-        .to_process()
-        .status()
+    let status = run_process(curl.to_process(execution.is_some()), execution, None)
         .map_err(|e| Error::io("curl", e))?;
     if !status.success() {
         return Err(Error::CommandFailed {
@@ -580,9 +736,7 @@ fn fetch_key(url: &str, dest: &Path, fingerprint: &str) -> Result<()> {
         .arg(to_install.to_string_lossy())
         .arg(dest.to_string_lossy())
         .sudo();
-    let status = install
-        .to_process()
-        .status()
+    let status = run_process(install.to_process(execution.is_some()), execution, None)
         .map_err(|e| Error::io("sudo", e))?;
     if !status.success() {
         return Err(Error::CommandFailed {
@@ -665,16 +819,18 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 /// `sudo mkdir -p <parent>`, `sudo tee <path>.tmp` (contents through stdin, so
 /// they never appear on a command line), then `sudo mv -f` it over `path`.
-fn write_file_sudo(path: &Path, contents: &str) -> Result<()> {
+fn write_file_sudo(path: &Path, contents: &str, execution: Option<&Execution<'_>>) -> Result<()> {
     let failed = |program: &str, status: process::ExitStatus| Error::CommandFailed {
         command: format!("sudo {program} {}", path.display()),
         status: status.to_string(),
     };
     let sudo = |args: &[&std::ffi::OsStr]| {
-        process::Command::new("sudo")
-            .args(args)
-            .status()
-            .map_err(|e| Error::io("sudo", e))
+        let mut command = process::Command::new("sudo");
+        if execution.is_some() {
+            command.arg("-n");
+        }
+        command.args(args);
+        run_process(command, execution, None).map_err(|e| Error::io("sudo", e))
     };
     if let Some(parent) = path.parent() {
         let status = sudo(&["mkdir".as_ref(), "-p".as_ref(), parent.as_ref()])?;
@@ -683,19 +839,30 @@ fn write_file_sudo(path: &Path, contents: &str) -> Result<()> {
         }
     }
     let tmp = tmp_sibling(path);
-    let mut child = process::Command::new("sudo")
+    let mut command = process::Command::new("sudo");
+    if execution.is_some() {
+        command.arg("-n");
+    }
+    command
         .arg("tee")
         .arg(&tmp)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::null());
+    let mut child = command
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| Error::io("sudo", e))?;
-    // Close stdin (end of input) before waiting, and wait even if writing failed.
-    let written = child
-        .stdin
-        .take()
-        .map_or(Ok(()), |mut stdin| stdin.write_all(contents.as_bytes()));
+    let stderr = child.stderr.take().expect("piped");
+    let (written, drained) = std::thread::scope(|scope| {
+        let drain = scope.spawn(|| drain_output(stderr, Stream::Stderr, execution, None));
+        let written = child
+            .stdin
+            .take()
+            .map_or(Ok(()), |mut stdin| stdin.write_all(contents.as_bytes()));
+        (written, drain.join().expect("output reader panicked"))
+    });
     let status = child.wait().map_err(|e| Error::io("sudo", e))?;
+    let written = written.and(drained);
     let result = match written {
         Err(e) => Err(Error::io(&tmp, e)),
         Ok(()) if !status.success() => Err(failed("tee", status)),
@@ -722,6 +889,45 @@ pub fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_log_write_is_reported_after_draining_child() {
+        struct Sink;
+        impl crate::execution::Interaction for Sink {
+            fn event(&self, _: crate::execution::Event<'_>) {}
+        }
+        let execution = crate::execution::Execution {
+            task: "full",
+            step: 1,
+            interaction: &Sink,
+        };
+        let full = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/full")
+            .unwrap();
+        let mut command = std::process::Command::new("bash");
+        command.args([
+            "-c",
+            "head -c 200000 /dev/zero & head -c 200000 /dev/zero >&2 & wait",
+        ]);
+        let error = super::run_process(command, Some(&execution), Some(&full)).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(28));
+    }
+
+    #[test]
+    fn observed_sudo_never_prompts_including_shell_preamble() {
+        let command = super::Command::new("true").sudo();
+        let process = command.to_process(true);
+        assert_eq!(process.get_args().collect::<Vec<_>>(), ["-n", "true"]);
+        let process = command.preamble("true").to_process(true);
+        assert!(process
+            .get_args()
+            .last()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("exec sudo -n true"));
+    }
+
     use super::{fetch_key, fingerprints, is_ascii_armored, is_only_key, write_atomic};
 
     const ROS_KEY_URL: &str = "https://raw.githubusercontent.com/ros/rosdistro/master/ros.key";

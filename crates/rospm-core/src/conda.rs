@@ -508,6 +508,17 @@ impl CondaStep {
         self.perform_with(out, &Real)
     }
 
+    pub(crate) fn perform_observed(
+        &self,
+        out: &mut dyn Write,
+        execution: Option<&crate::execution::Execution<'_>>,
+    ) -> Result<()> {
+        match execution {
+            Some(execution) => self.perform_with(out, &system::Observed(execution)),
+            None => self.perform(out),
+        }
+    }
+
     /// The Conda that prepares or runs the managed environment. Only apply
     /// may install one; build reports what is missing instead.
     fn managed_conda(&self, out: &mut dyn Write, system: &dyn System) -> Result<String> {
