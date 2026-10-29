@@ -219,6 +219,7 @@ template:
   ros_base_comment: "ros-base（最小）| desktop（含 RViz、demos）"
 
 error:
+  cancelled: "任务已在安全边界取消；已完成的更改未回滚。"
   io: "%{path} 读写出错：%{source}"
   manifest_parse: "无法解析清单 %{path}：%{source}"
   lock_parse: "无法解析锁文件 %{path}：%{source}"

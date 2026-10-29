@@ -154,3 +154,169 @@ fn absent_confirmation_handler_never_approves() {
     assert_eq!(value["operation"]["kind"], "clean_build");
     assert_eq!(value["operation"]["paths"], json!(["/project/build"]));
 }
+
+#[derive(Default)]
+struct Cancelling {
+    recorder: Recorder,
+    requested: std::sync::atomic::AtomicBool,
+}
+impl Interaction for Cancelling {
+    fn event(&self, event: Event<'_>) {
+        if matches!(
+            event,
+            Event::Log {
+                stream: rospm_core::execution::Stream::Stdout,
+                ..
+            }
+        ) {
+            self.requested
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.recorder.event(event);
+    }
+    fn cancel_requested(&self, task: &str) -> bool {
+        task == "cancel" && self.requested.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    fn confirm(&self, _: &Confirmation) -> rospm_core::Result<bool> {
+        self.requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+#[test]
+fn cancellation_is_task_scoped_and_can_prevent_even_the_first_step() {
+    let ui = Cancelling::default();
+    ui.requested
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut plan = Plan::default();
+    plan.run(Command::new("/must-not-run"));
+    assert!(matches!(
+        plan.perform_with("cancel", &ui),
+        Err(rospm_core::Error::Cancelled)
+    ));
+    let events = ui.recorder.0.lock().unwrap();
+    assert!(events.iter().all(|e| e["event"] != "step"));
+    assert_eq!(events[1]["state"], "cancel_requested");
+    assert_eq!(events.last().unwrap()["state"], "cancelled");
+    drop(events);
+    assert!(matches!(
+        Plan::default().perform_with("cancel", &ui),
+        Err(rospm_core::Error::Cancelled)
+    ));
+    Plan::default().perform_with("other-task", &ui).unwrap();
+}
+
+#[test]
+fn cancellation_drains_current_step_and_failure_wins_over_pending_cancel() {
+    for exit in [0, 7] {
+        let mut plan = Plan::default();
+        plan.run(Command::new("bash").args([
+            "-c",
+            &format!("printf ready; sleep 0.05; printf done; exit {exit}"),
+        ]));
+        plan.run(Command::new("/must-not-run"));
+        let ui = Cancelling::default();
+        let error = plan.perform_with("cancel", &ui).unwrap_err();
+        assert_eq!(ui.recorder.bytes("stdout"), b"readydone");
+        let events = ui.recorder.0.lock().unwrap();
+        assert!(events.iter().all(|e| e["step"] != 2));
+        if exit == 0 {
+            assert!(matches!(error, rospm_core::Error::Cancelled));
+            assert_eq!(events.last().unwrap()["state"], "cancelled");
+            assert!(events
+                .iter()
+                .any(|e| e["event"] == "step" && e["state"] == "succeeded"));
+        } else {
+            assert!(matches!(error, rospm_core::Error::CommandFailed { .. }));
+            assert_eq!(events.last().unwrap()["state"], "failed");
+        }
+    }
+}
+
+#[test]
+fn cancel_during_confirmation_overrides_approval() {
+    let ui = Cancelling::default();
+    let mut plan = Plan::default();
+    plan.run(Command::new("/must-not-run"));
+    let error = rospm_core::confirmation::uninstall("cancel", &plan, false, &ui, |_| {
+        panic!("approved after cancel")
+    })
+    .unwrap_err();
+    assert!(matches!(error, rospm_core::Error::Cancelled));
+    let states: Vec<_> = ui
+        .recorder
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|e| e["state"].clone())
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            json!("waiting_confirmation"),
+            json!("cancel_requested"),
+            json!("cancelled")
+        ]
+    );
+    // Explicit --yes bypasses input, not a pending cancellation.
+    assert!(matches!(
+        rospm_core::confirmation::uninstall("cancel", &plan, true, &ui, |_| panic!(
+            "ran after cancel"
+        )),
+        Err(rospm_core::Error::Cancelled)
+    ));
+}
+
+#[test]
+fn cancellation_after_last_step_is_not_reported_as_success() {
+    let ui = Cancelling::default();
+    let mut plan = Plan::default();
+    plan.run(Command::new("printf").arg("done"));
+    assert!(matches!(
+        plan.perform_with("cancel", &ui),
+        Err(rospm_core::Error::Cancelled)
+    ));
+    let events = ui.recorder.0.lock().unwrap();
+    assert_eq!(events.last().unwrap()["state"], "cancelled");
+    assert_eq!(events.iter().filter(|e| e["event"] == "task").count(), 2);
+}
+
+#[test]
+fn confirmation_reply_and_error_have_distinct_control_states() {
+    struct Reply {
+        recorder: Recorder,
+        fail: bool,
+    }
+    impl Interaction for Reply {
+        fn event(&self, event: Event<'_>) {
+            self.recorder.event(event);
+        }
+        fn confirm(&self, _: &Confirmation) -> rospm_core::Result<bool> {
+            if self.fail {
+                Err(rospm_core::Error::io(
+                    "input",
+                    std::io::Error::other("disconnected"),
+                ))
+            } else {
+                Ok(false)
+            }
+        }
+    }
+    for fail in [false, true] {
+        let ui = Reply {
+            recorder: Recorder::default(),
+            fail,
+        };
+        let mut plan = Plan::default();
+        plan.run(Command::new("/must-not-run"));
+        let error =
+            rospm_core::confirmation::uninstall("reply", &plan, false, &ui, |_| panic!("declined"))
+                .unwrap_err();
+        assert_eq!(matches!(error, rospm_core::Error::Io { .. }), fail);
+        let events = ui.recorder.0.lock().unwrap();
+        assert_eq!(events[0]["state"], "waiting_confirmation");
+        assert_eq!(events[1]["state"], if fail { "failed" } else { "running" });
+    }
+}

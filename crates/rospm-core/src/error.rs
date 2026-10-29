@@ -6,6 +6,8 @@ use crate::msg;
 
 #[derive(Debug)]
 pub enum Error {
+    /// Cooperative stop at a safe boundary; completed effects are retained.
+    Cancelled,
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -74,6 +76,7 @@ impl Error {
     /// CLI prints it in the user's language.
     pub fn message(&self) -> Message {
         match self {
+            Error::Cancelled => msg!("error.cancelled"),
             Error::Io { path, source } => {
                 msg!("error.io", path = path.display(), source = source)
             }

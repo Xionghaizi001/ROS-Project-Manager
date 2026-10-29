@@ -8,6 +8,9 @@ use std::{io::Write, path::PathBuf};
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Running,
+    WaitingConfirmation,
+    CancelRequested,
+    Cancelled,
     Succeeded,
     Failed,
 }
@@ -30,6 +33,12 @@ pub enum Event<'a> {
         state: State,
         total: usize,
         error: Option<Message>,
+    },
+    /// Control state during preparation or execution; not a step result.
+    Interaction {
+        task: &'a str,
+        step: usize,
+        state: State,
     },
     Step {
         task: &'a str,
@@ -93,11 +102,62 @@ impl Confirmation {
 pub trait Interaction: Sync {
     /// May be called concurrently by the stdout and stderr readers.
     fn event(&self, event: Event<'_>);
+    /// A task-scoped, latched request. Must return promptly and remain true
+    /// once requested. Disconnecting a frontend must not set this flag.
+    fn cancel_requested(&self, _task: &str) -> bool {
+        false
+    }
     /// Safe default for a missing/disconnected frontend. Business callers decide
     /// whether a declined request aborts or keeps the existing configuration.
     fn confirm(&self, _request: &Confirmation) -> crate::Result<bool> {
         Ok(false)
     }
+}
+
+/// Check only at safe boundaries, never between commands inside an install step.
+pub(crate) fn checkpoint(
+    task: &str,
+    step: usize,
+    interaction: &dyn Interaction,
+) -> crate::Result<()> {
+    if interaction.cancel_requested(task) {
+        interaction.event(Event::Interaction {
+            task,
+            step,
+            state: State::CancelRequested,
+        });
+        Err(crate::Error::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+/// Wrap frontend input so cancellation wins over an approval received while
+/// waiting. A blocking transport must wake its confirm callback on cancellation.
+pub(crate) fn confirm(
+    request: &Confirmation,
+    interaction: &dyn Interaction,
+) -> crate::Result<bool> {
+    let emit = |state| {
+        interaction.event(Event::Interaction {
+            task: &request.task,
+            step: request.step,
+            state,
+        })
+    };
+    let result = (|| {
+        checkpoint(&request.task, request.step, interaction)?;
+        emit(State::WaitingConfirmation);
+        let answer = interaction.confirm(request)?;
+        checkpoint(&request.task, request.step, interaction)?;
+        Ok(answer)
+    })();
+    emit(match &result {
+        Ok(_) => State::Running,
+        Err(crate::Error::Cancelled) => State::Cancelled,
+        Err(_) => State::Failed,
+    });
+    result
 }
 
 pub(crate) struct Execution<'a> {

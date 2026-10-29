@@ -60,7 +60,7 @@ pub fn switch_mirror(
                 .join(" | ")
         )),
     };
-    if interaction.confirm(&request)? {
+    if crate::execution::confirm(&request, interaction)? {
         Ok(mirror)
     } else {
         Err(Error::Host(msg!("cli.apply.aborted")))
@@ -103,9 +103,10 @@ pub fn uninstall(
         explanation: None,
         unavailable: Some(msg!("cli.uninstall.needs_confirmation")),
     };
-    if !yes && !interaction.confirm(&request)? {
+    if !yes && !crate::execution::confirm(&request, interaction)? {
         return Err(Error::Host(msg!("cli.uninstall.aborted")));
     }
+    crate::execution::checkpoint(task, request.step, interaction)?;
     execute(plan)
 }
 
@@ -181,7 +182,7 @@ pub fn retry_build(
         explanation: Some(msg!("cli.build.clean_offer")),
         unavailable: None,
     };
-    if !interaction.confirm(&request)? {
+    if !crate::execution::confirm(&request, interaction)? {
         return Ok(false);
     }
     // Validate every reviewed directory before deleting any of them.
@@ -198,9 +199,11 @@ pub fn retry_build(
             )));
         }
     }
+    crate::execution::checkpoint(task, request.step, interaction)?;
     for path in paths {
         fs::remove_dir_all(&path).map_err(|e| Error::io(&path, e))?;
     }
+    crate::execution::checkpoint(task, request.step, interaction)?;
     execute(plan)?;
     Ok(true)
 }

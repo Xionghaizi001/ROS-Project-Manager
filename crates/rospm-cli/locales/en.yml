@@ -224,6 +224,7 @@ template:
   ros_base_comment: "ros-base (bare bones) | desktop (adds RViz, demos)"
 
 error:
+  cancelled: "Task cancelled at a safe boundary; completed changes were not rolled back."
   io: "I/O error on %{path}: %{source}"
   manifest_parse: "failed to parse manifest %{path}: %{source}"
   lock_parse: "failed to parse lock file %{path}: %{source}"

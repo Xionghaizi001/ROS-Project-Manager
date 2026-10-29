@@ -408,3 +408,32 @@ fn no_outputs_or_unreviewable_uninstall_never_execute() {
     )
     .is_err());
 }
+
+#[test]
+fn cancelled_clean_confirmation_preserves_directories_and_never_retries() {
+    struct CancelOnApprove(std::sync::atomic::AtomicBool);
+    impl Interaction for CancelOnApprove {
+        fn event(&self, _: Event<'_>) {}
+        fn cancel_requested(&self, _: &str) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+        fn confirm(&self, _: &Confirmation) -> Result<bool> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+    let fixture = Fixture::new();
+    let ui = CancelOnApprove(std::sync::atomic::AtomicBool::new(false));
+    let result = confirmation::retry_build(
+        "cancel-clean",
+        &fixture.plan,
+        &fixture.ctx(),
+        Some("main"),
+        &fixture.error(),
+        &ui,
+        |_| panic!("retried after cancellation"),
+    );
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(fixture.root.join("ws/build/cache").exists());
+    assert!(fixture.root.join("ws/install").exists());
+}

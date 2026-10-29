@@ -339,7 +339,10 @@ impl Plan {
     /// Execute with structured events and captured child output, without writing
     /// to the frontend terminal. The caller owns task identity and renders the plan.
     /// Child stdin is closed; interactive sudo/shell authorization is a separate
-    /// frontend responsibility. This does not implement worker isolation.
+    /// frontend responsibility. Cancellation is cooperative at whole-step
+    /// boundaries, including after the last step; no process is signalled and
+    /// completed changes are not rolled back. Step failures take precedence.
+    /// This does not implement worker isolation.
     pub fn perform_with(&self, task: &str, interaction: &dyn Interaction) -> Result<()> {
         interaction.event(Event::Task {
             task,
@@ -350,10 +353,10 @@ impl Plan {
         let result = self.perform_inner(&mut std::io::sink(), Some((task, interaction)));
         interaction.event(Event::Task {
             task,
-            state: if result.is_ok() {
-                State::Succeeded
-            } else {
-                State::Failed
+            state: match &result {
+                Ok(()) => State::Succeeded,
+                Err(Error::Cancelled) => State::Cancelled,
+                Err(_) => State::Failed,
             },
             total: self.steps.len(),
             error: result.as_ref().err().map(Error::message),
@@ -366,6 +369,11 @@ impl Plan {
         out: &mut dyn Write,
         observer: Option<(&str, &dyn Interaction)>,
     ) -> Result<()> {
+        let checkpoint = |step| match observer {
+            Some((task, interaction)) => crate::execution::checkpoint(task, step, interaction),
+            None => Ok(()),
+        };
+        checkpoint(0)?;
         let stdout = || PathBuf::from("<stdout>");
         let started = std::time::SystemTime::now();
         let mut log: Option<std::fs::File> = None;
@@ -497,6 +505,7 @@ impl Plan {
                 });
             }
             result?;
+            checkpoint(i + 1)?;
         }
         Ok(())
     }
