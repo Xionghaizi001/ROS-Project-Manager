@@ -118,7 +118,7 @@ cli:
     official_unreachable: "official sources unreachable:"
     mirrors_answered: "mirrors that answered (fastest first): %{names}"
     need_mirror_flag: "the official ROS sources are unreachable from this host; re-run with `--mirror %{best}` (or %{names}) to install from a mirror, or `--mirror official` to try anyway"
-    confirm_mirror: "use the %{name} mirror (%{label}) for the ROS apt source, ros.key and rosdep? [Y/n] "
+    confirm_mirror: "use the %{name} mirror (%{label}) for the sources listed above? [Y/n] "
     aborted: "aborted; re-run with `--mirror official` to try the official sources anyway, or `--mirror <name>` for a specific mirror"
     nothing_reachable: "neither the official ROS sources nor any known mirror answered (%{count} URLs failed, see the table above); check the network or proxy settings, or pass `--mirror official` to try anyway"
     role:
@@ -686,3 +686,8 @@ build_summary:
   log: "Full log: %{path} (summary may be abbreviated)"
   unrecognized: "No supported error format was recognized; the command still failed. See the original output and full log. Unsupported or omitted errors may be present."
   unavailable: "Could not read or locate the failed command output in the log; the command still failed. See the original terminal output and check the log path (the log may be missing or incomplete)."
+
+confirmation:
+  unsupported_plan: "This uninstall plan contains an operation that cannot yet be reviewed safely."
+  unsafe_directory: "Refusing to clean a project/source directory or a symlink: %{path}"
+  directory_changed: "The reviewed directory changed; review it again before cleaning: %{path}"

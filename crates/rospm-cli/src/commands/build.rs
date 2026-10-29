@@ -10,8 +10,7 @@ use rospm_core::mirror;
 use rospm_core::plan::{Plan, Step};
 use rospm_core::probe::Host;
 use rospm_core::provider;
-use rospm_core::provider::native::{colcon_bases, existing_base};
-use rospm_core::{Error, Message};
+use rospm_core::Error;
 
 use crate::i18n::tr;
 
@@ -96,47 +95,28 @@ pub(super) fn run_build(
         return Ok(());
     };
     out.flush()?;
-    // Fallback for a failed build: stale outputs (caches naming another
-    // interpreter, half-built packages) are a common cause, so offer one
-    // clean rebuild. Only interactively, and only with the user's consent.
-    let stale_cache =
-        matches!(&err, Error::Host(Message::Key { key, .. }) if *key == "conda.stale_cache");
-    let colcon_failed = matches!(&err, Error::CommandFailed { command, .. } if (command.contains("colcon build") || command.contains("colcon --log-base")));
-    let workspaces: Vec<_> = match workspace {
-        Some(name) => loaded.manifest.workspaces.get(name).into_iter().collect(),
-        None => loaded.manifest.workspaces.values().collect(),
-    };
-    // Configured base first, else colcon's default; neither existing: nothing to offer.
-    let dirs: Vec<PathBuf> = workspaces
-        .iter()
-        .flat_map(|ws| {
-            [("build-base", "build"), ("install-base", "install")]
-                .map(|(key, default)| existing_base(colcon_bases(&loaded.root, ws, key, default)))
-        })
-        .flatten()
-        .collect();
-    let stdin = std::io::stdin();
-    if json || !(stale_cache || colcon_failed) || dirs.is_empty() || !stdin.is_terminal() {
+    if json || !std::io::stdin().is_terminal() {
         return Err(build_failure(&plan, err, started));
     }
-    eprintln!("{}", tr("cli.build.clean_offer"));
-    for dir in &dirs {
-        eprintln!("  {}", dir.display());
-    }
-    eprint!("{}", tr("cli.build.clean_confirm"));
-    let mut answer = String::new();
-    stdin.read_line(&mut answer)?;
-    if !matches!(answer.trim(), "y" | "Y" | "yes") {
+    let mut retry_started = started;
+    let retried = rospm_core::confirmation::retry_build(
+        &super::interaction::task_id(),
+        &plan,
+        &ctx,
+        workspace,
+        &err,
+        &super::interaction::Terminal,
+        |plan| {
+            writeln!(out, "# {}", tr("cli.build.clean_retry"))
+                .map_err(|e| Error::io("<stdout>", e))?;
+            retry_started = std::time::SystemTime::now();
+            plan.perform(&mut out)
+        },
+    )
+    .map_err(|error| build_failure(&plan, error, retry_started))?;
+    if !retried {
         return Err(build_failure(&plan, err, started));
     }
-    for dir in &dirs {
-        // Does not follow symlinks: `--symlink-install` links into sources stay intact.
-        std::fs::remove_dir_all(dir).with_context(|| dir.display().to_string())?;
-    }
-    writeln!(out, "# {}", tr("cli.build.clean_retry"))?;
-    let started = std::time::SystemTime::now();
-    plan.perform(&mut out)
-        .map_err(|err| build_failure(&plan, err, started))?;
     out.flush()?;
     Ok(())
 }

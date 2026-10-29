@@ -141,12 +141,16 @@ fn absent_confirmation_handler_never_approves() {
     let request = Confirmation {
         task: "task-1".into(),
         step: 2,
-        operation: Operation::CleanBuild,
-        paths: vec!["/project/build".into()],
+        operation: Operation::CleanBuild {
+            paths: vec!["/project/build".into()],
+            retry: vec![],
+        },
+        explanation: None,
+        unavailable: None,
         prompt: Message::key("cli.build.clean_confirm"),
     };
-    assert!(!recorder.confirm(&request));
+    assert!(!recorder.confirm(&request).unwrap());
     let value = serde_json::to_value(request).unwrap();
-    assert_eq!(value["operation"], "clean_build");
-    assert_eq!(value["paths"], json!(["/project/build"]));
+    assert_eq!(value["operation"]["kind"], "clean_build");
+    assert_eq!(value["operation"]["paths"], json!(["/project/build"]));
 }

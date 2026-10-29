@@ -50,22 +50,44 @@ pub enum Event<'a> {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Operation {
-    SwitchMirror,
-    Uninstall,
-    CleanBuild,
+    SwitchMirror {
+        name: String,
+        ros_apt: Option<String>,
+        rosdistro: String,
+    },
+    Uninstall {
+        commands: Vec<crate::plan::Command>,
+    },
+    CleanBuild {
+        paths: Vec<PathBuf>,
+        retry: Vec<crate::plan::Command>,
+    },
 }
 
-/// A frontend must show the exact scope before answering. A missing response
-/// never grants consent.
+/// The synchronous response applies only to this borrowed request. A transport
+/// must match task, step and the complete operation before returning approval.
 #[derive(Debug, Serialize)]
 pub struct Confirmation {
     pub task: String,
+    /// One-based plan position; zero means preparation before a plan exists.
     pub step: usize,
     pub operation: Operation,
-    pub paths: Vec<PathBuf>,
     pub prompt: Message,
+    pub explanation: Option<Message>,
+    /// None means a frontend without input should simply decline.
+    pub unavailable: Option<Message>,
+}
+impl Confirmation {
+    /// Preserve CLI defaults without treating EOF as an empty affirmative line.
+    pub fn accepts_answer(&self, answer: Option<&str>) -> bool {
+        answer.is_some_and(|answer| match answer.trim() {
+            "y" | "Y" | "yes" => true,
+            "" => matches!(self.operation, Operation::SwitchMirror { .. }),
+            _ => false,
+        })
+    }
 }
 
 pub trait Interaction: Sync {
@@ -73,8 +95,8 @@ pub trait Interaction: Sync {
     fn event(&self, event: Event<'_>);
     /// Safe default for a missing/disconnected frontend. Business callers decide
     /// whether a declined request aborts or keeps the existing configuration.
-    fn confirm(&self, _request: &Confirmation) -> bool {
-        false
+    fn confirm(&self, _request: &Confirmation) -> crate::Result<bool> {
+        Ok(false)
     }
 }
 

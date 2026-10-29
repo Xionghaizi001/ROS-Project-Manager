@@ -113,7 +113,7 @@ cli:
     official_unreachable: "官方源不可达："
     mirrors_answered: "可达的镜像（按速度排序）：%{names}"
     need_mirror_flag: "本机无法访问官方 ROS 源；请加 `--mirror %{best}`（或 %{names}）从镜像安装，或加 `--mirror official` 强行尝试"
-    confirm_mirror: "是否改用 %{name} 镜像（%{label}）作为 ROS apt 源、ros.key 与 rosdep 的来源？[Y/n] "
+    confirm_mirror: "是否为上方列出的来源改用 %{name} 镜像（%{label}）？[Y/n] "
     aborted: "已中止；加 `--mirror official` 可强行使用官方源，加 `--mirror <name>` 可指定镜像"
     nothing_reachable: "官方 ROS 源与所有已知镜像均无响应（%{count} 个 URL 失败，见上表）；请检查网络或代理设置，或加 `--mirror official` 强行尝试"
     role:
@@ -681,3 +681,8 @@ build_summary:
   log: "完整日志：%{path}（摘要可能省略部分内容）"
   unrecognized: "未识别到支持的错误格式，命令仍然失败；请查看原始输出及完整日志，可能存在未支持或未纳入摘要的报错。"
   unavailable: "无法读取日志或定位失败命令的输出，命令仍然失败；请查看终端原始输出并检查日志路径（日志可能缺失或不完整）。"
+
+confirmation:
+  unsupported_plan: "此卸载计划包含尚不支持安全审阅的操作。"
+  unsafe_directory: "拒绝清理项目目录、源码目录或符号链接：%{path}"
+  directory_changed: "已审阅的目录发生变化，请重新审阅后再清理：%{path}"

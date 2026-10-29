@@ -1,8 +1,8 @@
 //! Uninstall command implementation.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use rospm_core::mirror;
 use rospm_core::probe::Host;
@@ -31,19 +31,13 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
         println!("{}", tr("cli.uninstall.nothing_to_do"));
         return Ok(());
     }
-    if !yes {
-        let stdin = std::io::stdin();
-        if !stdin.is_terminal() {
-            bail!("{}", tr("cli.uninstall.needs_confirmation"));
-        }
-        eprint!("{}", tr("cli.uninstall.confirm"));
-        let mut answer = String::new();
-        stdin.read_line(&mut answer)?;
-        if !matches!(answer.trim(), "y" | "Y" | "yes") {
-            bail!("{}", tr("cli.uninstall.aborted"));
-        }
-    }
-    plan.perform(&mut out)?;
+    rospm_core::confirmation::uninstall(
+        &super::interaction::task_id(),
+        &plan,
+        yes,
+        &super::interaction::Terminal,
+        |plan| plan.perform(&mut out),
+    )?;
     out.flush()?;
     Ok(())
 }

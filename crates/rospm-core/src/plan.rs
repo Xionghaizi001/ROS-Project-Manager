@@ -18,7 +18,7 @@ use crate::msg;
 
 /// One external command. `preamble` lines (typically `source …`) are run in
 /// the same `bash -c` before the command so ROS overlays are visible to it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Command {
     pub program: String,
     pub args: Vec<String>,

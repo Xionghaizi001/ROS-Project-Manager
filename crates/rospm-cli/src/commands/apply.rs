@@ -1,6 +1,6 @@
 //! Apply command implementation.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 
@@ -374,41 +374,22 @@ fn select_sources(
                 "{}",
                 msg!("cli.apply.mirrors_answered", names = names.join(", "))
             );
-            let stdin = std::io::stdin();
-            if !stdin.is_terminal() {
-                bail!(
-                    "{}",
-                    msg!(
-                        "cli.apply.need_mirror_flag",
-                        best = best.name,
-                        names = names.join(" | ")
-                    )
-                );
-            }
-            eprint!(
+            let best = rospm_core::confirmation::switch_mirror(
+                &super::interaction::task_id(),
+                best,
+                &candidates,
+                ros_snapshot,
+                &super::interaction::Terminal,
+            )?;
+            println!(
                 "{}",
                 msg!(
-                    "cli.apply.confirm_mirror",
+                    "cli.apply.sources_line",
                     name = best.name,
                     label = best.label
                 )
             );
-            let mut answer = String::new();
-            // EOF (Ctrl-D) reads 0 bytes and must not count as the empty "yes".
-            let got_line = stdin.read_line(&mut answer)? > 0;
-            if got_line && matches!(answer.trim(), "" | "y" | "Y" | "yes") {
-                println!(
-                    "{}",
-                    msg!(
-                        "cli.apply.sources_line",
-                        name = best.name,
-                        label = best.label
-                    )
-                );
-                Ok(best)
-            } else {
-                bail!("{}", tr("cli.apply.aborted"))
-            }
+            Ok(best)
         }
         Verdict::NothingReachable { failed } => {
             bail!(

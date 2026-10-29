@@ -20,6 +20,7 @@
 //!   message keys + arguments; the CLI renders them (spec §4.2).
 
 pub mod conda;
+pub mod confirmation;
 pub mod debver;
 pub mod diagnostic;
 pub mod error;

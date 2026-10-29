@@ -27,6 +27,7 @@ mod deps;
 mod doctor;
 mod environment;
 mod init;
+mod interaction;
 mod lock;
 mod report;
 mod uninstall;
