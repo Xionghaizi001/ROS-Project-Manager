@@ -21,7 +21,7 @@ mod store;
 
 pub use coordination::{ConfirmationWait, WorkspaceLock, WorkspaceLockError};
 pub use socket::{PeerIdentity, SocketEndpoint};
-pub use store::{DispatchStatus, LogPump, StoreError, TaskStore};
+pub use store::{DispatchStatus, LogPump, RecoveryCause, StoreError, TaskStore};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -291,6 +291,79 @@ mod tests {
             store.load_snapshot("task-1").unwrap().state,
             TaskState::Succeeded
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_marks_worker_exit_interrupted_without_replaying() {
+        let root = std::env::temp_dir().join(format!("rospm-recovery-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = TaskStore::open(&root).unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "active".into(),
+                state: TaskState::Running,
+                step: 2,
+                total_steps: Some(4),
+                log_cursor: 0,
+                result: None,
+            })
+            .unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "done".into(),
+                state: TaskState::Succeeded,
+                step: 1,
+                total_steps: Some(1),
+                log_cursor: 0,
+                result: Some(TaskResult {
+                    success: true,
+                    exit_code: Some(0),
+                    error: None,
+                }),
+            })
+            .unwrap();
+        let recovered = store
+            .recover_active_tasks(RecoveryCause::WorkerExit)
+            .unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].state, TaskState::Interrupted);
+        assert!(store.load_snapshot("done").unwrap().result.unwrap().success);
+        assert_eq!(
+            store.load_snapshot("active").unwrap().state,
+            TaskState::Interrupted
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_failure_is_unknown_and_never_auto_replayed() {
+        let root = std::env::temp_dir().join(format!("rospm-host-recovery-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = TaskStore::open(&root).unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "active".into(),
+                state: TaskState::WaitingConfirmation,
+                step: 1,
+                total_steps: Some(2),
+                log_cursor: 0,
+                result: None,
+            })
+            .unwrap();
+        let recovered = store
+            .recover_active_tasks(RecoveryCause::HostFailure)
+            .unwrap();
+        assert_eq!(recovered[0].state, TaskState::Unknown);
+        assert!(!recovered[0].result.as_ref().unwrap().success);
+        assert!(recovered[0]
+            .result
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("verify"));
         let _ = fs::remove_dir_all(root);
     }
 

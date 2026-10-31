@@ -66,7 +66,7 @@
 - [x] worker 独立保存每个任务的日志与最终结果；重连时读取快照和增量日志，任务结束、worker 退出后仍可查看结果。明确日志保留 / 清理规则及现有 `.rospm/log/build.log` 的兼容方式，不能将每次覆盖的日志直接当作任务历史。（2026-10-31，`TaskStore` 与日志规则见 [worker 任务存储与日志](p45-worker-storage.md)。）
 - [x] 持续读取子进程 stdout / stderr，日志落盘与 UI 发送解耦；限制内存和发送队列，慢客户端、断连或 socket 写入失败不能堵住子进程。日志写入失败须报告，不静默声称日志完整。（2026-10-31，`LogPump` 与验证见 [worker 日志管线](p45-worker-logging.md)。）
 - [x] 同一工作区的冲突修改互斥，尊重 apt / dpkg 等工具自身的系统锁；退出界面与显式取消分开。需要确认但没有客户端时安全等待，并允许重连处理或取消。（2026-11-01，`worker::WorkspaceLock` 使用用户运行目录下的内核 `flock`，`ConfirmationWait` 在断连时保持等待；验证见 [worker 协调与生命周期](p45-worker-coordination.md)。）
-- [ ] 区分“UI 断开后继续”“SSH 断开后继续”和“worker / 主机故障后恢复”；worker 异常留下的任务标记为中断或状态待核实，不自动重新执行安装、清理等有副作用步骤。
+- [x] 区分“UI 断开后继续”“SSH 断开后继续”和“worker / 主机故障后恢复”；worker 异常留下的任务标记为中断或状态待核实，不自动重新执行安装、清理等有副作用步骤。（2026-11-01，`TaskStore::recover_active_tasks` 按 worker 退出 / 主机故障分别写入 `interrupted` / `unknown`，UI 与 SSH 断连不改变活动任务；见 [worker 故障恢复边界](p45-worker-recovery.md)。）
 - **产出**：TUI 卡死或被杀不影响正在执行的任务；支持范围内 SSH 断开后可重新连接并查看准确状态、日志与结果，无重复执行、管道阻塞或无界缓存。
 
 ### 4.5.3 TUI 工作流、权限与 shell

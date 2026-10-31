@@ -10,6 +10,15 @@ pub struct TaskStore {
     root: PathBuf,
 }
 
+/// Why a worker is recovering durable snapshots. A worker process exit gives
+/// us a bounded conclusion; after a host failure the child may have run after
+/// the last persisted snapshot, so the result must remain explicitly unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryCause {
+    WorkerExit,
+    HostFailure,
+}
+
 /// Captures one task's child output. Disk persistence is performed before the
 /// best-effort UI enqueue, so a slow or disconnected client cannot stall the
 /// child reader. The UI queue is bounded by both entry count and bytes.
@@ -208,6 +217,59 @@ impl TaskStore {
             return Err(StoreError::MissingTask);
         }
         Ok(serde_json::from_slice(&fs::read(snapshot)?)?)
+    }
+
+    /// Resolve active tasks left by a previous worker instance. This only
+    /// changes durable state; it never starts a command or replays a plan.
+    /// UI and SSH disconnects must not call this method: their tasks continue
+    /// under the worker and remain reconnectable through the same snapshot.
+    pub fn recover_active_tasks(
+        &self,
+        cause: RecoveryCause,
+    ) -> Result<Vec<TaskSnapshot>, StoreError> {
+        let mut recovered = Vec::new();
+        for item in fs::read_dir(&self.root)? {
+            let item = item?;
+            if !item.file_type()?.is_dir() {
+                continue;
+            }
+            let id = item.file_name().to_string_lossy().into_owned();
+            let mut snapshot = match self.load_snapshot(&id) {
+                Ok(snapshot) => snapshot,
+                Err(StoreError::MissingTask) => continue,
+                Err(error) => return Err(error),
+            };
+            if !matches!(
+                snapshot.state,
+                TaskState::Pending
+                    | TaskState::Running
+                    | TaskState::WaitingConfirmation
+                    | TaskState::CancelRequested
+            ) {
+                continue;
+            }
+            snapshot.state = match cause {
+                RecoveryCause::WorkerExit => TaskState::Interrupted,
+                RecoveryCause::HostFailure => TaskState::Unknown,
+            };
+            snapshot.result = Some(TaskResult {
+                success: false,
+                exit_code: None,
+                error: Some(match cause {
+                    RecoveryCause::WorkerExit => {
+                        "worker exited while the task was active; inspect logs before retrying"
+                            .into()
+                    }
+                    RecoveryCause::HostFailure => {
+                        "host state is unknown after failure; verify the system before retrying"
+                            .into()
+                    }
+                }),
+            });
+            self.write_snapshot(&snapshot)?;
+            recovered.push(snapshot);
+        }
+        Ok(recovered)
     }
 
     pub fn write_snapshot(&self, snapshot: &TaskSnapshot) -> Result<(), StoreError> {
