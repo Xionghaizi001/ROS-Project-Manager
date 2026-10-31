@@ -154,6 +154,13 @@ cli:
     entering: "entering rospm shell for `%{name}` (exit to leave)"
     start_failed: "failed to start bash"
     exited: "shell exited with %{status}"
+  tui:
+    about: "Open the interactive terminal UI"
+    title: "rospm terminal UI"
+    workspace: "Project"
+    manifest_search: "manifest: search from the current directory"
+    quit: "Press q or Esc to quit"
+    non_terminal: "rospm tui requires an interactive terminal; use `rospm check`, `rospm verify`, or another CLI command in scripts"
   deps:
     about: "Inspect or complete dependencies from package.xml files"
     check: "Report missing dependencies without installing"

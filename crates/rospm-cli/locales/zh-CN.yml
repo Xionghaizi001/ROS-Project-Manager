@@ -149,6 +149,13 @@ cli:
     entering: "进入 `%{name}` 的 rospm shell（输入 exit 退出）"
     start_failed: "无法启动 bash"
     exited: "shell 退出：%{status}"
+  tui:
+    about: "打开交互式终端界面"
+    title: "rospm 终端界面"
+    workspace: "项目"
+    manifest_search: "清单：从当前目录开始查找"
+    quit: "按 q 或 Esc 退出"
+    non_terminal: "rospm tui 需要交互式终端；脚本中请使用 `rospm check`、`rospm verify` 或其他 CLI 命令"
   deps:
     about: "根据 package.xml 检查或补全依赖"
     check: "只报告缺失的依赖，不安装"

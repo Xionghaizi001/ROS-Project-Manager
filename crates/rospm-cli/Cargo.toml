@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 rospm-core = { path = "../rospm-core" }
+rospm-tui = { path = "../rospm-tui" }
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true

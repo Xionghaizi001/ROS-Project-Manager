@@ -138,6 +138,9 @@ enum Cmd {
     #[command(about = tr("cli.shell.about"))]
     Shell,
 
+    #[command(about = tr("cli.tui.about"))]
+    Tui,
+
     #[command(about = tr("cli.deps.about"))]
     Deps {
         #[command(subcommand)]
@@ -329,6 +332,16 @@ fn main() -> ExitCode {
         ),
         Cmd::Env { shell } => commands::env(&global, shell),
         Cmd::Shell => commands::shell(&global),
+        Cmd::Tui => rospm_tui::run(
+            global.manifest.as_deref(),
+            rospm_tui::Text {
+                title: tr("cli.tui.title"),
+                workspace: tr("cli.tui.workspace"),
+                manifest_search: tr("cli.tui.manifest_search"),
+                quit: tr("cli.tui.quit"),
+                non_terminal: tr("cli.tui.non_terminal"),
+            },
+        ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),
             DepsCmd::Install { dry_run } => commands::deps_install(&global, dry_run),

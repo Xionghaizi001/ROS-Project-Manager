@@ -71,7 +71,7 @@
 
 ### 4.5.3 TUI 工作流、权限与 shell
 
-- [ ] 增加 `rospm tui` 入口及独立 TUI 模块 / crate，优先评估 Ratatui + Crossterm；非终端环境给出 CLI 使用提示。保留现有 CLI 入口与单文件分发方式。
+- [x] 增加 `rospm tui` 入口及独立 `rospm-tui` crate，采用 Ratatui + Crossterm；非终端环境给出 CLI 使用提示。保留现有 CLI 入口与单文件分发方式。
 - [ ] 提供项目 / workspace 与环境概览、check / verify / deps 结果、计划预览、任务状态、日志浏览及错误诊断；接入现有已实现操作，未实现的 provider 或命令明确标注，不扩大本阶段的业务范围。
 - [ ] 支持选择 workspace、构建参数与 Conda 环境、审阅 apply / uninstall 计划、失败后的清理确认与重试；临时参数沿用 CLI 语义，不静默写回清单。首期不做通用清单编辑器。
 - [ ] 完整键盘操作与可见快捷键、鼠标点击 / 滚动、明确焦点和弹窗边界；覆盖中文宽度、窗口缩放、窄窗口、鼠标与文本选择冲突。日志按批刷新、只绘制可见区域，渲染与执行互不阻塞。

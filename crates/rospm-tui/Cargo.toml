@@ -1,0 +1,11 @@
+[package]
+name = "rospm-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Terminal UI for rospm"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
