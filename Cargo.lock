@@ -651,6 +651,7 @@ name = "rospm-core"
 version = "1.0.0"
 dependencies = [
  "indexmap",
+ "libc",
  "roxmltree",
  "serde",
  "serde_json",

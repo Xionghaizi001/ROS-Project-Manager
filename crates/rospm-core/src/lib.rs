@@ -42,6 +42,7 @@ pub mod repos;
 pub mod repository;
 pub mod scm;
 pub mod snapshot;
+pub mod worker;
 
 pub use error::{Error, Result};
 pub use message::Message;

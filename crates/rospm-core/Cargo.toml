@@ -16,3 +16,4 @@ serde_yaml.workspace = true
 roxmltree.workspace = true
 which.workspace = true
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+libc.workspace = true
