@@ -18,7 +18,8 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
     let loaded = load(global)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
-    let plan = provider::for_manifest(&loaded.manifest).plan_uninstall(&ctx, keep_source)?;
+    let mut plan = provider::for_manifest(&loaded.manifest).plan_uninstall(&ctx, keep_source)?;
+    super::logging::commands(&mut plan, &loaded.root, "uninstall");
     let mut out = std::io::stdout().lock();
     if dry_run {
         plan.execute(true, &mut out)?;

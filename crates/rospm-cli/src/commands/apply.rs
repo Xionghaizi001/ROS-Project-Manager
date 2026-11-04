@@ -101,6 +101,7 @@ pub fn apply(
     };
     let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
+    super::logging::commands(&mut plan, &loaded.root, "apply");
     if no_env_check {
         skip_env_checks(&mut plan);
     }

@@ -29,6 +29,7 @@ mod environment;
 mod init;
 mod interaction;
 mod lock;
+mod logging;
 mod report;
 mod uninstall;
 mod verify;

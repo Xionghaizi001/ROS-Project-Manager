@@ -9,3 +9,5 @@ description = "Terminal UI for rospm"
 anyhow.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
+rospm-core = { path = "../rospm-core" }
+serde_json.workspace = true

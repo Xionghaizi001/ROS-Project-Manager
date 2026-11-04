@@ -114,7 +114,8 @@ pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
     let host = Host::probe();
     let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
     let ctx = context(&loaded, &host, false, None, false, mirror)?;
-    let plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
+    let mut plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
+    super::logging::commands(&mut plan, &loaded.root, "deps");
     let mut out = std::io::stdout().lock();
     plan.execute(dry_run, &mut out)?;
     out.flush()?;

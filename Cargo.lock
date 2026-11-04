@@ -913,6 +913,8 @@ dependencies = [
  "anyhow",
  "crossterm",
  "ratatui",
+ "rospm-core",
+ "serde_json",
 ]
 
 [[package]]
