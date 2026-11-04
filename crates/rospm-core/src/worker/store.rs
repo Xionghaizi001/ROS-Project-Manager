@@ -7,7 +7,7 @@ use super::*;
 /// cursors, so reconnecting clients can resume without replaying old entries.
 #[derive(Clone)]
 pub struct TaskStore {
-    root: PathBuf,
+    pub(super) root: PathBuf,
 }
 
 /// Why a worker is recovering durable snapshots. A worker process exit gives
@@ -158,11 +158,15 @@ pub enum StoreError {
     AlreadyExists,
     #[error("task does not exist")]
     MissingTask,
+    #[error("request or task ID is already bound to another submission")]
+    SubmissionConflict,
+    #[error("invalid submission")]
+    InvalidSubmission,
 }
 
 impl TaskStore {
     /// Creates a private store at `root`. The caller should place this below
-    /// the same user-private runtime directory as the socket.
+    /// a user-private persistent state directory (not ephemeral socket storage).
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StoreError> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)?;
@@ -331,6 +335,86 @@ impl TaskStore {
         Ok(entries)
     }
 
+    /// Reconnect pagination is bounded by the encoded wire size as well as count.
+    pub fn log_chunk(&self, task_id: &str, cursor: u64, limit: u32) -> Result<Message, StoreError> {
+        if limit == 0 {
+            return Err(StoreError::InvalidSubmission);
+        }
+        let terminal = self.load_snapshot(task_id)?.state.is_terminal();
+        let (_, path) = self.files(task_id)?;
+        let mut reader = BufReader::new(fs::File::open(path)?);
+        let mut entries = Vec::new();
+        let mut next_cursor = cursor;
+        let mut previous = None;
+        let mut complete = terminal;
+        // Leave space for the task ID, envelope, cursor and JSON separators.
+        let mut remaining = MAX_FRAME_BYTES - 1024;
+        loop {
+            let mut line = Vec::new();
+            let length = reader
+                .by_ref()
+                .take((MAX_FRAME_BYTES + 1) as u64)
+                .read_until(b'\n', &mut line)?;
+            if length == 0 {
+                break;
+            }
+            if length > MAX_FRAME_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "stored log entry exceeds frame limit",
+                )
+                .into());
+            }
+            if !line.ends_with(b"\n") {
+                if terminal {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "incomplete final log entry",
+                    )
+                    .into());
+                }
+                complete = false;
+                break;
+            }
+            let entry: LogEntry = serde_json::from_slice(&line)?;
+            if previous.is_some_and(|previous| entry.cursor <= previous) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "log cursors are not increasing",
+                )
+                .into());
+            }
+            previous = Some(entry.cursor);
+            if entry.cursor < cursor {
+                continue;
+            }
+            let size = serde_json::to_vec(&entry)?.len() + 1;
+            if entries.len() >= limit.min(256) as usize || size > remaining {
+                if entries.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "stored log entry exceeds response budget",
+                    )
+                    .into());
+                }
+                complete = false;
+                break;
+            }
+            next_cursor = entry
+                .cursor
+                .checked_add(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "log cursor overflow"))?;
+            remaining -= size;
+            entries.push(entry);
+        }
+        Ok(Message::LogChunk {
+            task_id: task_id.into(),
+            next_cursor,
+            complete,
+            entries,
+        })
+    }
+
     /// Keep at most `max_completed` completed task directories. Active tasks
     /// are never removed; callers should invoke this after worker startup and
     /// task completion. A task's snapshot remains readable until pruned.
@@ -343,14 +427,7 @@ impl TaskStore {
             }
             let id = item.file_name().to_string_lossy().into_owned();
             if let Ok(snapshot) = self.load_snapshot(&id) {
-                if matches!(
-                    snapshot.state,
-                    TaskState::Succeeded
-                        | TaskState::Failed
-                        | TaskState::Cancelled
-                        | TaskState::Interrupted
-                        | TaskState::Unknown
-                ) {
+                if snapshot.state.is_terminal() {
                     let modified = item
                         .metadata()?
                         .modified()

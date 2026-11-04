@@ -16,12 +16,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 mod coordination;
+mod service;
 mod socket;
 mod store;
+mod submission;
 
 pub use coordination::{ConfirmationWait, WorkspaceLock, WorkspaceLockError};
 pub use socket::{PeerIdentity, SocketEndpoint};
 pub use store::{DispatchStatus, LogPump, RecoveryCause, StoreError, TaskStore};
+pub use submission::SubmissionStatus;
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -130,6 +133,15 @@ pub enum TaskState {
     Unknown,
 }
 
+impl TaskState {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Interrupted | Self::Unknown
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfirmationResponse {
@@ -186,30 +198,11 @@ pub enum ProtocolError {
 
 pub fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
+        && !matches!(value, "." | "..")
         && value.len() <= 128
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
-}
-
-/// Atomically remembers submitted request IDs. Reconnecting with an existing
-/// ID is therefore an acknowledgement lookup, never a second execution.
-#[derive(Default)]
-pub struct SubmissionRegistry(std::sync::Mutex<std::collections::HashMap<String, String>>);
-impl SubmissionRegistry {
-    pub fn record(&self, request_id: &str, task_id: &str) -> Result<bool, ProtocolError> {
-        if !valid_identifier(request_id) || !valid_identifier(task_id) {
-            return Err(ProtocolError::InvalidIdentifier);
-        }
-        let mut map = self.0.lock().expect("submission registry poisoned");
-        Ok(match map.get(request_id) {
-            Some(existing) => existing == task_id,
-            None => {
-                map.insert(request_id.into(), task_id.into());
-                true
-            }
-        })
-    }
 }
 
 #[cfg(test)]
@@ -230,15 +223,6 @@ mod tests {
             Frame::decode(bad),
             Err(ProtocolError::UnsupportedVersion(99))
         ));
-    }
-
-    #[test]
-    fn duplicate_request_never_reexecutes() {
-        let registry = SubmissionRegistry::default();
-        assert!(registry.record("r1", "t1").unwrap());
-        assert!(registry.record("r1", "t1").unwrap());
-        assert!(!registry.record("r1", "t2").unwrap());
-        assert!(registry.record("r2", "t2").unwrap());
     }
 
     #[test]
