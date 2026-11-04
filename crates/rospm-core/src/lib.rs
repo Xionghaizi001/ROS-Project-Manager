@@ -40,6 +40,7 @@ pub mod provider;
 pub mod replacements;
 pub mod repos;
 pub mod repository;
+pub mod run;
 pub mod scm;
 pub mod snapshot;
 pub mod worker;

@@ -129,6 +129,18 @@ enum Cmd {
         colcon_args: Vec<String>,
     },
 
+    #[command(about = tr("cli.run.about"))]
+    Run {
+        #[arg(long, help = tr("cli.run.list"))]
+        list: bool,
+        #[arg(long, help = tr("cli.run.interactive"))]
+        interactive: bool,
+        #[arg(help = tr("cli.run.target"))]
+        target: Option<String>,
+        #[arg(last = true, value_name = "ARGS", help = tr("cli.run.args"))]
+        args: Vec<String>,
+    },
+
     #[command(about = tr("cli.env.about"))]
     Env {
         #[arg(long, default_value = "bash", hide_default_value = true, help = tr("cli.env.shell"))]
@@ -330,6 +342,12 @@ fn main() -> ExitCode {
             no_env_check,
             dry_run,
         ),
+        Cmd::Run {
+            list,
+            interactive,
+            target,
+            args,
+        } => commands::run(&global, list, interactive, target.as_deref(), args),
         Cmd::Env { shell } => commands::env(&global, shell),
         Cmd::Shell => commands::shell(&global),
         Cmd::Tui => rospm_tui::run(

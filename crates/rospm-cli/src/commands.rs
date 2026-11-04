@@ -31,6 +31,7 @@ mod interaction;
 mod lock;
 mod logging;
 mod report;
+mod run;
 mod uninstall;
 mod verify;
 
@@ -42,6 +43,7 @@ pub use doctor::doctor;
 pub use environment::{env, shell};
 pub use init::init;
 pub use lock::lock;
+pub use run::run;
 pub use uninstall::uninstall;
 pub use verify::verify;
 
