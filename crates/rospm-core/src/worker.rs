@@ -20,11 +20,13 @@ mod service;
 mod socket;
 mod store;
 mod submission;
+mod task;
 
 pub use coordination::{ConfirmationWait, WorkspaceLock, WorkspaceLockError};
 pub use socket::{PeerIdentity, SocketEndpoint};
 pub use store::{DispatchStatus, LogPump, RecoveryCause, StoreError, TaskStore};
 pub use submission::SubmissionStatus;
+pub use task::{TaskHandle, TaskRunner};
 
 pub const PROTOCOL_VERSION: u16 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
