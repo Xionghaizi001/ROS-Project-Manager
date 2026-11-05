@@ -397,6 +397,73 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn concurrent_log_records_remain_complete_json_lines() {
+        let root =
+            std::env::temp_dir().join(format!("rospm-concurrent-log-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = TaskStore::open(&root).unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "task-1".into(),
+                state: TaskState::Running,
+                step: 0,
+                total_steps: None,
+                log_cursor: 0,
+                result: None,
+            })
+            .unwrap();
+        let pump = Arc::new(LogPump::new(store.clone(), "task-1", 256, 1 << 20));
+        let mut handles = Vec::new();
+        for stream in [LogStream::Stdout, LogStream::Stderr] {
+            let pump = Arc::clone(&pump);
+            handles.push(thread::spawn(move || {
+                for index in 0..100 {
+                    pump.record(stream.clone(), format!("{stream:?}-{index}"))
+                        .unwrap();
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let entries = store.read_logs("task-1", 0, 300).unwrap();
+        assert_eq!(entries.len(), 200);
+        assert!(entries
+            .windows(2)
+            .all(|pair| pair[0].cursor < pair[1].cursor));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recovery_replaces_stale_snapshot_temp_file() {
+        let root =
+            std::env::temp_dir().join(format!("rospm-stale-snapshot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = TaskStore::open(&root).unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "active".into(),
+                state: TaskState::Running,
+                step: 1,
+                total_steps: Some(2),
+                log_cursor: 0,
+                result: None,
+            })
+            .unwrap();
+        fs::write(root.join("active/snapshot.json.tmp"), b"partial").unwrap();
+        let recovered = store
+            .recover_active_tasks(RecoveryCause::WorkerExit)
+            .unwrap();
+        assert_eq!(recovered[0].state, TaskState::Interrupted);
+        assert!(!root.join("active/snapshot.json.tmp").exists());
+        assert_eq!(
+            store.load_snapshot("active").unwrap().state,
+            TaskState::Interrupted
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn endpoint_is_private_and_authenticates_same_user() {

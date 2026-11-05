@@ -1,6 +1,7 @@
 //! Durable task snapshots and bounded log delivery.
 
 use super::*;
+use std::fs::File;
 
 /// Durable task state owned by one worker. Each task gets its own directory;
 /// snapshot writes are atomic and logs are append-only JSONL with monotonic
@@ -26,6 +27,7 @@ pub struct LogPump {
     store: TaskStore,
     task_id: String,
     next_cursor: Arc<std::sync::atomic::AtomicU64>,
+    record_lock: Arc<Mutex<()>>,
     queue: Arc<Mutex<UiQueue>>,
 }
 
@@ -54,6 +56,7 @@ impl LogPump {
             store,
             task_id: task_id.into(),
             next_cursor: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            record_lock: Arc::new(Mutex::new(())),
             queue: Arc::new(Mutex::new(UiQueue {
                 entries: VecDeque::new(),
                 bytes: 0,
@@ -69,6 +72,9 @@ impl LogPump {
         stream: LogStream,
         text: impl Into<String>,
     ) -> Result<DispatchStatus, StoreError> {
+        // Keep cursor allocation and the corresponding durable append together.
+        // Cloned readers share this lock; TaskStore also serializes processes.
+        let _record_lock = self.record_lock.lock().expect("log record lock poisoned");
         let entry = LogEntry {
             cursor: self
                 .next_cursor
@@ -141,6 +147,7 @@ impl Clone for LogPump {
             store: self.store.clone(),
             task_id: self.task_id.clone(),
             next_cursor: Arc::clone(&self.next_cursor),
+            record_lock: Arc::clone(&self.record_lock),
             queue: Arc::clone(&self.queue),
         }
     }
@@ -164,7 +171,33 @@ pub enum StoreError {
     InvalidSubmission,
 }
 
+struct TaskFileLock(File);
+
+impl Drop for TaskFileLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 impl TaskStore {
+    fn lock_task(&self, task_id: &str) -> Result<TaskFileLock, StoreError> {
+        let dir = self.task_dir(task_id)?;
+        if !dir.is_dir() {
+            return Err(StoreError::MissingTask);
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(dir.join(".io.lock"))?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+        Ok(TaskFileLock(file))
+    }
+
     /// Creates a private store at `root`. The caller should place this below
     /// a user-private persistent state directory (not ephemeral socket storage).
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StoreError> {
@@ -281,7 +314,11 @@ impl TaskStore {
         if !path.parent().map(|p| p.is_dir()).unwrap_or(false) {
             return Err(StoreError::MissingTask);
         }
+        let _lock = self.lock_task(&snapshot.task_id)?;
         let tmp = path.with_extension("json.tmp");
+        // A previous worker may have died after syncing the temp file. The lock
+        // proves no writer is active, so that stale file is safe to replace.
+        let _ = fs::remove_file(&tmp);
         let bytes = serde_json::to_vec_pretty(snapshot)?;
         {
             let mut file = fs::OpenOptions::new()
@@ -302,9 +339,11 @@ impl TaskStore {
         if !path.is_file() {
             return Err(StoreError::MissingTask);
         }
+        let _lock = self.lock_task(task_id)?;
+        let mut record = serde_json::to_vec(entry)?;
+        record.push(b'\n');
         let mut file = fs::OpenOptions::new().append(true).open(path)?;
-        serde_json::to_writer(&mut file, entry)?;
-        file.write_all(b"\n")?;
+        file.write_all(&record)?;
         file.sync_data()?;
         Ok(())
     }
