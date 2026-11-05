@@ -373,6 +373,9 @@ impl TaskStore {
         }
         let _lock = self.lock_task(task_id)?;
         let mut record = serde_json::to_vec(entry)?;
+        if record.len() > MAX_LOG_LINE_BYTES {
+            return Err(StoreError::LogLineTooLarge(MAX_LOG_LINE_BYTES));
+        }
         record.push(b'\n');
         let mut file = fs::OpenOptions::new().append(true).open(path)?;
         file.write_all(&record)?;

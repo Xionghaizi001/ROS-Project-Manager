@@ -34,6 +34,7 @@ mod report;
 mod run;
 mod uninstall;
 mod verify;
+pub mod worker;
 
 pub use apply::apply;
 pub use build::build;

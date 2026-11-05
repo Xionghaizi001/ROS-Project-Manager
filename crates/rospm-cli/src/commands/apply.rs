@@ -210,7 +210,7 @@ fn set_toml_string(item: &mut toml_edit::Item, text: &str) {
 
 /// Load and validate `rospm.lock` for `apply --locked` (spec §3.2): absent or
 /// stale is corrected by re-running `rospm lock`, never guessed at.
-fn load_locked_lock(loaded: &Loaded) -> Result<Lock> {
+pub(super) fn load_locked_lock(loaded: &Loaded) -> Result<Lock> {
     let lock = loaded.load_lock()?.ok_or_else(|| {
         anyhow!(
             "{}",

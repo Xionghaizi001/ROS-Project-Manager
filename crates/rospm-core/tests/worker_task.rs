@@ -189,3 +189,78 @@ fn protected_step_finishes_before_cancel_and_real_failure_wins() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn queued_cancel_does_not_wait_for_workspace_lease() {
+    let (root, store, workspace) = fixture();
+    let runtime = root.join("runtime");
+    let _lease = rospm_core::worker::WorkspaceLock::acquire(&runtime, &workspace).unwrap();
+    let runner = TaskRunner::new(store.clone(), runtime);
+    let task = runner
+        .start_with("queued", &workspace, |_| panic!("cancelled task ran"))
+        .unwrap();
+    task.cancel();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !task.is_finished() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(matches!(task.join(), Err(rospm_core::Error::Cancelled)));
+    let snapshot = store.load_snapshot("queued").unwrap();
+    assert_eq!(snapshot.state, TaskState::Cancelled);
+    assert!(!snapshot.result.unwrap().success);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn terminal_result_belongs_to_outer_workflow_and_panics_are_persisted() {
+    use rospm_core::execution::{Event, State};
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    let observed = store.clone();
+    let task = runner
+        .start_with("outer", &workspace, move |interaction| {
+            interaction.event(Event::Task {
+                task: "outer",
+                state: State::Succeeded,
+                total: 1,
+                error: None,
+            });
+            assert_eq!(
+                observed.load_snapshot("outer").unwrap().state,
+                TaskState::Running
+            );
+            panic!("workflow failed after its child plan");
+        })
+        .unwrap();
+    assert!(task.join().is_err());
+    let snapshot = store.load_snapshot("outer").unwrap();
+    assert_eq!(snapshot.state, TaskState::Failed);
+    assert!(snapshot.result.unwrap().error.unwrap().contains("panicked"));
+    assert!(runner.start_with("outer", &workspace, |_| Ok(())).is_err());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn log_persistence_failure_is_not_reported_as_success() {
+    use rospm_core::execution::{Event, Stream};
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    let task = runner
+        .start_with("bad-log", &workspace, |interaction| {
+            let bytes = vec![b'x'; rospm_core::worker::MAX_FRAME_BYTES + 1];
+            interaction.event(Event::Log {
+                task: "bad-log",
+                step: 0,
+                stream: Stream::Stdout,
+                bytes: &bytes,
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert!(task.join().is_err());
+    let snapshot = store.load_snapshot("bad-log").unwrap();
+    assert_eq!(snapshot.state, TaskState::Failed);
+    assert!(!snapshot.result.unwrap().success);
+    fs::remove_dir_all(root).unwrap();
+}

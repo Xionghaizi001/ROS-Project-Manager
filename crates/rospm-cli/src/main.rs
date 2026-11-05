@@ -56,6 +56,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    #[command(about = tr("worker_cli.worker"))]
+    Worker {
+        #[arg(long, help = tr("worker_cli.runtime"))]
+        runtime: PathBuf,
+    },
+    #[command(about = tr("worker_cli.task"))]
+    Task {
+        #[arg(long, help = tr("worker_cli.runtime"))]
+        runtime: PathBuf,
+        #[command(subcommand)]
+        command: commands::worker::TaskCommand,
+    },
     #[command(about = tr("cli.init.about"))]
     Init {
         #[arg(long, help = tr("cli.init.from_env"))]
@@ -284,6 +296,8 @@ fn main() -> ExitCode {
         None
     };
     let result = match cli.command {
+        Cmd::Worker { runtime } => commands::worker::serve(&global, &runtime),
+        Cmd::Task { runtime, command } => commands::worker::client(&global, &runtime, command),
         Cmd::Init {
             from_env,
             distro,
