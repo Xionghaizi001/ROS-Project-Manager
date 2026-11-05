@@ -467,7 +467,7 @@ impl Provider for Native {
             let mut args = ws.colcon.build_args.clone();
             // `--log-base` is an option of colcon itself: `colcon build --log-base` is rejected.
             let log_base = take_option(&mut args, "--log-base");
-            let mut cmd = Command::new("colcon");
+            let mut cmd = Command::new("colcon").interruptible();
             if let Some(base) = &log_base {
                 cmd = cmd.args(["--log-base", base]);
             }

@@ -142,6 +142,8 @@ mod tests {
             task: "conda",
             step: 1,
             interaction: &recorder,
+            process_cancelled: None,
+            interruptible: false,
         };
         let error = Observed(&execution)
             .run(

@@ -1,6 +1,8 @@
 //! Plan execution, subprocess streaming, key fetching, and file writes.
 
 use super::*;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 impl Plan {
     /// Render the plan to `out`, then execute it unless `dry_run`.
@@ -24,9 +26,9 @@ impl Plan {
     /// to the frontend terminal. The caller owns task identity and renders the plan.
     /// Child stdin is closed; interactive sudo/shell authorization is a separate
     /// frontend responsibility. Cancellation is cooperative at whole-step
-    /// boundaries, including after the last step; no process is signalled and
-    /// completed changes are not rolled back. Step failures take precedence.
-    /// This does not implement worker isolation.
+    /// boundaries by default. Worker adapters also isolate subprocess groups and
+    /// may signal explicitly interruptible commands; completed changes are not
+    /// rolled back. Ordinary command failures take precedence over cancellation.
     pub fn perform_with(&self, task: &str, interaction: &dyn Interaction) -> Result<()> {
         interaction.event(Event::Task {
             task,
@@ -62,10 +64,13 @@ impl Plan {
         let started = std::time::SystemTime::now();
         let mut log: Option<std::fs::File> = None;
         for (i, step) in self.steps.iter().enumerate() {
+            let process_cancelled = AtomicBool::new(false);
             let execution = observer.map(|(task, interaction)| Execution {
                 task,
                 step: i + 1,
                 interaction,
+                process_cancelled: Some(&process_cancelled),
+                interruptible: matches!(step, Step::Run(c) if c.interruptible && !c.sudo),
             });
             if let Some(e) = &execution {
                 e.interaction.event(Event::Step {
@@ -112,6 +117,12 @@ impl Plan {
                             )
                             .map_err(|e| Error::io(&c.program, e))?,
                         };
+                        if process_cancelled.load(Ordering::Acquire)
+                            && (status.success()
+                                || matches!(status.signal(), Some(libc::SIGTERM | libc::SIGKILL)))
+                        {
+                            return Err(Error::Cancelled);
+                        }
                         if !status.success() {
                             return Err(Error::CommandFailed {
                                 command: c.render(),
@@ -181,10 +192,10 @@ impl Plan {
                 e.interaction.event(Event::Step {
                     task: e.task,
                     step: e.step,
-                    state: if result.is_ok() {
-                        State::Succeeded
-                    } else {
-                        State::Failed
+                    state: match &result {
+                        Ok(()) => State::Succeeded,
+                        Err(Error::Cancelled) => State::Cancelled,
+                        Err(_) => State::Failed,
                     },
                 });
             }
@@ -237,6 +248,10 @@ pub(crate) fn run_process(
     if execution.is_none() && log.is_none() {
         return command.status();
     }
+    let isolated = execution.is_some_and(|e| e.interaction.process_groups());
+    if isolated {
+        command.process_group(0);
+    }
     if execution.is_some() {
         command.stdin(Stdio::null());
     }
@@ -246,15 +261,94 @@ pub(crate) fn run_process(
         .spawn()?;
     let stdout = child.stdout.take().expect("piped");
     let stderr = child.stderr.take().expect("piped");
-    let (out, err) = std::thread::scope(|scope| {
+    let (status, out, err) = std::thread::scope(|scope| {
         let reader = scope.spawn(|| drain_output(stdout, Stream::Stdout, execution, log));
-        let err = drain_output(stderr, Stream::Stderr, execution, log);
-        (reader.join().expect("output reader panicked"), err)
+        let errors = scope.spawn(|| drain_output(stderr, Stream::Stderr, execution, log));
+        let status = if isolated {
+            wait_group(&mut child, execution.expect("isolated worker"), || {
+                reader.is_finished() && errors.is_finished()
+            })
+        } else {
+            child.wait()
+        };
+        (
+            status,
+            reader.join().expect("output reader panicked"),
+            errors.join().expect("output reader panicked"),
+        )
     });
-    let status = child.wait()?;
+    let status = status?;
     out?;
     err?;
     Ok(status)
+}
+
+// Keep the leader unreaped until pipes close: its PID/PGID cannot be reused
+// while cancellation targets descendants that still hold the pipe descriptors.
+fn wait_group(
+    child: &mut process::Child,
+    execution: &Execution<'_>,
+    drained: impl Fn() -> bool,
+) -> std::io::Result<process::ExitStatus> {
+    use std::time::{Duration, Instant};
+    let pgid = child.id() as i32;
+    let mut sent = None;
+    let mut killed = false;
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if unsafe { info.si_pid() } != 0 && drained() {
+            return child.wait();
+        }
+        if execution.interruptible && execution.interaction.cancel_requested(execution.task) {
+            let signal = if sent.is_none() {
+                Some(libc::SIGTERM)
+            } else if !killed
+                && sent.is_some_and(|at: Instant| at.elapsed() >= Duration::from_secs(2))
+            {
+                Some(libc::SIGKILL)
+            } else {
+                None
+            };
+            if let Some(signal) = signal {
+                if unsafe { libc::kill(-pgid, signal) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() != Some(libc::ESRCH) {
+                        return Err(error);
+                    }
+                } else {
+                    if let Some(cancelled) = execution.process_cancelled {
+                        cancelled.store(true, Ordering::Release);
+                    }
+                    execution.interaction.event(Event::Interaction {
+                        task: execution.task,
+                        step: execution.step,
+                        state: State::CancelRequested,
+                    });
+                }
+                if signal == libc::SIGTERM {
+                    sent = Some(Instant::now());
+                } else {
+                    killed = true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn drain_output(

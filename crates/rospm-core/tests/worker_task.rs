@@ -102,3 +102,90 @@ fn confirmation_response_reaches_worker_operation_before_execution() {
     );
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn group_cancel_stops_descendants_and_drains_output() {
+    for stubborn in [false, true] {
+        let (root, store, workspace) = fixture();
+        let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+        let ready = workspace.join("ready");
+        let mut plan = Plan::new("group cancel".to_string());
+        let script = if stubborn {
+            "trap '' TERM; sleep 30 & echo $$ > ready; wait"
+        } else {
+            "sleep 30 & echo $$ > ready; wait"
+        };
+        plan.run(
+            Command::new("sh")
+                .args(["-c", script])
+                .cwd(&workspace)
+                .interruptible(),
+        );
+        let task = runner.start("group", &workspace, plan).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.exists());
+        let pid: i32 = fs::read_to_string(ready).unwrap().trim().parse().unwrap();
+        assert_eq!(unsafe { libc::getpgid(pid) }, pid);
+        assert_ne!(pid, unsafe { libc::getpgrp() });
+        let started = Instant::now();
+        task.cancel();
+        assert!(matches!(task.join(), Err(rospm_core::Error::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(6));
+        if stubborn {
+            assert!(started.elapsed() >= Duration::from_secs(2));
+        }
+        assert_eq!(
+            store.load_snapshot("group").unwrap().state,
+            TaskState::Cancelled
+        );
+        // The leader was reaped; descendants closed inherited pipes before join returned.
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn protected_step_finishes_before_cancel_and_real_failure_wins() {
+    for fail in [false, true] {
+        let (root, store, workspace) = fixture();
+        let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+        let mut plan = Plan::new("protected".to_string());
+        plan.run(
+            Command::new("sh")
+                .args([
+                    "-c",
+                    if fail {
+                        "echo ready > ready; sleep 0.2; exit 7"
+                    } else {
+                        "echo ready > ready; sleep 0.2; touch finished"
+                    },
+                ])
+                .cwd(&workspace),
+        );
+        let task = runner.start("protected", &workspace, plan).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !workspace.join("ready").exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(workspace.join("ready").exists());
+        task.cancel();
+        let result = task.join();
+        if fail {
+            assert!(matches!(
+                result,
+                Err(rospm_core::Error::CommandFailed { .. })
+            ));
+            assert_eq!(
+                store.load_snapshot("protected").unwrap().state,
+                TaskState::Failed
+            );
+        } else {
+            assert!(matches!(result, Err(rospm_core::Error::Cancelled)));
+            assert!(workspace.join("finished").exists());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}

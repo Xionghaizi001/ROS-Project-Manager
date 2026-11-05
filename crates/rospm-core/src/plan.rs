@@ -9,7 +9,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use crate::error::{Error, Result};
 use crate::execution::{Event, Execution, Interaction, Progress, State, Stream};
@@ -37,6 +37,9 @@ pub struct Command {
     /// Header lines (`key: value`) for the plan's build log. When both this
     /// and [`Plan::log`] are set, output is forwarded and also saved there.
     pub log: Option<String>,
+    /// Explicitly reviewed as safe for worker SIGTERM/SIGKILL cancellation.
+    #[serde(skip)]
+    pub interruptible: bool,
 }
 
 impl Command {
@@ -49,7 +52,13 @@ impl Command {
             preamble: Vec::new(),
             sudo: false,
             log: None,
+            interruptible: false,
         }
+    }
+
+    pub fn interruptible(mut self) -> Self {
+        self.interruptible = true;
+        self
     }
 
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
@@ -340,6 +349,8 @@ mod tests {
             task: "full",
             step: 1,
             interaction: &Sink,
+            process_cancelled: None,
+            interruptible: false,
         };
         let full = std::fs::OpenOptions::new()
             .write(true)

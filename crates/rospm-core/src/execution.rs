@@ -2,6 +2,7 @@
 //! and slow-client queues belong to the worker, not the plan executor.
 use crate::{diagnostic::summary::Summary, Message};
 use serde::Serialize;
+use std::sync::atomic::AtomicBool;
 use std::{io::Write, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -102,6 +103,10 @@ impl Confirmation {
 pub trait Interaction: Sync {
     /// May be called concurrently by the stdout and stderr readers.
     fn event(&self, event: Event<'_>);
+    /// Only worker adapters opt into isolated process groups.
+    fn process_groups(&self) -> bool {
+        false
+    }
     /// A task-scoped, latched request. Must return promptly and remain true
     /// once requested. Disconnecting a frontend must not set this flag.
     fn cancel_requested(&self, _task: &str) -> bool {
@@ -164,6 +169,8 @@ pub(crate) struct Execution<'a> {
     pub task: &'a str,
     pub step: usize,
     pub interaction: &'a dyn Interaction,
+    pub process_cancelled: Option<&'a AtomicBool>,
+    pub interruptible: bool,
 }
 impl Execution<'_> {
     pub fn log(&self, stream: Stream, bytes: &[u8]) {

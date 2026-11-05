@@ -145,13 +145,13 @@ impl TaskRunner {
             };
             interaction.set_state(TaskState::Running, 0);
             let result = run(&interaction);
-            drop(lease);
             let state = match &result {
                 Ok(()) => TaskState::Succeeded,
                 Err(Error::Cancelled) => TaskState::Cancelled,
                 Err(_) => TaskState::Failed,
             };
             interaction.set_state(state, interaction.step());
+            drop(lease);
             result
         });
         Ok(TaskHandle { control, thread })
@@ -183,6 +183,9 @@ impl WorkerInteraction {
 }
 
 impl Interaction for WorkerInteraction {
+    fn process_groups(&self) -> bool {
+        true
+    }
     fn event(&self, event: Event<'_>) {
         match event {
             Event::Task { state, .. } | Event::Interaction { state, .. } => {
