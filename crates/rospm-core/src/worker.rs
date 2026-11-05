@@ -398,6 +398,37 @@ mod tests {
     }
 
     #[test]
+    fn reader_bounds_unterminated_lines_and_keeps_non_utf8_output() {
+        let root = std::env::temp_dir().join(format!("rospm-log-bound-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = TaskStore::open(&root).unwrap();
+        store
+            .create_task(&TaskSnapshot {
+                task_id: "task-1".into(),
+                state: TaskState::Running,
+                step: 0,
+                total_steps: None,
+                log_cursor: 0,
+                result: None,
+            })
+            .unwrap();
+        let pump = LogPump::new(store.clone(), "task-1", 4, 1024);
+        let too_long = pump.spawn_reader(
+            std::io::Cursor::new(vec![b'x'; 8 * 1024 * 1024]),
+            LogStream::Stdout,
+        );
+        assert!(matches!(
+            too_long.join().unwrap(),
+            Err(StoreError::LogLineTooLarge(_))
+        ));
+        let utf8 = pump.spawn_reader(std::io::Cursor::new(vec![0xff, b'\n']), LogStream::Stderr);
+        utf8.join().unwrap().unwrap();
+        let entries = store.read_logs("task-1", 0, 4).unwrap();
+        assert_eq!(entries.last().unwrap().text, "�");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn concurrent_log_records_remain_complete_json_lines() {
         let root =
             std::env::temp_dir().join(format!("rospm-concurrent-log-{}", std::process::id()));

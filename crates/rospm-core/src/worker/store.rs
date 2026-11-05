@@ -3,6 +3,8 @@
 use super::*;
 use std::fs::File;
 
+const MAX_LOG_LINE_BYTES: usize = MAX_FRAME_BYTES - 1024;
+
 /// Durable task state owned by one worker. Each task gets its own directory;
 /// snapshot writes are atomic and logs are append-only JSONL with monotonic
 /// cursors, so reconnecting clients can resume without replaying old entries.
@@ -133,10 +135,7 @@ impl LogPump {
     ) -> JoinHandle<Result<(), StoreError>> {
         let pump = self.clone();
         thread::spawn(move || {
-            for line in BufReader::new(reader).lines() {
-                pump.record(stream.clone(), line?)?;
-            }
-            Ok(())
+            read_log_lines(reader, |line| pump.record(stream.clone(), line).map(|_| ()))
         })
     }
 }
@@ -169,6 +168,39 @@ pub enum StoreError {
     SubmissionConflict,
     #[error("invalid submission")]
     InvalidSubmission,
+    #[error("log line exceeds the {0}-byte limit")]
+    LogLineTooLarge(usize),
+}
+
+fn read_log_lines<R: Read>(
+    mut reader: R,
+    mut on_line: impl FnMut(String) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    let mut chunk = [0u8; 8192];
+    let mut line = Vec::new();
+    loop {
+        let count = reader.read(&mut chunk)?;
+        if count == 0 {
+            if !line.is_empty() {
+                on_line(String::from_utf8_lossy(&line).into_owned())?;
+            }
+            return Ok(());
+        }
+        for byte in &chunk[..count] {
+            if *byte == b'\n' {
+                if line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                on_line(String::from_utf8_lossy(&line).into_owned())?;
+                line.clear();
+            } else {
+                if line.len() >= MAX_LOG_LINE_BYTES {
+                    return Err(StoreError::LogLineTooLarge(MAX_LOG_LINE_BYTES));
+                }
+                line.push(*byte);
+            }
+        }
+    }
 }
 
 struct TaskFileLock(File);
@@ -362,15 +394,15 @@ impl TaskStore {
             return Ok(Vec::new());
         }
         let mut entries = Vec::new();
-        for line in BufReader::new(fs::File::open(path)?).lines() {
-            let entry: LogEntry = serde_json::from_str(&line?)?;
-            if entry.cursor >= cursor {
-                entries.push(entry);
-                if entries.len() >= limit as usize {
-                    break;
+        read_log_lines(fs::File::open(path)?, |line| {
+            if entries.len() < limit as usize {
+                let entry: LogEntry = serde_json::from_str(&line)?;
+                if entry.cursor >= cursor {
+                    entries.push(entry);
                 }
             }
-        }
+            Ok(())
+        })?;
         Ok(entries)
     }
 
