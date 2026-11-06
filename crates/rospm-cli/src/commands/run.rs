@@ -131,7 +131,8 @@ fn choose_interactive(targets: &[Target]) -> Result<Target> {
         bail!("{}", rospm_core::msg!("cli.run.select_required"));
     }
     print_targets(targets);
-    print!("{} ", rospm_core::msg!("cli.run.prompt"));
+    let prompt = rospm_core::msg!("cli.run.prompt");
+    print!("{prompt} ");
     io::stdout().flush()?;
     let term = TerminalMode::new()?;
     let mut input = String::new();
@@ -161,15 +162,15 @@ fn choose_interactive(targets: &[Target]) -> Result<Target> {
             b'\t' => {
                 let matches = complete_targets(targets, &input);
                 if matches.len() == 1 {
-                    print!("\x08\x1b[K{}", matches[0]);
                     input = matches[0].clone();
+                    print!("\r\x1b[2K{prompt} {input}");
                     io::stdout().flush()?;
                 } else if !matches.is_empty() {
                     println!();
                     for m in &matches {
                         println!("  {m}");
                     }
-                    print!("{} {}", rospm_core::msg!("cli.run.prompt"), input);
+                    print!("{prompt} {input}");
                     io::stdout().flush()?;
                 }
             }
@@ -202,6 +203,8 @@ impl TerminalMode {
         unsafe {
             libc::cfmakeraw(&mut raw);
         }
+        // Only input needs raw mode; keep newline-to-CRLF output processing.
+        raw.c_oflag = original.c_oflag;
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
             return Err(io::Error::last_os_error().into());
         }
