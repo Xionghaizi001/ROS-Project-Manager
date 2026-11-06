@@ -1477,3 +1477,25 @@ fn native_apply_locked_keeps_newer_ubuntu_packages_but_pins_the_ros_layer_exactl
         "{rendered}"
     );
 }
+
+#[test]
+fn missing_command_directory_is_not_reported_as_a_log_failure() {
+    let dir = std::env::temp_dir().join(format!("rospm-missing-cwd-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut plan = rospm_core::plan::Plan::new("missing cwd".to_string());
+    plan.log = Some(dir.join("build.log"));
+    plan.run(
+        rospm_core::plan::Command::new("true")
+            .cwd(&dir)
+            .log("workspace: main"),
+    );
+    plan.execute(true, &mut Vec::new()).unwrap();
+    match plan.execute(false, &mut Vec::new()).unwrap_err() {
+        rospm_core::Error::Io { path, source } => {
+            assert_eq!(path, dir);
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        error => panic!("unexpected error: {error}"),
+    }
+    assert!(!dir.exists());
+}

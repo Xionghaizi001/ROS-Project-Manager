@@ -32,23 +32,32 @@ fn list_dirs(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `root` itself and its subdirectories (two levels) that hold a `src/`.
+/// Workspace roots up to two levels below the project, including flat layouts.
 fn find_workspace_dirs(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    if root.join("src").is_dir() {
-        out.push(root.to_path_buf());
-    }
-    for level1 in list_dirs(root) {
-        if level1.join("src").is_dir() {
-            out.push(level1);
-            continue;
+    fn visit(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        if crate::package_xml::IGNORE_MARKERS
+            .iter()
+            .any(|m| dir.join(m).exists())
+        {
+            return;
         }
-        for level2 in list_dirs(&level1) {
-            if level2.join("src").is_dir() {
-                out.push(level2);
+        let children = list_dirs(dir);
+        let holds_packages = children.iter().any(|p| {
+            p.join("package.xml").is_file()
+                && !crate::package_xml::IGNORE_MARKERS
+                    .iter()
+                    .any(|m| p.join(m).exists())
+        });
+        if dir.join("package.xml").is_file() || dir.join("src").is_dir() || holds_packages {
+            out.push(dir.to_path_buf());
+        } else if depth < 2 {
+            for child in children {
+                visit(&child, depth + 1, out);
             }
         }
     }
+    let mut out = Vec::new();
+    visit(root, 0, &mut out);
     out
 }
 
@@ -124,7 +133,7 @@ pub(super) fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
                 rel
             };
             WsCandidate {
-                packages: WorkspacePackages::scan(&dir.join("src")),
+                packages: WorkspacePackages::scan(&dir),
                 built: dir.join("install").join("setup.bash").is_file(),
                 dir,
                 rel,

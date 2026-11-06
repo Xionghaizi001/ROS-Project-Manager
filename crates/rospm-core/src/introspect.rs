@@ -473,6 +473,33 @@ mod tests {
     }
 
     #[test]
+    fn flat_workspaces_include_packages_without_inventing_sources() {
+        for rel in [".", "robot_ws", "projects/robot_ws"] {
+            let root = tmp("flat");
+            let ws = root.join(rel);
+            pkg(&ws.join("gui_control"), "gui_control", &["rclpy"]);
+            pkg(&ws.join("sdk"), "sdk", &["gui_control", "rclcpp"]);
+            // A C++ package's src directory is not a separate workspace.
+            fs::create_dir_all(ws.join("sdk/src")).unwrap();
+            for ignored in ["build", "install", "ignored"] {
+                pkg(&ws.join(ignored).join("old"), "old", &["stale_dep"]);
+                fs::write(ws.join(ignored).join("COLCON_IGNORE"), "").unwrap();
+            }
+            let d = draft(&root, &HostFacts::empty());
+            assert_eq!(d.workspaces.len(), 1, "{d:#?}");
+            assert_eq!(d.workspaces[0].path, Path::new(rel));
+            assert_eq!(d.workspaces[0].packages, 2);
+            assert!(d.workspaces[0].sources.is_none());
+            assert_eq!(d.external_keys, ["rclcpp", "rclpy"]);
+            assert!(!d
+                .todos
+                .iter()
+                .any(|t| t.key_name() == Some("init.workspaces.placeholder")));
+            d.validate().unwrap();
+        }
+    }
+
+    #[test]
     fn workspaces_repos_and_overlay_order_are_inferred() {
         let root = tmp("full");
         // deps_ws: imported from deps.repos

@@ -92,6 +92,15 @@ impl Plan {
                         step.perform_observed(out, execution.as_ref())?;
                     }
                     Step::Run(c) => {
+                        if let Some(cwd) = &c.cwd {
+                            let metadata = std::fs::metadata(cwd).map_err(|e| Error::io(cwd, e))?;
+                            if !metadata.is_dir() {
+                                return Err(Error::io(
+                                    cwd,
+                                    std::io::Error::from(std::io::ErrorKind::NotADirectory),
+                                ));
+                            }
+                        }
                         writeln!(out, "==> [{}] {}", i + 1, c.render())
                             .map_err(|e| Error::io(stdout(), e))?;
                         let status = match (&self.log, &c.log) {

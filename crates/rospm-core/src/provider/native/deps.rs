@@ -124,7 +124,7 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
     let mut scans: Vec<(String, WorkspacePackages)> = Vec::new();
     for name in &order {
         let ws = &m.workspaces[name];
-        let dir = ctx.root.join(&ws.path).join("src");
+        let dir = ctx.root.join(&ws.path);
         scans.push((name.clone(), WorkspacePackages::scan(&dir)));
     }
     let mut all_names: BTreeSet<String> = BTreeSet::new();
@@ -249,14 +249,14 @@ fn probe_rosdep(
     for name in order {
         let ws = &ctx.manifest.workspaces[name];
         let ws_path = ctx.root.join(&ws.path);
-        if !ws_path.join("src").is_dir() {
+        if !ws_path.is_dir() {
             continue;
         }
         let mut cmd = OsCommand::new(&rosdep);
         cmd.args([
             "check",
             "--from-paths",
-            "src",
+            ".",
             "--ignore-src",
             "--rosdistro",
             distro,

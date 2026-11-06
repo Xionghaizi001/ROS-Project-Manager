@@ -414,8 +414,8 @@ impl Native {
                 }
             }
 
-            // Packages present in src/ and whether the workspace was ever built.
-            let pkgs = WorkspacePackages::scan(&src);
+            // Match colcon discovery from the workspace root.
+            let pkgs = WorkspacePackages::scan(&ws_path);
             let n = pkgs.packages.len();
             let expected_pkgs = if ws.sources.is_some() {
                 msg!("probe.workspace.packages_from_repos")
@@ -430,7 +430,7 @@ impl Native {
                 };
                 r.push(
                     "workspace",
-                    format!("{name}: src/"),
+                    format!("{name}: {}", ws.path.display()),
                     expected_pkgs,
                     msg!("probe.workspace.no_packages"),
                     status,
@@ -443,7 +443,7 @@ impl Native {
                 };
                 r.push(
                     "workspace",
-                    format!("{name}: src/"),
+                    format!("{name}: {}", ws.path.display()),
                     expected_pkgs,
                     found,
                     Status::Ok,

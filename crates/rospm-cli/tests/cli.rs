@@ -122,7 +122,7 @@ fn init_from_env_writes_a_valid_manifest_that_check_accepts() {
         .expect("repo from main.repos is reported");
     assert_eq!(demos["status"], "missing");
     assert_eq!(demos["actual"], "not imported");
-    let pkgs = items.iter().find(|i| i["subject"] == "main: src/").unwrap();
+    let pkgs = items.iter().find(|i| i["subject"] == "main: ws").unwrap();
     assert_eq!(pkgs["actual"], "1 package");
     assert_eq!(env["ready"], false);
 
@@ -569,4 +569,33 @@ fn language_overrides_reach_detection() {
     assert!(run(rospm().env("ROSPM_LANG", "zh")).starts_with("错误："));
     // English output stays English under C.
     assert!(run(&mut rospm()).starts_with("error: I/O error on /nonexistent"));
+}
+
+#[test]
+fn init_flat_project_produces_a_buildable_workspace_path() {
+    let dir = fixture("init-flat");
+    fs::rename(dir.join("ws/src/my_pkg"), dir.join("my_pkg")).unwrap();
+    fs::remove_dir_all(dir.join("ws")).unwrap();
+    fs::remove_file(dir.join("main.repos")).unwrap();
+    fs::create_dir(dir.join("my_pkg/src")).unwrap();
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["init", "--from-env", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let v = json(&out);
+    assert_eq!(v["draft"]["workspaces"][0]["path"], ".");
+    assert_eq!(v["draft"]["workspaces"][0]["packages"], 1);
+    let manifest = fs::read_to_string(dir.join("rospm.toml")).unwrap();
+    let parsed = rospm_core::manifest::Manifest::parse(&manifest, &dir.join("rospm.toml")).unwrap();
+    assert!(parsed.workspaces["main"].sources.is_none());
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["build", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("cd {}/.", dir.display())));
+    assert!(!dir.join("ws").exists());
 }

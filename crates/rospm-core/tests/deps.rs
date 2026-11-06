@@ -231,3 +231,33 @@ fn deps_install_is_a_no_op_note_when_rosdep_is_disabled() {
     assert_eq!(plan.action_count(), 0, "{}", plan.render());
     assert!(plan.render().contains("deps.plan.rosdep_disabled"));
 }
+
+#[test]
+fn flat_workspace_dependencies_are_scanned_and_installed_from_root() {
+    let mut m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let proj = project();
+    for ws in ["ws", "deps_ws"] {
+        let src = proj.root.join(ws).join("src");
+        for entry in fs::read_dir(&src).unwrap() {
+            let entry = entry.unwrap();
+            fs::rename(entry.path(), proj.root.join(ws).join(entry.file_name())).unwrap();
+        }
+        fs::remove_dir(src).unwrap();
+    }
+    let host = Host::empty();
+    m.dependencies.rosdep.enabled = false;
+    let report = provider::for_manifest(&m)
+        .probe_deps(&ctx(&m, &proj.root, &host))
+        .unwrap();
+    assert!(report.workspaces.iter().all(|ws| ws.packages == 1));
+    assert_eq!(report.workspaces.len(), 2);
+    m.dependencies.rosdep.enabled = true;
+    let plan = provider::for_manifest(&m)
+        .plan_deps_install(&ctx(&m, &proj.root, &host))
+        .unwrap();
+    let mut output = Vec::new();
+    plan.execute(true, &mut output).unwrap();
+    assert!(String::from_utf8(output)
+        .unwrap()
+        .contains("--from-paths . --ignore-src"));
+}
