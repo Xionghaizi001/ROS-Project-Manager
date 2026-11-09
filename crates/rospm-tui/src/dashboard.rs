@@ -105,6 +105,7 @@ impl Dashboard {
                     .is_some_and(|packages| !packages.is_empty());
             let provider = provider::for_manifest(&manifest);
             let ctx = ProviderContext {
+                venv: None,
                 manifest: &manifest,
                 root,
                 platform,

@@ -93,6 +93,7 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
         None
     } else {
         let ctx = Context {
+            venv: None,
             manifest: m,
             root: &loaded.root,
             platform,

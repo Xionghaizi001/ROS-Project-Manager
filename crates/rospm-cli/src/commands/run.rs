@@ -11,12 +11,14 @@ use super::{context, load, Global};
 
 pub fn run(
     global: &Global,
+    venv: super::VenvArgs,
     list: bool,
     interactive: bool,
     requested: Option<&str>,
     args: Vec<String>,
 ) -> Result<()> {
-    let loaded = load(global)?;
+    let mut loaded = load(global)?;
+    venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let mut workspaces = Vec::new();
@@ -52,14 +54,25 @@ pub fn run(
             })?
     };
     let env = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
+    let ros2 = match &loaded.venv {
+        Some(path) => format!(
+            "{} {}",
+            shell_quote(&path.join("bin/python").to_string_lossy()),
+            shell_quote(&format!(
+                "/opt/ros/{}/bin/ros2",
+                loaded.manifest.project.ros_distro
+            ))
+        ),
+        None => "ros2".into(),
+    };
     let command = match target.kind {
         TargetKind::Node => format!(
-            "ros2 run {} {}",
+            "{ros2} run {} {}",
             shell_quote(&target.package),
             shell_quote(&target.name)
         ),
         TargetKind::Launch => format!(
-            "ros2 launch {} {}",
+            "{ros2} launch {} {}",
             shell_quote(&target.package),
             shell_quote(&target.name)
         ),

@@ -778,3 +778,11 @@ worker_cli:
   utf8: "工作区路径必须是 UTF-8"
   already_running: "工作区的 worker 已在运行"
   runtime_in_use: "runtime 目录已被使用"
+
+venv:
+  project: "使用项目 .venv（覆盖清单 Conda）"
+  path: "使用已有 venv 路径（相对调用目录）"
+  invalid_path: "venv 路径无效"
+  invalid: "venv 无效或未启用系统包：%{path}"
+  unsupported: "venv 需要清单支持的 native Ubuntu 平台"
+  env_conflict: "所选 venv 与清单 Python/Conda 环境变量冲突"

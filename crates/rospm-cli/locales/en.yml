@@ -783,3 +783,11 @@ worker_cli:
   utf8: "Workspace path must be UTF-8"
   already_running: "Workspace worker already running"
   runtime_in_use: "Runtime already in use"
+
+venv:
+  project: "Use the project .venv (overrides manifest Conda)"
+  path: "Use an existing venv path (relative to cwd)"
+  invalid_path: "Invalid venv path"
+  invalid: "Invalid venv or system-site-packages disabled: %{path}"
+  unsupported: "venv requires the manifest’s supported native Ubuntu platform"
+  env_conflict: "Selected venv conflicts with manifest Python/Conda environment variables"

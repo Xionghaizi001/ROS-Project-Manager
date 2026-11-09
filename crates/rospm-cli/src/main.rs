@@ -127,11 +127,13 @@ enum Cmd {
 
     #[command(about = tr("cli.build.about"))]
     Build {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
         #[arg(help = tr("cli.build.workspace"))]
         workspace: Option<String>,
-        #[arg(long, value_name = "NAME", conflicts_with = "conda_prefix", help = tr("cli.build.conda_env"))]
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["conda_prefix", "venv", "venv_path"], help = tr("cli.build.conda_env"))]
         conda_env: Option<String>,
-        #[arg(long, value_name = "PATH", conflicts_with = "conda_env", help = tr("cli.build.conda_prefix"))]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["conda_env", "venv", "venv_path"], help = tr("cli.build.conda_prefix"))]
         conda_prefix: Option<PathBuf>,
         #[arg(long, help = tr("cli.no_env_check"))]
         no_env_check: bool,
@@ -143,6 +145,8 @@ enum Cmd {
 
     #[command(about = tr("cli.run.about"))]
     Run {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
         #[arg(long, help = tr("cli.run.list"))]
         list: bool,
         #[arg(long, help = tr("cli.run.interactive"))]
@@ -155,12 +159,17 @@ enum Cmd {
 
     #[command(about = tr("cli.env.about"))]
     Env {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
         #[arg(long, default_value = "bash", hide_default_value = true, help = tr("cli.env.shell"))]
         shell: Shell,
     },
 
     #[command(about = tr("cli.shell.about"))]
-    Shell,
+    Shell {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
+    },
 
     #[command(about = tr("cli.tui.about"))]
     Tui,
@@ -341,6 +350,7 @@ fn main() -> ExitCode {
             dry_run,
         } => commands::uninstall(&global, keep_source, yes, dry_run),
         Cmd::Build {
+            venv,
             workspace,
             conda_env,
             conda_prefix,
@@ -350,6 +360,7 @@ fn main() -> ExitCode {
         } => commands::build(
             &global,
             workspace.as_deref(),
+            venv,
             conda_env,
             conda_prefix,
             colcon_args,
@@ -357,13 +368,14 @@ fn main() -> ExitCode {
             dry_run,
         ),
         Cmd::Run {
+            venv,
             list,
             interactive,
             target,
             args,
-        } => commands::run(&global, list, interactive, target.as_deref(), args),
-        Cmd::Env { shell } => commands::env(&global, shell),
-        Cmd::Shell => commands::shell(&global),
+        } => commands::run(&global, venv, list, interactive, target.as_deref(), args),
+        Cmd::Env { shell, venv } => commands::env(&global, shell, venv),
+        Cmd::Shell { venv } => commands::shell(&global, venv),
         Cmd::Tui => rospm_tui::run(
             global.manifest.as_deref(),
             rospm_tui::Text {

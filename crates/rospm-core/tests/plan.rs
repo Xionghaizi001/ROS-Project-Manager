@@ -42,6 +42,7 @@ fn ready_host() -> Host {
 
 fn ctx<'a>(m: &'a Manifest, host: &'a Host) -> Context<'a> {
     Context {
+        venv: None,
         manifest: m,
         root: Path::new("/proj"),
         platform: Platform::LinuxX86_64,
@@ -1498,4 +1499,104 @@ fn missing_command_directory_is_not_reported_as_a_log_failure() {
         error => panic!("unexpected error: {error}"),
     }
     assert!(!dir.exists());
+}
+
+#[test]
+fn explicit_venv_overrides_conda_only_for_execution_and_pins_build_python() {
+    let temp = std::env::temp_dir().join(format!("rospm-venv-plan-1-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp);
+    std::fs::create_dir_all(&temp).unwrap();
+    let path = temp.as_path().join("env with space");
+    std::fs::create_dir_all(path.join("bin")).unwrap();
+    std::fs::write(
+        path.join("pyvenv.cfg"),
+        "include-system-site-packages = true\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", path.join("bin/python")).unwrap();
+    let mut m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    m.build.conda = Some(rospm_core::manifest::CondaBuild {
+        name: Some("other".into()),
+        ..Default::default()
+    });
+    for ws in m.workspaces.values_mut() {
+        ws.colcon.build_args.extend([
+            "--cmake-args".into(),
+            "-DPython3_EXECUTABLE=/foreign/python".into(),
+            "--event-handlers".into(),
+            "console_direct+".into(),
+        ]);
+    }
+    let host = ready_host();
+    let normal = ctx(&m, &host);
+    let selected = Context {
+        venv: Some(&path),
+        ..ctx(&m, &host)
+    };
+    let provider = provider::for_manifest(&m);
+    let env = provider.env_script(&selected, Shell::Bash).unwrap();
+    assert!(env.contains("export VIRTUAL_ENV="));
+    assert!(!env.contains("conda activate"));
+    assert!(provider
+        .env_script(&normal, Shell::Bash)
+        .unwrap()
+        .contains("conda activate"));
+    assert_eq!(
+        provider.plan_apply(&selected).unwrap().render(),
+        provider.plan_apply(&normal).unwrap().render()
+    );
+    let plan = provider.plan_build(&selected, None, true).unwrap();
+    assert!(!plan
+        .steps
+        .iter()
+        .any(|s| matches!(s, rospm_core::plan::Step::Conda(_))));
+    let rendered = plan.render();
+    assert!(rendered.contains("from colcon_core.command import main"));
+    assert!(rendered.contains(&format!(
+        "-DPython3_EXECUTABLE={}/bin/python",
+        path.display()
+    )));
+    for step in &plan.steps {
+        if let rospm_core::plan::Step::Run(command) = step {
+            if command.args.iter().any(|arg| arg == "build") {
+                let foreign = command
+                    .args
+                    .iter()
+                    .position(|arg| arg == "-DPython3_EXECUTABLE=/foreign/python")
+                    .unwrap();
+                let selected = command
+                    .args
+                    .iter()
+                    .position(|arg| {
+                        arg == &format!("-DPython3_EXECUTABLE={}/bin/python", path.display())
+                    })
+                    .unwrap();
+                let next_option = command
+                    .args
+                    .iter()
+                    .rposition(|arg| arg == "--event-handlers")
+                    .unwrap();
+                assert!(foreign < selected && selected < next_option);
+            }
+        }
+    }
+    assert!(!temp.as_path().join(".rospm").exists());
+    for shell in [Shell::Bash, Shell::Zsh] {
+        let script = provider.env_script(&selected, shell).unwrap();
+        assert!(
+            script.find("export VIRTUAL_ENV").unwrap() < script.find("source /opt/ros").unwrap()
+        );
+        assert!(script.contains("include-system-site-packages must be true"));
+    }
+    m.env.insert("PYTHONPATH".into(), "/foreign".into());
+    assert!(provider
+        .env_script(
+            &Context {
+                venv: Some(&path),
+                ..ctx(&m, &host)
+            },
+            Shell::Bash
+        )
+        .is_err());
+    std::fs::remove_dir_all(&temp).unwrap();
 }

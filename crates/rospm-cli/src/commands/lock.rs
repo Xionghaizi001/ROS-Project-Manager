@@ -26,6 +26,7 @@ pub fn lock(global: &Global, platform: Option<Platform>) -> Result<()> {
     };
     let previous = loaded.load_lock()?;
     let ctx = Context {
+        venv: None,
         manifest: &loaded.manifest,
         root: &loaded.root,
         platform,

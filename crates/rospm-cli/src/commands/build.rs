@@ -16,9 +16,11 @@ use crate::i18n::tr;
 
 use super::{context, load, Global, Loaded};
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     global: &Global,
     workspace: Option<&str>,
+    venv: super::VenvArgs,
     conda_env: Option<String>,
     conda_prefix: Option<PathBuf>,
     colcon_args: Vec<String>,
@@ -26,6 +28,7 @@ pub fn build(
     dry_run: bool,
 ) -> Result<()> {
     let mut loaded = load(global)?;
+    venv.select(&mut loaded)?;
     // After the manifest's build_args, so colcon's last-wins parsing lets the
     // command line override them; never written back.
     if !colcon_args.is_empty() {

@@ -92,6 +92,18 @@ rospm build --conda-prefix /path/to/env
 
 已有环境须自行准备兼容 ROS 的 Python、构建工具与依赖，rospm 不接管其包版本。受管模式使用 `[build.conda.managed]` 声明 Python、channels 等，由 `apply` 自动准备；锁定重放还需携带对应平台的 Conda 显式锁文件。Python ABI、配置字段和自动安装规则见 [文件与命令规范](docs/spec.md)。
 
+## 项目 Python venv
+
+`env`、`shell`、`build`、`run` 可用 `--venv` 选择清单同级已有 `.venv`，或用 `--venv-path PATH` 选择已有路径。环境须使用匹配 ROS 的系统 Python 并启用 `--system-site-packages`；不会隐式创建或安装依赖。
+
+```sh
+rospm build --venv
+rospm run --venv package/node
+rospm shell --venv
+```
+
+显式 venv 覆盖清单 Conda；不传参数则保持原有行为。所选 venv 会清除继承的 Conda/Python 路径并从系统 PATH 组装环境。支持边界与验证记录见 [P4.4 说明](docs/p44-venv.md)。
+
 ## 中文 / 英文输出
 
 ```sh

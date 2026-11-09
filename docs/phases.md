@@ -1,6 +1,6 @@
 # rospm 分阶段实施清单
 
-> 记录当前及后续阶段任务，状态更新日期：2026-10-29。
+> 记录当前及后续阶段任务，状态更新日期：2026-11-04。
 > 总览见 [ROADMAP.md](../ROADMAP.md)；决策见 [decisions.md](decisions.md)；格式与命令语义见 [spec.md](spec.md)。
 
 图例：`[x]` 完成 · `[~]` 部分完成 · `[ ]` 未开始。
@@ -43,6 +43,21 @@
 
 ---
 
+## Phase 4.4 — 项目 `.venv` 支持
+
+状态：**进行中（规则与共享执行接入已完成，依赖安装 / 锁定、诊断及完整验收待完成）**。
+
+目标：在 native 提供者下支持项目级 Python 虚拟环境，让 Python 依赖、ROS 构建与节点运行使用一致的 `.venv` 环境，复用现有环境选择与执行流程。
+
+- [x] 定义项目 `.venv` 的发现、显式选择与创建规则（标准库 venv / 可选 uv）；使用与 apt 版 ROS 匹配的系统 Python，明确 `--system-site-packages` 的使用边界，已有环境不覆盖、不自动删除。（2026-11-09，见 [发现、选择与创建规则](p44-venv.md)；本项仅完成规则定义，命令接入与运行时验收见后续待办。）
+- [x] 将 `.venv` 接入 `env` / `shell` / `build` / `run` 的共享环境组装；明确与 Conda 的互斥及选择优先级，避免同时激活两种环境，系统安装步骤保持原有系统环境。（2026-11-09，显式选择已有环境、共享执行与回归 / Humble 实测见 [第 2 项接入记录](p44-venv.md#共享执行接入第-2-项)。）
+- [ ] 明确项目 Python 依赖的声明、安装及锁定重放边界；安装使用目标环境的 `python -m pip` 或显式指定目标解释器的 `uv pip`，不写入系统 Python；明确 `pyproject.toml` / `uv.lock` 的支持边界；涉及 manifest / lock 新字段时遵守 schema v1 兼容约束。
+- [ ] 扩展 `check` / `verify` / `doctor` 与构建诊断，报告环境缺失、Python 版本或 ROS ABI 不匹配、旧构建缓存引用其他环境等问题；清理构建目录继续复用现有确认流程。
+- [ ] 补充环境选择与冲突回归测试，在隔离环境验证 `.venv` 创建、依赖安装、ROS Python 包导入、构建及节点运行；同步命令帮助、README 与 spec，并为后续 TUI 提供共享接口。
+- **产出**：native 项目可明确选择 `.venv`，完成依赖安装、构建和运行闭环；不污染系统 Python，不破坏现有 Conda 工作流，支持范围与锁定限制有验收记录。
+
+---
+
 ## Phase 4.5 — 完整 TUI 与独立任务执行
 
 状态：**进行中**
@@ -61,12 +76,16 @@
 
 ### 4.5.2 按需 worker 与任务重连
 
+验收状态（2026-11-05）：**未通过**。生产 worker 尚未接入 CLI/TUI；并发日志损坏、崩溃临时文件恢复和读取端单行无界问题已在存储组件层修复；生产端到端验收仍待完成。证据与复验门槛见 [P4.5.2 验收记录](p45-worker-acceptance.md)。
+
+修复进展（2026-11-04）：已补充 `SocketEndpoint::serve` 多客户端消息服务循环，支持握手、请求分派、有界帧收发、断连重连及慢客户端隔离；已新增 `serve_tasks` 持久化提交去重与快照/日志重连查询，覆盖丢失确认响应、并发注册及进程退出防重放；该记录为当时状态；2026-11-05 已接入生产执行器及显式 worker/task CLI（见 [CLI 接入与验证](p45-worker-cli.md)），TUI 接线仍待完成。早期协议修复详见 [协议修复说明](p45-worker-protocol.md#消息服务循环修复2026-11-04)。
+
 - [~] worker 原型已以当前用户执行并独立持有测试子进程；已验证会话 / 进程组、SIGHUP、继承文件描述符及 SSH 登出清理条件，不能把普通 spawn 当作脱离终端。生产 worker 的任务生命周期实现仍待后续 socket、日志和故障恢复工作。（2026-10-31，原型脚本与边界见 [worker 原型验收](p45-worker-validation.md)。）
-- [x] Unix socket 放在用户私有目录，限制权限并校验对端身份；定义最小协议版本、任务标识、状态快照、日志游标与确认响应。不提供任意 root 命令执行接口，不允许重连隐式重复提交任务。（2026-10-31，`rospm-core::worker` 协议与本机传输约束见 [worker 协议与 socket 验证](p45-worker-protocol.md)。）
-- [x] worker 独立保存每个任务的日志与最终结果；重连时读取快照和增量日志，任务结束、worker 退出后仍可查看结果。明确日志保留 / 清理规则及现有 `.rospm/log/build.log` 的兼容方式，不能将每次覆盖的日志直接当作任务历史。（2026-10-31，`TaskStore` 与日志规则见 [worker 任务存储与日志](p45-worker-storage.md)。）
-- [x] 持续读取子进程 stdout / stderr，日志落盘与 UI 发送解耦；限制内存和发送队列，慢客户端、断连或 socket 写入失败不能堵住子进程。日志写入失败须报告，不静默声称日志完整。（2026-10-31，`LogPump` 与验证见 [worker 日志管线](p45-worker-logging.md)。）
-- [x] 同一工作区的冲突修改互斥，尊重 apt / dpkg 等工具自身的系统锁；退出界面与显式取消分开。需要确认但没有客户端时安全等待，并允许重连处理或取消。（2026-11-01，`worker::WorkspaceLock` 使用用户运行目录下的内核 `flock`，`ConfirmationWait` 在断连时保持等待；验证见 [worker 协调与生命周期](p45-worker-coordination.md)。）
-- [x] 区分“UI 断开后继续”“SSH 断开后继续”和“worker / 主机故障后恢复”；worker 异常留下的任务标记为中断或状态待核实，不自动重新执行安装、清理等有副作用步骤。（2026-11-01，`TaskStore::recover_active_tasks` 按 worker 退出 / 主机故障分别写入 `interrupted` / `unknown`，UI 与 SSH 断连不改变活动任务；见 [worker 故障恢复边界](p45-worker-recovery.md)。）
+- [~] Unix socket 放在用户私有目录，限制权限并校验对端身份；定义最小协议版本、任务标识、状态快照、日志游标与确认响应。不提供任意 root 命令执行接口，不允许重连隐式重复提交任务。（2026-10-31，`rospm-core::worker` 协议与本机传输约束见 [worker 协议与 socket 验证](p45-worker-protocol.md)。）
+- [~] worker 独立保存每个任务的日志与最终结果；重连时读取快照和增量日志，任务结束、worker 退出后仍可查看结果。明确日志保留 / 清理规则及现有 `.rospm/log/build.log` 的兼容方式，不能将每次覆盖的日志直接当作任务历史。（2026-10-31，`TaskStore` 与日志规则见 [worker 任务存储与日志](p45-worker-storage.md)。）
+- [~] 持续读取子进程 stdout / stderr，日志落盘与 UI 发送解耦；限制内存和发送队列，慢客户端、断连或 socket 写入失败不能堵住子进程。并发 JSONL 落盘与快照残留临时文件已修复；日志写入失败仍须报告，不静默声称日志完整。（2026-11-05，组件复验见 [P4.5.2 验收记录](p45-worker-acceptance.md#第二批问题修复记录2026-11-05)。）
+- [~] 同一工作区的冲突修改互斥，尊重 apt / dpkg 等工具自身的系统锁；退出界面与显式取消分开。需要确认但没有客户端时安全等待，并允许重连处理或取消。`TaskRunner` 已将 workspace 租约、确认等待和取消控制接入生产执行边界；可中断构建已支持独立进程组 SIGTERM/SIGKILL 取消，CLI 已接入 handle 注册、终态结果、确认审阅与控制入口；TUI 接线及真实故障验收仍待完成。（2026-11-05，验证见 [worker 协调与生命周期](p45-worker-coordination.md)。）
+- [~] 区分“UI 断开后继续”“SSH 断开后继续”和“worker / 主机故障后恢复”；worker 异常留下的任务标记为中断或状态待核实，不自动重新执行安装、清理等有副作用步骤。（2026-11-01，`TaskStore::recover_active_tasks` 按 worker 退出 / 主机故障分别写入 `interrupted` / `unknown`，UI 与 SSH 断连不改变活动任务；见 [worker 故障恢复边界](p45-worker-recovery.md)。）
 - **产出**：TUI 卡死或被杀不影响正在执行的任务；支持范围内 SSH 断开后可重新连接并查看准确状态、日志与结果，无重复执行、管道阻塞或无界缓存。
 
 ### 4.5.3 TUI 工作流、权限与 shell

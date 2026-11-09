@@ -54,6 +54,7 @@ pub struct Global {
 }
 
 struct Loaded {
+    venv: Option<PathBuf>,
     path: PathBuf,
     root: PathBuf,
     manifest: Manifest,
@@ -106,6 +107,7 @@ fn load(global: &Global) -> Result<Loaded> {
         .canonicalize()
         .with_context(|| msg!("cli.err.cannot_resolve", path = root.display()).to_string())?;
     Ok(Loaded {
+        venv: None,
         path,
         root,
         manifest,
@@ -143,6 +145,7 @@ fn context<'a>(
     mirror: Mirror,
 ) -> Result<Context<'a>> {
     Ok(Context {
+        venv: loaded.venv.as_deref(),
         manifest: &loaded.manifest,
         root: &loaded.root,
         platform: host_platform()?,
@@ -152,4 +155,26 @@ fn context<'a>(
         host,
         mirror,
     })
+}
+
+#[derive(clap::Args, Default)]
+pub struct VenvArgs {
+    #[arg(long, conflicts_with = "venv_path", help = tr("venv.project"))]
+    pub venv: bool,
+    #[arg(long, value_name = "PATH", help = tr("venv.path"))]
+    pub venv_path: Option<PathBuf>,
+}
+
+impl VenvArgs {
+    fn select(&self, loaded: &mut Loaded) -> Result<()> {
+        let path = if self.venv {
+            Some(loaded.root.join(".venv"))
+        } else {
+            self.venv_path.clone()
+        };
+        if let Some(path) = path {
+            loaded.venv = Some(rospm_core::venv::resolve(&path, &std::env::current_dir()?)?);
+        }
+        Ok(())
+    }
 }

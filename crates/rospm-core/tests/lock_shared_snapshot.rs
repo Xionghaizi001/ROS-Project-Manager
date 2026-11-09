@@ -130,6 +130,7 @@ fn relocking_one_platform_keeps_a_date_that_serves_the_others() {
 
 fn ctx<'a>(m: &'a Manifest, root: &'a Path, host: &'a Host, lock: Option<&'a Lock>) -> Context<'a> {
     Context {
+        venv: None,
         manifest: m,
         root,
         platform: Platform::LinuxX86_64,

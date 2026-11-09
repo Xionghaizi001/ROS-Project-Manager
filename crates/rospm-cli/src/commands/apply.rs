@@ -437,6 +437,7 @@ mod tests {
         std::fs::write(&path, &original).unwrap();
         for distro in [RosDistro::Humble, RosDistro::Rolling] {
             let mut loaded = Loaded {
+                venv: None,
                 path: path.clone(),
                 root: dir.clone(),
                 manifest: Manifest::parse(&original, &path).unwrap(),
@@ -489,6 +490,7 @@ mod tests {
         let custom = original.replace("ros-jazzy-desktop", "custom-ros");
         std::fs::write(&path, &custom).unwrap();
         let mut loaded = Loaded {
+            venv: None,
             path: path.clone(),
             root: dir.clone(),
             manifest: Manifest::parse(&custom, &path).unwrap(),

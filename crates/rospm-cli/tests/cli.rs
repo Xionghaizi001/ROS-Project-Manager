@@ -599,3 +599,41 @@ fn init_flat_project_produces_a_buildable_workspace_path() {
     assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("cd {}/.", dir.display())));
     assert!(!dir.join("ws").exists());
 }
+
+#[test]
+fn venv_flags_are_shared_and_conflict_with_explicit_conda() {
+    for command in ["env", "shell", "build", "run"] {
+        let help = rospm().args([command, "--help"]).output().unwrap();
+        assert!(help.status.success());
+        let text = String::from_utf8_lossy(&help.stdout);
+        assert!(text.contains("--venv"));
+        assert!(text.contains("--venv-path"));
+        let conflict = rospm()
+            .args([command, "--venv", "--venv-path", "/tmp/env"])
+            .output()
+            .unwrap();
+        assert_eq!(conflict.status.code(), Some(2));
+    }
+    for flag in ["--conda-env", "--conda-prefix"] {
+        let out = rospm()
+            .args(["build", "--venv", flag, "other"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2));
+    }
+    let dir = fixture("venv-missing");
+    fs::write(
+        dir.join("rospm.toml"),
+        include_str!("../../rospm-core/tests/fixtures/minimal.toml"),
+    )
+    .unwrap();
+    for command in ["env", "shell", "build", "run"] {
+        let out = rospm()
+            .current_dir(&dir)
+            .args([command, "--venv"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(!dir.join(".venv").exists());
+    }
+}

@@ -56,6 +56,7 @@ impl Fixture {
     }
     fn ctx(&self) -> Context<'_> {
         Context {
+            venv: None,
             manifest: &self.manifest,
             root: &self.root,
             host: &self.host,

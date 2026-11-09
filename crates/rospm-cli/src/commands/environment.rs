@@ -11,8 +11,9 @@ use crate::i18n::tr;
 
 use super::{context, load, Global};
 
-pub fn env(global: &Global, shell: Shell) -> Result<()> {
-    let loaded = load(global)?;
+pub fn env(global: &Global, shell: Shell, venv: super::VenvArgs) -> Result<()> {
+    let mut loaded = load(global)?;
+    venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, shell)?;
@@ -20,8 +21,9 @@ pub fn env(global: &Global, shell: Shell) -> Result<()> {
     Ok(())
 }
 
-pub fn shell(global: &Global) -> Result<()> {
-    let loaded = load(global)?;
+pub fn shell(global: &Global, venv: super::VenvArgs) -> Result<()> {
+    let mut loaded = load(global)?;
+    venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
@@ -34,7 +36,7 @@ pub fn shell(global: &Global) -> Result<()> {
     // Interactive bash that sources our script after the user's rc files.
     let rc = format!(
         // PS1 expands $ROSPM_PROJECT at display time without re-parsing its value.
-        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {}\nexport ROSPM_PROJECT={}\nPS1='(rospm:$ROSPM_PROJECT) '\"$PS1\"\n",
+        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {} || exit $?\nexport ROSPM_PROJECT={}\nPS1='(rospm:$ROSPM_PROJECT) '\"$PS1\"\n",
         rospm_core::plan::shell_quote(&env_file.to_string_lossy()),
         rospm_core::plan::shell_quote(&loaded.manifest.project.name),
     );

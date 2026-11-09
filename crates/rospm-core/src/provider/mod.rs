@@ -19,6 +19,8 @@ pub mod native;
 
 /// Everything a provider needs to know about one invocation.
 pub struct Context<'a> {
+    /// Explicit execution environment; overrides manifest Conda for build/env only.
+    pub venv: Option<&'a Path>,
     pub manifest: &'a Manifest,
     /// Directory containing `rospm.toml`; all manifest paths are relative to it.
     pub root: &'a Path,

@@ -89,6 +89,7 @@ fn installed(pairs: &[(&str, &str)]) -> PackageDb {
 
 fn ctx<'a>(m: &'a Manifest, root: &'a Path, host: &'a Host, lock: &'a Lock) -> Context<'a> {
     Context {
+        venv: None,
         manifest: m,
         root,
         platform: Platform::LinuxX86_64,
