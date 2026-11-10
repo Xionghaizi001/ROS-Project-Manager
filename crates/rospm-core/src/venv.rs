@@ -43,6 +43,11 @@ pub(crate) fn selected(ctx: &Context) -> Result<Option<PathBuf>> {
     let Some(path) = ctx.venv else {
         return Ok(None);
     };
+    validate_context(ctx)?;
+    resolve(path, ctx.root).map(Some)
+}
+
+fn validate_context(ctx: &Context) -> Result<()> {
     if ctx.manifest.environment.provider != crate::manifest::ProviderKind::Native
         || ctx.host.platform != Some(ctx.platform)
         || !ctx.manifest.project.platforms.contains(&ctx.platform)
@@ -62,7 +67,7 @@ pub(crate) fn selected(ctx: &Context) -> Result<Option<PathBuf>> {
     }) {
         return Err(Error::Host(msg!("venv.env_conflict")));
     }
-    resolve(path, ctx.root).map(Some)
+    Ok(())
 }
 
 /// Start from system search paths, then source ROS/overlays, then validate.
@@ -346,5 +351,62 @@ mod cache_tests {
         assert!(run().status.success());
         assert!(cache.exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
+/// Plan explicit creation of the fixed project directory. Execution never removes it.
+/// Frontends must hold the project WorkspaceLock while executing this plan.
+pub fn plan_create(ctx: &Context, uv: bool) -> Result<crate::plan::Plan> {
+    validate_context(ctx)?;
+    let target = input_path(&ctx.root.join(".venv"), ctx.root)?;
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return Err(Error::Host(msg!("venv.exists", path = target.display())));
+    }
+    let tool = if uv {
+        Some(which::which("uv").map_err(|e| Error::Host(msg!("venv.uv_missing", detail = e)))?)
+    } else {
+        None
+    };
+    let mut plan = crate::plan::Plan::new(msg!("venv.create_title", path = target.display()));
+    let command = crate::plan::Command::new("/usr/bin/python3")
+        .args(["-I", "-B", "-c", include_str!("venv_create.py")])
+        .arg(target.to_string_lossy())
+        .arg(format!(
+            "/opt/ros/{}/setup.bash",
+            ctx.manifest.project.ros_distro
+        ))
+        .arg(
+            tool.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
+        .arg(include_str!("venv_check.py"))
+        .arg(msg!("venv.create_failed", path = target.display()).to_string())
+        .arg(msg!("venv.ensurepip_missing").to_string())
+        .cwd(ctx.root);
+    plan.note(msg!("venv.create_command", command = match tool {
+        Some(tool) => format!("{} --no-config venv --python /usr/bin/python3 --no-python-downloads --system-site-packages {}", shell_quote(&tool.to_string_lossy()), shell_quote(&target.to_string_lossy())),
+        None => format!("/usr/bin/python3 -m venv --system-site-packages {}", shell_quote(&target.to_string_lossy())),
+    }));
+    plan.run(command);
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod create_tests {
+    #[test]
+    fn creation_claims_once_and_preserves_existing_or_failed_directories() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let out = std::process::Command::new("/usr/bin/python3")
+            .args(["-I", "-B"])
+            .arg(source.join("venv_create_test.py"))
+            .arg(source.join("venv_create.py"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 }

@@ -677,3 +677,26 @@ fn venv_diagnostics_report_missing_environment_in_json_without_creating_it() {
     assert_eq!(json(&out)["environment"]["ready"], false);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn venv_creation_help_is_localized_and_json_errors_are_single_documents() {
+    for lang in ["en", "zh"] {
+        let out = rospm()
+            .args(["--lang", lang, "venv", "create", "--help"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("--uv") && text.contains("--dry-run"));
+    }
+    let dir = fixture("venv-create-no-manifest");
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["venv", "create", "--json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(json(&out)["ok"], false);
+    assert!(!dir.join(".venv").exists());
+    fs::remove_dir_all(dir).unwrap();
+}

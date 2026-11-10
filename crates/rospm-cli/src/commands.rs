@@ -33,6 +33,7 @@ mod logging;
 mod report;
 mod run;
 mod uninstall;
+pub mod venv;
 mod verify;
 pub mod worker;
 

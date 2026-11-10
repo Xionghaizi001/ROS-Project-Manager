@@ -56,6 +56,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    #[command(about = tr("venv.about"))]
+    Venv {
+        #[command(subcommand)]
+        command: VenvCmd,
+    },
     #[command(about = tr("worker_cli.worker"))]
     Worker {
         #[arg(long, help = tr("worker_cli.runtime"))]
@@ -226,6 +231,17 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum VenvCmd {
+    #[command(about = tr("venv.create_about"))]
+    Create {
+        #[arg(long, help = tr("venv.uv"))]
+        uv: bool,
+        #[arg(long, help = tr("cli.dry_run"))]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DepsCmd {
     #[command(about = tr("cli.deps.check"))]
     Check,
@@ -299,7 +315,11 @@ fn main() -> ExitCode {
         json: cli.json,
     };
 
-    let build_json = global.json && matches!(&cli.command, Cmd::Build { .. } | Cmd::Apply { .. });
+    let build_json = global.json
+        && matches!(
+            &cli.command,
+            Cmd::Build { .. } | Cmd::Apply { .. } | Cmd::Venv { .. }
+        );
     let redirect = if build_json {
         match build_summary::JsonOutput::redirect() {
             Ok(guard) => Some(guard),
@@ -312,6 +332,9 @@ fn main() -> ExitCode {
         None
     };
     let result = match cli.command {
+        Cmd::Venv {
+            command: VenvCmd::Create { uv, dry_run },
+        } => commands::venv::create(&global, uv, dry_run),
         Cmd::Worker { runtime } => commands::worker::serve(&global, &runtime),
         Cmd::Task { runtime, command } => commands::worker::client(&global, &runtime, command),
         Cmd::Init {

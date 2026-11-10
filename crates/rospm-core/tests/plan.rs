@@ -1600,3 +1600,24 @@ fn explicit_venv_overrides_conda_only_for_execution_and_pins_build_python() {
         .is_err());
     std::fs::remove_dir_all(&temp).unwrap();
 }
+
+#[test]
+fn venv_creation_preview_is_read_only_and_refuses_existing_paths() {
+    let root = std::env::temp_dir().join(format!("rospm-create-preview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = ready_host();
+    let context = Context {
+        root: &root,
+        ..ctx(&m, &host)
+    };
+    let plan = rospm_core::venv::plan_create(&context, false).unwrap();
+    plan.execute(true, &mut Vec::new()).unwrap();
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    assert!(plan.render().contains("--system-site-packages"));
+    std::os::unix::fs::symlink(root.join("absent"), root.join(".venv")).unwrap();
+    assert!(rospm_core::venv::plan_create(&context, false).is_err());
+    assert!(!root.join("absent").exists());
+    std::fs::remove_dir_all(&root).unwrap();
+}
