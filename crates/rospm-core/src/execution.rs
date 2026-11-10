@@ -52,6 +52,12 @@ pub enum Event<'a> {
         stream: Stream,
         bytes: &'a [u8],
     },
+    /// A subprocess pipe closed (also emitted after a read error).
+    LogEnd {
+        task: &'a str,
+        step: usize,
+        stream: Stream,
+    },
     Diagnostics {
         task: &'a str,
         step: usize,

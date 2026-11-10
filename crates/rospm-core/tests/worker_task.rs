@@ -264,3 +264,83 @@ fn log_persistence_failure_is_not_reported_as_success() {
     assert!(!snapshot.result.unwrap().success);
     fs::remove_dir_all(root).unwrap();
 }
+
+fn log_text(store: &TaskStore, id: &str, stream: rospm_core::worker::LogStream) -> String {
+    store
+        .read_logs(id, 0, 1000)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.stream == stream)
+        .map(|entry| entry.text)
+        .collect()
+}
+
+#[test]
+fn utf8_chunks_are_independent_per_stream_and_flush_at_task_end() {
+    use rospm_core::execution::{Event, Stream};
+    use rospm_core::worker::LogStream;
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    runner
+        .start_with("utf8", workspace, |interaction| {
+            for (stream, bytes) in [
+                (Stream::Stdout, &b"\xe4"[..]),
+                (Stream::Stderr, &b"\xf0\x9f"[..]),
+                (Stream::Stdout, &b"\xb8\xad\n\xff\xe4"[..]),
+                (Stream::Stderr, &b"\x98\x80\n\xe4\xb8"[..]),
+                (Stream::Stdout, &b"A\xe4\xb8"[..]),
+            ] {
+                interaction.event(Event::Log {
+                    task: "utf8",
+                    step: 0,
+                    stream,
+                    bytes,
+                });
+            }
+            Ok(())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(log_text(&store, "utf8", LogStream::Stdout), "中\n��A�");
+    assert_eq!(log_text(&store, "utf8", LogStream::Stderr), "😀\n�");
+    assert_eq!(
+        store.load_snapshot("utf8").unwrap().state,
+        TaskState::Succeeded
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn real_pipes_preserve_split_utf8_and_do_not_join_bytes_across_processes() {
+    use rospm_core::worker::LogStream;
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    let mut plan = Plan::default();
+    plan.run(Command::new("python3").args([
+        "-c",
+        r#"
+import os, time
+os.write(1, b'\xe4')
+os.write(2, b'\xe6\x96')
+time.sleep(0.1)
+os.write(1, b'\xb8\xad\n')
+os.write(2, b'\x87\n\xff\xe4\xb8')
+os.write(1, b'\xe4')
+"#,
+    ]));
+    // These continuation bytes belong to a new pipe and are genuinely invalid.
+    plan.run(Command::new("python3").args(["-c", r#"import os; os.write(1, b'\xb8\xad\n')"#]));
+    runner
+        .start("pipes", workspace, plan)
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(log_text(&store, "pipes", LogStream::Stdout), "中\n���\n");
+    assert_eq!(log_text(&store, "pipes", LogStream::Stderr), "文\n��");
+    assert_eq!(
+        store.load_snapshot("pipes").unwrap().state,
+        TaskState::Succeeded
+    );
+    fs::remove_dir_all(root).unwrap();
+}

@@ -2,7 +2,7 @@
 //! cooperative cancellation all live for the complete plan execution.
 
 use super::*;
-use crate::execution::{Confirmation, Event, Interaction, State};
+use crate::execution::{Confirmation, Event, Interaction, State, Stream};
 use crate::plan::Plan;
 use crate::{Error, Message as UserMessage, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -172,6 +172,7 @@ impl TaskRunner {
                 task_id: task_id.clone(),
                 control: thread_control,
                 failure: Mutex::new(None),
+                utf8: Default::default(),
                 log: LogPump::new(store.clone(), task_id.clone(), 256, MAX_FRAME_BYTES - 1024),
             };
             let mut lease = None;
@@ -202,6 +203,11 @@ impl TaskRunner {
                 result
             }))
             .unwrap_or_else(|_| Err(Error::Host(UserMessage::text("worker task panicked"))));
+            // Arbitrary callbacks may emit logs without pipe EOF events.
+            for stream in [Stream::Stdout, Stream::Stderr, Stream::Progress] {
+                interaction.record_bytes(stream, &[], true);
+            }
+            let result = result.and_then(|()| interaction.check_storage());
             let state = match &result {
                 Ok(()) => TaskState::Succeeded,
                 Err(Error::Cancelled) => TaskState::Cancelled,
@@ -231,10 +237,50 @@ struct WorkerInteraction {
     task_id: String,
     control: Control,
     log: LogPump,
+    utf8: Mutex<[Vec<u8>; 3]>,
     failure: Mutex<Option<String>>,
 }
 
 impl WorkerInteraction {
+    fn record_bytes(&self, stream: Stream, bytes: &[u8], end: bool) {
+        let (index, stream) = match stream {
+            Stream::Stdout => (0, LogStream::Stdout),
+            Stream::Stderr => (1, LogStream::Stderr),
+            Stream::Progress => (2, LogStream::Worker),
+        };
+        // Keep decoding and persistence ordered for each stream.
+        let mut buffers = self.utf8.lock().unwrap();
+        let pending = &mut buffers[index];
+        pending.extend_from_slice(bytes);
+        let mut complete = 0;
+        while complete < pending.len() {
+            match std::str::from_utf8(&pending[complete..]) {
+                Ok(_) => {
+                    complete = pending.len();
+                    break;
+                }
+                Err(error) => {
+                    complete += error.valid_up_to();
+                    match error.error_len() {
+                        Some(len) => complete += len,
+                        None => break,
+                    }
+                }
+            }
+        }
+        if end {
+            complete = pending.len();
+        }
+        if complete != 0 {
+            self.record_failure(
+                self.log
+                    .record(stream, String::from_utf8_lossy(&pending[..complete]))
+                    .map(|_| ()),
+            );
+            pending.drain(..complete);
+        }
+    }
+
     fn record_failure(&self, result: std::result::Result<(), StoreError>) {
         if let Err(error) = result {
             *self.failure.lock().unwrap() = Some(error.to_string());
@@ -280,18 +326,8 @@ impl Interaction for WorkerInteraction {
                 }
             }
             Event::Step { step, .. } => self.set_state(TaskState::Running, step as u32),
-            Event::Log { stream, bytes, .. } => {
-                let stream = match stream {
-                    crate::execution::Stream::Stdout => LogStream::Stdout,
-                    crate::execution::Stream::Stderr => LogStream::Stderr,
-                    crate::execution::Stream::Progress => LogStream::Worker,
-                };
-                self.record_failure(
-                    self.log
-                        .record(stream, String::from_utf8_lossy(bytes))
-                        .map(|_| ()),
-                );
-            }
+            Event::Log { stream, bytes, .. } => self.record_bytes(stream, bytes, false),
+            Event::LogEnd { stream, .. } => self.record_bytes(stream, &[], true),
             Event::Diagnostics { .. } => {}
         }
     }

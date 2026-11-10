@@ -412,6 +412,13 @@ fn drain_output(
             }
         }
     }
+    if let Some(e) = execution {
+        e.interaction.event(Event::LogEnd {
+            task: e.task,
+            step: e.step,
+            stream,
+        });
+    }
     match error {
         Some(e) => Err(e),
         None => Ok(()),
