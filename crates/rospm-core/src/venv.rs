@@ -6,12 +6,16 @@ use crate::plan::shell_quote;
 use crate::provider::Context;
 use crate::{msg, Error, Result};
 
-pub fn resolve(path: &Path, cwd: &Path) -> Result<PathBuf> {
+pub fn input_path(path: &Path, cwd: &Path) -> Result<PathBuf> {
     let text = path.to_string_lossy();
     if text.trim().is_empty() || text.contains(['\0', '\n', '\r']) {
         return Err(Error::Host(msg!("venv.invalid_path")));
     }
-    let input = cwd.join(path);
+    Ok(cwd.join(path))
+}
+
+pub fn resolve(path: &Path, cwd: &Path) -> Result<PathBuf> {
+    let input = input_path(path, cwd)?;
     let target = input.canonicalize().map_err(|e| Error::io(&input, e))?;
     if target.to_string_lossy().contains(['\n', '\r']) {
         return Err(Error::Host(msg!("venv.invalid_path")));
@@ -185,5 +189,162 @@ mod tests {
         std::fs::create_dir(temp.as_path().join("conda-meta")).unwrap();
         assert!(resolve(temp.as_path(), temp.as_path()).is_err());
         std::fs::remove_dir_all(&temp).unwrap();
+    }
+}
+
+/// Read-only readiness and cache report shared by CLI and future frontends.
+pub fn probe(ctx: &Context) -> crate::probe::EnvReport {
+    use crate::probe::{EnvReport, Status};
+    let mut report = EnvReport::default();
+    let Some(input) = ctx.venv else { return report };
+    let path = match selected(ctx) {
+        Ok(Some(path)) => path,
+        Ok(None) => return report,
+        Err(error) => {
+            report.push(
+                "venv",
+                input.display().to_string(),
+                msg!("venv.ready"),
+                error.to_string(),
+                if !input.exists() {
+                    Status::Missing
+                } else {
+                    Status::Mismatch
+                },
+            );
+            return report;
+        }
+    };
+    let setup = format!("/opt/ros/{}/setup.bash", ctx.manifest.project.ros_distro);
+    let script = activation(&path).map(|activation| {
+        format!(
+            "set -e\n{activation}\nexport PYTHONDONTWRITEBYTECODE=1\nsource {}\n{}",
+            shell_quote(&setup),
+            check(&path)
+        )
+    });
+    let output = script.and_then(|script| {
+        std::process::Command::new("/bin/bash")
+            .args(["--noprofile", "--norc", "-c", &script])
+            .env_remove("BASH_ENV")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .current_dir(ctx.root)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| Error::io("/bin/bash", e))
+    });
+    match output {
+        Ok(out) if out.status.success() => report.push(
+            "venv",
+            path.display().to_string(),
+            msg!("venv.ready"),
+            msg!(
+                "venv.resolved",
+                path = path.canonicalize().unwrap_or(path.clone()).display()
+            ),
+            Status::Ok,
+        ),
+        Ok(out) => report.push(
+            "venv",
+            path.display().to_string(),
+            msg!("venv.ready"),
+            msg!(
+                "venv.runtime_failed",
+                detail = String::from_utf8_lossy(&out.stderr).trim()
+            ),
+            Status::Mismatch,
+        ),
+        Err(error) => report.push(
+            "venv",
+            path.display().to_string(),
+            msg!("venv.ready"),
+            error.to_string(),
+            Status::Unknown,
+        ),
+    }
+    for (name, ws) in &ctx.manifest.workspaces {
+        let bases = crate::provider::native::colcon_bases(ctx.root, ws, "build-base", "build");
+        let command = cache_command(&path, &bases);
+        match std::process::Command::new(&command.program)
+            .args(&command.args)
+            .stdin(std::process::Stdio::null())
+            .output()
+        {
+            Ok(out) if out.status.success() => report.push(
+                "venv_cache",
+                name,
+                msg!("venv.cache_expected"),
+                msg!("venv.cache_ok"),
+                Status::Ok,
+            ),
+            Ok(out) => report.push(
+                "venv_cache",
+                name,
+                msg!("venv.cache_expected"),
+                msg!(
+                    "venv.cache_failed",
+                    detail = String::from_utf8_lossy(&out.stderr).trim()
+                ),
+                Status::Mismatch,
+            ),
+            Err(error) => report.push(
+                "venv_cache",
+                name,
+                msg!("venv.cache_expected"),
+                error.to_string(),
+                Status::Unknown,
+            ),
+        }
+    }
+    report
+}
+
+pub(crate) fn cache_command(path: &Path, bases: &[PathBuf]) -> crate::plan::Command {
+    crate::plan::Command::new("/usr/bin/python3")
+        .args(["-I", "-B", "-c", include_str!("venv_cache.py")])
+        .arg(path.join("bin/python").to_string_lossy())
+        .args(bases.iter().map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    #[test]
+    fn caches_distinguish_venvs_sharing_system_python_and_allow_directory_aliases() {
+        let root = std::env::temp_dir().join(format!("rospm-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for name in ["selected", "other"] {
+            std::fs::create_dir_all(root.join(name).join("bin")).unwrap();
+            std::os::unix::fs::symlink("/usr/bin/python3", root.join(name).join("bin/python"))
+                .unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("selected"), root.join("alias")).unwrap();
+        let base = root.join("custom build/nested/pkg");
+        std::fs::create_dir_all(&base).unwrap();
+        let cache = base.join("CMakeCache.txt");
+        let command = cache_command(&root.join("selected"), &[root.join("custom build")]);
+        let run = || {
+            std::process::Command::new(&command.program)
+                .args(&command.args)
+                .output()
+                .unwrap()
+        };
+        for value in [
+            root.join("other/bin/python"),
+            PathBuf::from("/usr/bin/python3"),
+        ] {
+            std::fs::write(
+                &cache,
+                format!("_Python3_EXECUTABLE:INTERNAL={}\n", value.display()),
+            )
+            .unwrap();
+            let out = run();
+            assert!(!out.status.success());
+            assert!(String::from_utf8_lossy(&out.stderr).contains("CMakeCache.txt"));
+        }
+        std::fs::write(&cache, format!("Python3_EXECUTABLE:FILEPATH={}/alias/bin/python3\nPYTHON_EXECUTABLE:FILEPATH=PYTHON_EXECUTABLE-NOTFOUND\n", root.display())).unwrap();
+        assert!(run().status.success());
+        assert!(cache.exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

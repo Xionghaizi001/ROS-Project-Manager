@@ -26,8 +26,9 @@ struct VerifyReport {
 }
 
 /// `rospm verify`: compare `rospm.lock` with the host (spec §4, read-only).
-pub fn verify(global: &Global) -> Result<()> {
-    let loaded = load(global)?;
+pub fn verify(global: &Global, venv: super::VenvArgs) -> Result<()> {
+    let mut loaded = load(global)?;
+    venv.select_report(&mut loaded)?;
     let lock = loaded
         .load_lock()?
         .ok_or_else(|| Error::Host(msg!("cli.verify.no_lock", file = LOCK_FILE)))?;

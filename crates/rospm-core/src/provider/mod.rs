@@ -175,7 +175,7 @@ impl Provider for Unimplemented {
     fn verify(&self, _ctx: &Context, _lock: &Lock) -> Result<EnvReport> {
         Err(self.err())
     }
-    fn probe_env(&self, _ctx: &Context) -> Result<EnvReport> {
+    fn probe_env(&self, ctx: &Context) -> Result<EnvReport> {
         // `check` must still validate manifests for these providers, so this
         // is a report with one informational line rather than an error.
         let mut report = EnvReport::default();
@@ -186,6 +186,7 @@ impl Provider for Unimplemented {
             msg!("probe.provider.not_implemented", phase = self.phase),
             Status::Info,
         );
+        report.items.extend(crate::venv::probe(ctx).items);
         Ok(report)
     }
     fn probe_deps(&self, _ctx: &Context) -> Result<DepsReport> {

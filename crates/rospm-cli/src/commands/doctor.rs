@@ -34,6 +34,8 @@ struct LocaleReport {
 #[derive(Serialize)]
 struct DoctorReport {
     ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    environment: Option<super::report::EnvSummary>,
     platform: Option<String>,
     os: Option<String>,
     ros_distros_installed: Vec<String>,
@@ -48,8 +50,23 @@ struct DoctorReport {
     network: Option<Vec<ProbeResult>>,
 }
 
-pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
+pub fn doctor(global: &Global, no_network: bool, venv: super::VenvArgs) -> Result<()> {
     let host = Host::probe();
+    let environment = if venv.venv || venv.venv_path.is_some() {
+        let mut loaded = super::load(global)?;
+        venv.select_report(&mut loaded)?;
+        let ctx = super::context(
+            &loaded,
+            &host,
+            false,
+            None,
+            false,
+            rospm_core::mirror::OFFICIAL,
+        )?;
+        Some(rospm_core::venv::probe(&ctx))
+    } else {
+        None
+    };
     let network = if no_network {
         None
     } else {
@@ -74,7 +91,8 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
     let core_ok = NATIVE_CORE_TOOLS.iter().all(|t| host.has_tool(t));
 
     let report = DoctorReport {
-        ok: core_ok,
+        ok: core_ok && environment.as_ref().is_none_or(|r| r.ready()),
+        environment: environment.clone().map(Into::into),
         platform: host.platform.map(|p| p.to_string()),
         os: host.os.as_ref().and_then(|o| o.pretty_name.clone()),
         ros_distros_installed: host.ros_distros.clone(),
@@ -208,7 +226,7 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
                     .unwrap_or_else(|| tr("cli.doctor.not_found"))
             );
         }
-        if !report.ok {
+        if !core_ok {
             println!(
                 "{}",
                 msg!(
@@ -216,6 +234,9 @@ pub fn doctor(global: &Global, no_network: bool) -> Result<()> {
                     tools = NATIVE_CORE_TOOLS.join(", ")
                 )
             );
+        }
+        if let Some(r) = &environment {
+            super::report::print_env_report(r, report.platform.as_deref().unwrap_or("?"));
         }
         match &report.network {
             Some(results) => {

@@ -33,8 +33,13 @@ struct CheckReport {
     repositories: Option<rospm_core::probe::EnvReport>,
 }
 
-pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<()> {
-    let loaded = match load(global) {
+pub fn check(
+    global: &Global,
+    target: Option<Platform>,
+    strict: bool,
+    venv: super::VenvArgs,
+) -> Result<()> {
+    let mut loaded = match load(global) {
         Ok(l) => l,
         Err(err) => {
             if global.json {
@@ -48,6 +53,7 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
             return Err(err);
         }
     };
+    venv.select_report(&mut loaded)?;
     let m = &loaded.manifest;
     let host = Host::probe();
     let platform = match target {
@@ -90,10 +96,25 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
             )
             .to_string(),
         );
-        None
+        if loaded.venv.is_some() {
+            let ctx = Context {
+                venv: loaded.venv.as_deref(),
+                manifest: m,
+                root: &loaded.root,
+                platform,
+                locked: false,
+                lock: None,
+                offline: false,
+                host: &host,
+                mirror: mirror::OFFICIAL,
+            };
+            Some(rospm_core::venv::probe(&ctx))
+        } else {
+            None
+        }
     } else {
         let ctx = Context {
-            venv: None,
+            venv: loaded.venv.as_deref(),
             manifest: m,
             root: &loaded.root,
             platform,
@@ -137,7 +158,7 @@ pub fn check(global: &Global, target: Option<Platform>, strict: bool) -> Result<
     };
 
     let strict_failed = strict
-        && ((!cross && !report.environment.ready)
+        && ((env_report.is_some() && !report.environment.ready)
             || report.repositories.as_ref().is_some_and(|r| !r.ready()));
 
     if global.json {

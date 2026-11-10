@@ -130,7 +130,12 @@ pub fn retry_build(
             },
         ) => {
             command.render() == *failed
-                && (failed.contains("colcon build") || failed.contains("colcon --log-base"))
+                && (failed.contains("colcon build")
+                    || failed.contains("colcon --log-base")
+                    || (ctx.venv.is_some()
+                        && command.args.iter().any(|a| {
+                            a == "from colcon_core.command import main; raise SystemExit(main())"
+                        })))
         }
         _ => false,
     });

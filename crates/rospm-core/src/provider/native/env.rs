@@ -489,6 +489,7 @@ impl Native {
             );
         }
 
+        r.items.extend(crate::venv::probe(ctx).items);
         Ok(r)
     }
 }

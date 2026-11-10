@@ -637,3 +637,43 @@ fn venv_flags_are_shared_and_conflict_with_explicit_conda() {
         assert!(!dir.join(".venv").exists());
     }
 }
+
+#[test]
+fn venv_diagnostics_report_missing_environment_in_json_without_creating_it() {
+    let dir = fixture("venv-diagnostics");
+    let manifest = include_str!("../../rospm-core/tests/fixtures/minimal.toml");
+    fs::write(dir.join("rospm.toml"), manifest).unwrap();
+    fs::write(dir.join("rospm.lock"), format!("schema_version = 1\ngenerated_at = \"test\"\nmanifest_sha256 = \"{}\"\n[provider]\nkind = \"native\"\n", rospm_core::lock::sha256_hex(manifest))).unwrap();
+    for command in ["check", "verify", "doctor"] {
+        for lang in ["en", "zh"] {
+            let mut cmd = rospm();
+            cmd.current_dir(&dir)
+                .args(["--lang", lang, command, "--venv", "--json"]);
+            if command == "doctor" {
+                cmd.arg("--no-network");
+            }
+            if command == "check" {
+                cmd.arg("--strict");
+            }
+            let out = cmd.output().unwrap();
+            assert!(!out.status.success(), "{command}");
+            let data = json(&out);
+            let rows = data["environment"]["items"].as_array().unwrap();
+            assert!(
+                rows.iter()
+                    .any(|row| row["area"] == "venv" && row["status"] == "missing"),
+                "{data}"
+            );
+            assert!(!dir.join(".venv").exists());
+            assert!(!dir.join(".rospm").exists());
+        }
+    }
+    let out = rospm()
+        .current_dir(&dir)
+        .args(["check", "--venv", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success()); // check remains informational without --strict.
+    assert_eq!(json(&out)["environment"]["ready"], false);
+    fs::remove_dir_all(dir).unwrap();
+}

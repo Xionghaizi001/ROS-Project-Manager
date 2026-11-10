@@ -438,3 +438,35 @@ fn cancelled_clean_confirmation_preserves_directories_and_never_retries() {
     assert!(fixture.root.join("ws/build/cache").exists());
     assert!(fixture.root.join("ws/install").exists());
 }
+
+#[test]
+fn venv_colcon_failure_uses_existing_declined_clean_confirmation() {
+    let mut f = Fixture::new();
+    f.plan.steps[1] = Step::Run(Command::new("/project/.venv/bin/python").args([
+        "-s",
+        "-c",
+        "from colcon_core.command import main; raise SystemExit(main())",
+        "build",
+    ]));
+    let path = f.root.join(".venv");
+    let ctx = Context {
+        venv: Some(&path),
+        ..f.ctx()
+    };
+    let calls = AtomicU64::new(0);
+    assert!(!confirmation::retry_build(
+        "venv-clean",
+        &f.plan,
+        &ctx,
+        Some("main"),
+        &f.error(),
+        &Handler(|_: &Confirmation| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Ok(false)
+        }),
+        |_| panic!("declined retry executed")
+    )
+    .unwrap());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(f.root.join("ws/build/cache").exists());
+}

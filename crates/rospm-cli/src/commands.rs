@@ -167,13 +167,24 @@ pub struct VenvArgs {
 
 impl VenvArgs {
     fn select(&self, loaded: &mut Loaded) -> Result<()> {
+        self.select_report(loaded)?;
+        if let Some(path) = &loaded.venv {
+            loaded.venv = Some(rospm_core::venv::resolve(path, &loaded.root)?);
+        }
+        Ok(())
+    }
+
+    fn select_report(&self, loaded: &mut Loaded) -> Result<()> {
         let path = if self.venv {
             Some(loaded.root.join(".venv"))
         } else {
             self.venv_path.clone()
         };
         if let Some(path) = path {
-            loaded.venv = Some(rospm_core::venv::resolve(&path, &std::env::current_dir()?)?);
+            loaded.venv = Some(rospm_core::venv::input_path(
+                &path,
+                &std::env::current_dir()?,
+            )?);
         }
         Ok(())
     }

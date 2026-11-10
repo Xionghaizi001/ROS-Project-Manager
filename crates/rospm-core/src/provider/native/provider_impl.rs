@@ -499,6 +499,15 @@ impl Provider for Native {
             }
             if let Some(path) = &venv {
                 cmd = cmd.preamble(crate::venv::check(path).trim_end());
+                let cache = crate::venv::cache_command(
+                    path,
+                    &colcon_bases(ctx.root, ws, "build-base", "build"),
+                );
+                cmd = cmd.preamble(format!(
+                    "{} || {{ printf '%s\\n' {} >&2; exit 1; }}",
+                    cache.render(),
+                    shell_quote(&msg!("venv.cache_retry").to_string())
+                ));
                 cmd.program = path.join("bin/python").to_string_lossy().into_owned();
                 cmd.args.splice(
                     0..0,

@@ -364,6 +364,16 @@ pub fn verify(ctx: &Context, lock: &Lock) -> Result<EnvReport> {
         }
     }
 
+    r.items.extend(crate::venv::probe(ctx).items);
+    if ctx.venv.is_some() {
+        r.push(
+            "venv_lock",
+            Message::text("rospm.lock"),
+            msg!("venv.lock_scope"),
+            msg!("venv.not_locked"),
+            Status::Info,
+        );
+    }
     Ok(r)
 }
 

@@ -82,6 +82,8 @@ enum Cmd {
 
     #[command(about = tr("cli.check.about"))]
     Check {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
         #[arg(long, value_name = "PLATFORM", help = tr("cli.check.target"))]
         target: Option<Platform>,
         #[arg(long, help = tr("cli.check.strict"))]
@@ -95,7 +97,10 @@ enum Cmd {
     },
 
     #[command(about = tr("cli.verify.about"))]
-    Verify,
+    Verify {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
+    },
 
     #[command(about = tr("cli.apply.about"))]
     Apply {
@@ -206,6 +211,8 @@ enum Cmd {
 
     #[command(about = tr("cli.doctor.about"))]
     Doctor {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
         #[arg(long, help = tr("cli.doctor.no_network"))]
         no_network: bool,
     },
@@ -318,9 +325,13 @@ fn main() -> ExitCode {
                 .map(|b| b.parse::<RosFlavor>().expect("validated by clap"));
             commands::init(&global, from_env, distro, base, force)
         }
-        Cmd::Check { target, strict } => commands::check(&global, target, strict),
+        Cmd::Check {
+            target,
+            strict,
+            venv,
+        } => commands::check(&global, target, strict, venv),
         Cmd::Lock { platform } => commands::lock(&global, platform),
-        Cmd::Verify => commands::verify(&global),
+        Cmd::Verify { venv } => commands::verify(&global, venv),
         Cmd::Apply {
             distro,
             locked,
@@ -442,7 +453,7 @@ fn main() -> ExitCode {
         Cmd::Export { .. } => commands::not_implemented("export", "P6"),
         Cmd::Import { .. } => commands::not_implemented("import", "P6"),
         Cmd::Editor { .. } => commands::not_implemented("editor", "P7"),
-        Cmd::Doctor { no_network } => commands::doctor(&global, no_network),
+        Cmd::Doctor { no_network, venv } => commands::doctor(&global, no_network, venv),
         Cmd::Help { command } => print_help(&command),
     };
 
