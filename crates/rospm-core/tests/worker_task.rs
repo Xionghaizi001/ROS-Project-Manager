@@ -425,3 +425,64 @@ fn cancellation_is_durable_sticky_and_cannot_overwrite_terminal_results() {
     assert!(task.join().is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn snapshot_cursor_tracks_live_dual_stream_output_and_terminal_pagination() {
+    use rospm_core::worker::Message;
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let task = runner
+        .start_with("cursor", workspace, move |interaction| {
+            let mut plan = Plan::default();
+            plan.run(Command::new("python3").args([
+                "-c",
+                r#"
+import os, threading
+def write(fd):
+    for _ in range(2048):
+        os.write(fd, b'x' * 8192)
+a = threading.Thread(target=write, args=(1,))
+b = threading.Thread(target=write, args=(2,))
+a.start(); b.start(); a.join(); b.join()
+"#,
+            ]));
+            plan.perform_with("cursor", interaction)?;
+            ready_tx.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+    ready_rx.recv_timeout(Duration::from_secs(60)).unwrap();
+    let running = store.load_snapshot("cursor").unwrap();
+    assert_eq!(running.state, TaskState::Running);
+    assert!(running.log_cursor >= 4096);
+    resume_tx.send(()).unwrap();
+    task.join().unwrap();
+    let terminal = store.load_snapshot("cursor").unwrap();
+    assert_eq!(terminal.state, TaskState::Succeeded);
+    assert_eq!(terminal.log_cursor, running.log_cursor);
+    let mut cursor = 0;
+    loop {
+        let Message::LogChunk {
+            next_cursor,
+            complete,
+            entries,
+            ..
+        } = store.log_chunk("cursor", cursor, 256).unwrap()
+        else {
+            panic!()
+        };
+        for entry in entries {
+            assert_eq!(entry.cursor, cursor);
+            cursor += 1;
+        }
+        assert_eq!(cursor, next_cursor);
+        if complete {
+            break;
+        }
+    }
+    assert_eq!(cursor, terminal.log_cursor);
+    fs::remove_dir_all(root).unwrap();
+}

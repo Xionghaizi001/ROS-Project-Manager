@@ -335,7 +335,9 @@ impl TaskStore {
                     }
                 }),
             });
-            self.write_snapshot(&snapshot)?;
+            let _lock = self.lock_task(&id)?;
+            snapshot.log_cursor = self.persisted_log_cursor(&id)?;
+            self.write_snapshot_locked(&snapshot)?;
             recovered.push(snapshot);
         }
         Ok(recovered)
@@ -347,6 +349,19 @@ impl TaskStore {
             return Err(StoreError::MissingTask);
         }
         let _lock = self.lock_task(&snapshot.task_id)?;
+        let mut snapshot = snapshot.clone();
+        // State writers may have read before a concurrent log append.
+        if path.is_file() {
+            snapshot.log_cursor = snapshot
+                .log_cursor
+                .max(self.load_snapshot(&snapshot.task_id)?.log_cursor);
+        }
+        self.write_snapshot_locked(&snapshot)
+    }
+
+    /// Caller holds the task file lock across the entire read/modify/write.
+    fn write_snapshot_locked(&self, snapshot: &TaskSnapshot) -> Result<(), StoreError> {
+        let (path, _) = self.files(&snapshot.task_id)?;
         let tmp = path.with_extension("json.tmp");
         // A previous worker may have died after syncing the temp file. The lock
         // proves no writer is active, so that stale file is safe to replace.
@@ -367,6 +382,10 @@ impl TaskStore {
     }
 
     pub fn append_log(&self, task_id: &str, entry: &LogEntry) -> Result<(), StoreError> {
+        let next = entry
+            .cursor
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "log cursor overflow"))?;
         let (_, path) = self.files(task_id)?;
         if !path.is_file() {
             return Err(StoreError::MissingTask);
@@ -380,7 +399,42 @@ impl TaskStore {
         let mut file = fs::OpenOptions::new().append(true).open(path)?;
         file.write_all(&record)?;
         file.sync_data()?;
-        Ok(())
+        let mut snapshot = self.load_snapshot(task_id)?;
+        snapshot.log_cursor = snapshot.log_cursor.max(next);
+        self.write_snapshot_locked(&snapshot)
+    }
+
+    // Recovery also covers a crash between the durable append and snapshot rename.
+    fn persisted_log_cursor(&self, task_id: &str) -> Result<u64, StoreError> {
+        let (_, path) = self.files(task_id)?;
+        let mut reader = BufReader::new(File::open(path)?);
+        let mut next = 0;
+        loop {
+            let mut line = Vec::new();
+            let length = reader
+                .by_ref()
+                .take((MAX_FRAME_BYTES + 1) as u64)
+                .read_until(b'\n', &mut line)?;
+            if length > MAX_FRAME_BYTES {
+                return Err(StoreError::LogLineTooLarge(MAX_FRAME_BYTES));
+            }
+            // Preserve a truncated tail for diagnosis, but never count it.
+            if length == 0 || !line.ends_with(b"\n") {
+                return Ok(next);
+            }
+            let entry: LogEntry = serde_json::from_slice(&line)?;
+            if entry.cursor < next {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "log cursors are not increasing",
+                )
+                .into());
+            }
+            next = entry
+                .cursor
+                .checked_add(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "log cursor overflow"))?;
+        }
     }
 
     pub fn read_logs(

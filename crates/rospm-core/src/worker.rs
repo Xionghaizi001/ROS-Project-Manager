@@ -158,6 +158,7 @@ pub struct TaskSnapshot {
     pub state: TaskState,
     pub step: u32,
     pub total_steps: Option<u32>,
+    /// Exclusive end of durable log records: last persisted cursor + 1, or zero.
     pub log_cursor: u64,
     pub result: Option<TaskResult>,
 }
@@ -237,7 +238,7 @@ mod tests {
             state: TaskState::Running,
             step: 1,
             total_steps: Some(2),
-            log_cursor: 2,
+            log_cursor: 0,
             result: None,
         };
         store.create_task(&snapshot).unwrap();
@@ -262,6 +263,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.read_logs("task-1", 1, 10).unwrap().len(), 1);
+        assert_eq!(store.load_snapshot("task-1").unwrap().log_cursor, 2);
         store
             .write_snapshot(&TaskSnapshot {
                 state: TaskState::Succeeded,
@@ -462,6 +464,7 @@ mod tests {
         }
         let entries = store.read_logs("task-1", 0, 300).unwrap();
         assert_eq!(entries.len(), 200);
+        assert_eq!(store.load_snapshot("task-1").unwrap().log_cursor, 200);
         assert!(entries
             .windows(2)
             .all(|pair| pair[0].cursor < pair[1].cursor));

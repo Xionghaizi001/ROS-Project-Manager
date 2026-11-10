@@ -356,3 +356,93 @@ fn reconnect_never_reports_truncated_or_invalid_logs_complete() {
     }
     assert!(store.log_chunk("t1", 0, 10).is_err());
 }
+
+#[test]
+fn cursor_survives_stale_state_writes_and_failed_appends() {
+    let fixture = Fixture::new();
+    let store = fixture.store();
+    let mut stale = TaskSnapshot {
+        task_id: "cursor".into(),
+        state: TaskState::Running,
+        step: 0,
+        total_steps: None,
+        log_cursor: 0,
+        result: None,
+    };
+    store.create_task(&stale).unwrap();
+    for cursor in 0..3 {
+        store
+            .append_log(
+                "cursor",
+                &LogEntry {
+                    cursor,
+                    stream: LogStream::Stdout,
+                    text: "ok".into(),
+                },
+            )
+            .unwrap();
+    }
+    stale.state = TaskState::CancelRequested;
+    store.write_snapshot(&stale).unwrap();
+    assert_eq!(store.load_snapshot("cursor").unwrap().log_cursor, 3);
+    assert!(store
+        .append_log(
+            "cursor",
+            &LogEntry {
+                cursor: 3,
+                stream: LogStream::Stderr,
+                text: "x".repeat(MAX_FRAME_BYTES)
+            }
+        )
+        .is_err());
+    assert_eq!(store.load_snapshot("cursor").unwrap().log_cursor, 3);
+}
+
+#[test]
+fn recovery_reconciles_cursor_with_complete_records_and_preserves_partial_tail() {
+    for cause in [RecoveryCause::WorkerExit, RecoveryCause::HostFailure] {
+        for old_cursor in [0, 99] {
+            let fixture = Fixture::new();
+            let store = fixture.store();
+            let snapshot = TaskSnapshot {
+                task_id: "cursor".into(),
+                state: TaskState::Running,
+                step: 0,
+                total_steps: None,
+                log_cursor: old_cursor,
+                result: None,
+            };
+            store.create_task(&snapshot).unwrap();
+            // Simulate a durable append followed by a crash before snapshot publication.
+            let path = fixture.0.join("tasks/cursor/logs.jsonl");
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            for cursor in 0..2 {
+                writeln!(
+                    file,
+                    "{}",
+                    serde_json::to_string(&LogEntry {
+                        cursor,
+                        stream: LogStream::Stdout,
+                        text: "saved".into()
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+            }
+            file.write_all(b"{\"cursor\":2").unwrap();
+            file.sync_all().unwrap();
+            let recovered = store.recover_active_tasks(cause).unwrap();
+            assert_eq!(recovered[0].log_cursor, 2);
+            assert_eq!(store.load_snapshot("cursor").unwrap().log_cursor, 2);
+            assert_eq!(
+                recovered[0].state,
+                match cause {
+                    RecoveryCause::WorkerExit => TaskState::Interrupted,
+                    RecoveryCause::HostFailure => TaskState::Unknown,
+                }
+            );
+            assert!(fs::read(&path).unwrap().ends_with(b"{\"cursor\":2"));
+            assert!(store.log_chunk("cursor", 0, 10).is_err());
+        }
+    }
+}
