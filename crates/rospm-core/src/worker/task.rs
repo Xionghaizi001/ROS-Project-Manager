@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Clone)]
 struct Control {
     cancelled: Arc<AtomicBool>,
+    snapshot: Arc<Mutex<()>>,
     confirmation: ConfirmationWait,
     pending: Arc<Mutex<Option<u32>>>,
 }
@@ -17,6 +18,8 @@ struct Control {
 /// Owns one running task. The worker/service dispatch loop keeps this handle
 /// and calls `respond` or `cancel` for authenticated client messages.
 pub struct TaskHandle {
+    store: TaskStore,
+    task_id: String,
     control: Control,
     thread: JoinHandle<Result<()>>,
 }
@@ -36,6 +39,10 @@ impl TaskHandle {
             return Err(Error::Host(UserMessage::text("confirmation mismatch")));
         }
         *pending = None;
+        if response == ConfirmationResponse::Cancel {
+            drop(pending);
+            return self.cancel();
+        }
         self.control.confirmation.respond(response);
         Ok(())
     }
@@ -44,9 +51,20 @@ impl TaskHandle {
         self.thread.is_finished()
     }
 
-    pub fn cancel(&self) {
+    pub fn cancel(&self) -> Result<()> {
+        let _guard = self.control.snapshot.lock().unwrap();
+        let mut snapshot = self
+            .store
+            .load_snapshot(&self.task_id)
+            .map_err(store_error)?;
+        if snapshot.state.is_terminal() {
+            return Ok(());
+        }
         self.control.cancelled.store(true, Ordering::Release);
+        snapshot.state = TaskState::CancelRequested;
+        let result = self.store.write_snapshot(&snapshot).map_err(store_error);
         self.control.confirmation.cancel();
+        result
     }
 
     pub fn join(self) -> Result<()> {
@@ -160,12 +178,14 @@ impl TaskRunner {
         }
         let control = Control {
             cancelled: Arc::new(AtomicBool::new(false)),
+            snapshot: Default::default(),
             confirmation: ConfirmationWait::default(),
             pending: Arc::new(Mutex::new(None)),
         };
         let thread_control = control.clone();
         let store = self.store.clone();
         let runtime = self.runtime_dir.clone();
+        let handle_task_id = task_id.clone();
         let thread = thread::spawn(move || {
             let interaction = WorkerInteraction {
                 store: store.clone(),
@@ -207,7 +227,15 @@ impl TaskRunner {
             for stream in [Stream::Stdout, Stream::Stderr, Stream::Progress] {
                 interaction.record_bytes(stream, &[], true);
             }
-            let result = result.and_then(|()| interaction.check_storage());
+            let _guard = interaction.control.snapshot.lock().unwrap();
+            let result = result.and_then(|()| {
+                interaction.check_storage()?;
+                if interaction.cancel_requested(&task_id) {
+                    Err(Error::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
             let state = match &result {
                 Ok(()) => TaskState::Succeeded,
                 Err(Error::Cancelled) => TaskState::Cancelled,
@@ -228,7 +256,12 @@ impl TaskRunner {
             drop(lease);
             result
         });
-        Ok(TaskHandle { control, thread })
+        Ok(TaskHandle {
+            store: self.store.clone(),
+            task_id: handle_task_id,
+            control,
+            thread,
+        })
     }
 }
 
@@ -298,8 +331,15 @@ impl WorkerInteraction {
 
     fn set_state(&self, state: TaskState, step: u32) {
         self.record_failure((|| {
+            let _guard = self.control.snapshot.lock().unwrap();
             let mut snapshot = self.store.load_snapshot(&self.task_id)?;
-            snapshot.state = state;
+            snapshot.state = if self.control.cancelled.load(Ordering::Acquire)
+                || snapshot.state == TaskState::CancelRequested
+            {
+                TaskState::CancelRequested
+            } else {
+                state
+            };
             snapshot.step = step;
             self.store.write_snapshot(&snapshot)
         })());
@@ -314,6 +354,7 @@ impl Interaction for WorkerInteraction {
         match event {
             Event::Task { total, .. } => {
                 self.record_failure((|| {
+                    let _guard = self.control.snapshot.lock().unwrap();
                     let mut snapshot = self.store.load_snapshot(&self.task_id)?;
                     snapshot.total_steps = Some(total as u32);
                     self.store.write_snapshot(&snapshot)
@@ -322,7 +363,14 @@ impl Interaction for WorkerInteraction {
             Event::Interaction { step, state, .. } => {
                 // Confirmation publishes its state only after the review is durable.
                 if state != State::WaitingConfirmation {
-                    self.set_state(TaskState::Running, step as u32);
+                    self.set_state(
+                        if state == State::CancelRequested {
+                            TaskState::CancelRequested
+                        } else {
+                            TaskState::Running
+                        },
+                        step as u32,
+                    );
                 }
             }
             Event::Step { step, .. } => self.set_state(TaskState::Running, step as u32),

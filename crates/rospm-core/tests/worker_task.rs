@@ -57,7 +57,7 @@ fn cancellation_is_observed_at_step_boundary_and_stops_following_steps() {
     plan.run(Command::new("touch").arg(marker.to_string_lossy()));
     let task = runner.start("cancel", &workspace, plan).unwrap();
     thread::sleep(Duration::from_millis(50));
-    task.cancel();
+    task.cancel().unwrap();
     task.join().unwrap_err();
     assert!(!marker.exists());
     assert_eq!(
@@ -131,7 +131,7 @@ fn group_cancel_stops_descendants_and_drains_output() {
         assert_eq!(unsafe { libc::getpgid(pid) }, pid);
         assert_ne!(pid, unsafe { libc::getpgrp() });
         let started = Instant::now();
-        task.cancel();
+        task.cancel().unwrap();
         assert!(matches!(task.join(), Err(rospm_core::Error::Cancelled)));
         assert!(started.elapsed() < Duration::from_secs(6));
         if stubborn {
@@ -158,9 +158,9 @@ fn protected_step_finishes_before_cancel_and_real_failure_wins() {
                 .args([
                     "-c",
                     if fail {
-                        "echo ready > ready; sleep 0.2; exit 7"
+                        "echo ready > ready; sleep 0.4; exit 7"
                     } else {
-                        "echo ready > ready; sleep 0.2; touch finished"
+                        "echo ready > ready; sleep 0.4; touch finished"
                     },
                 ])
                 .cwd(&workspace),
@@ -171,7 +171,16 @@ fn protected_step_finishes_before_cancel_and_real_failure_wins() {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(workspace.join("ready").exists());
-        task.cancel();
+        task.cancel().unwrap();
+        assert_eq!(
+            store.load_snapshot("protected").unwrap().state,
+            TaskState::CancelRequested
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            store.load_snapshot("protected").unwrap().state,
+            TaskState::CancelRequested
+        );
         let result = task.join();
         if fail {
             assert!(matches!(
@@ -199,7 +208,7 @@ fn queued_cancel_does_not_wait_for_workspace_lease() {
     let task = runner
         .start_with("queued", &workspace, |_| panic!("cancelled task ran"))
         .unwrap();
-    task.cancel();
+    task.cancel().unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     while !task.is_finished() {
         assert!(Instant::now() < deadline);
@@ -342,5 +351,77 @@ os.write(1, b'\xe4')
         store.load_snapshot("pipes").unwrap().state,
         TaskState::Succeeded
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cancellation_is_durable_sticky_and_cannot_overwrite_terminal_results() {
+    use rospm_core::execution::{Event, State};
+    let (root, store, workspace) = fixture();
+    let runner = TaskRunner::new(store.clone(), root.join("runtime"));
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let observed = store.clone();
+    let task = runner
+        .start_with("sticky", workspace, move |interaction| {
+            ready_tx.send(()).unwrap();
+            resume_rx.recv().unwrap();
+            for event in [
+                Event::Interaction {
+                    task: "sticky",
+                    step: 1,
+                    state: State::CancelRequested,
+                },
+                Event::Interaction {
+                    task: "sticky",
+                    step: 1,
+                    state: State::Running,
+                },
+                Event::Step {
+                    task: "sticky",
+                    step: 2,
+                    state: State::Running,
+                },
+                Event::Task {
+                    task: "sticky",
+                    total: 3,
+                    state: State::Running,
+                    error: None,
+                },
+            ] {
+                interaction.event(event);
+                assert_eq!(
+                    observed.load_snapshot("sticky").unwrap().state,
+                    TaskState::CancelRequested
+                );
+            }
+            Err(rospm_core::Error::Host(rospm_core::Message::text(
+                "real failure",
+            )))
+        })
+        .unwrap();
+    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    task.cancel().unwrap();
+    task.cancel().unwrap();
+    assert_eq!(
+        store.load_snapshot("sticky").unwrap().state,
+        TaskState::CancelRequested
+    );
+    resume_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !task.is_finished() {
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(10));
+    }
+    task.cancel().unwrap();
+    let snapshot = store.load_snapshot("sticky").unwrap();
+    assert_eq!(snapshot.state, TaskState::Failed);
+    assert!(snapshot
+        .result
+        .unwrap()
+        .error
+        .unwrap()
+        .contains("real failure"));
+    assert!(task.join().is_err());
     fs::remove_dir_all(root).unwrap();
 }

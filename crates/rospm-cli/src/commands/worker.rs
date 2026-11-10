@@ -266,15 +266,19 @@ pub fn serve(global: &Global, runtime: &Path) -> Result<()> {
                     .respond_at(step, response)
                     .map_err(|e| e.to_string())?;
             }
-            Message::Cancel { task_id } => {
-                tasks.get(&task_id).ok_or("task is not active")?.cancel()
-            }
+            Message::Cancel { task_id } => tasks
+                .get(&task_id)
+                .ok_or("task is not active")?
+                .cancel()
+                .map_err(|e| e.to_string())?,
             _ => return Err("unsupported request".into()),
         }
         Ok(())
     });
-    for handle in tasks.values() {
-        handle.cancel();
+    for (id, handle) in &tasks {
+        if let Err(error) = handle.cancel() {
+            eprintln!("{id}: {error}");
+        }
     }
     for (id, handle) in tasks {
         if let Err(error) = handle.join() {
