@@ -110,7 +110,7 @@ pub fn deps_check(global: &Global) -> Result<()> {
 
 /// `rospm deps install [--dry-run]`: hand the missing keys to rosdep.
 pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
-    let loaded = load(global)?;
+    let (loaded, _leases) = super::load_mutating(global, dry_run)?;
     let host = Host::probe();
     let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
     let ctx = context(&loaded, &host, false, None, false, mirror)?;

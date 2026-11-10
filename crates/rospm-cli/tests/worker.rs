@@ -26,7 +26,7 @@ impl Worker {
         .unwrap();
         fs::create_dir(root.join("bin")).unwrap();
         for (name, script) in [
-            ("bash", "#!/bin/sh\ncase \"$*\" in *'colcon build'*) echo started; echo $$ > started; if [ -f fast ]; then exit 0; fi; sleep 30 & wait;; *) exec /bin/bash \"$@\";; esac\n"),
+            ("bash", "#!/bin/sh\ncase \"$*\" in *'colcon build'*) echo started; echo $$ > started; if [ -f fast ]; then exit 0; fi; while [ ! -f fast ]; do sleep 0.05 & wait; done;; *) exec /bin/bash \"$@\";; esac\n"),
             ("dpkg-query", "#!/bin/sh\nprintf 'ros-jazzy-demo\\tinstalled\\t1.0\\n'\n"),
             ("sudo", "#!/bin/sh\necho unexpected-sudo >&2; exit 99\n"),
         ] {
@@ -92,6 +92,34 @@ impl Worker {
                 }
                 thread::sleep(Duration::from_millis(20));
             }
+        }
+    }
+    fn command(&self, args: &[&str]) -> std::process::Command {
+        let mut command = rospm();
+        command
+            .current_dir(&self.root)
+            .args(args)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.root.join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("ROSPM_NO_NETWORK", "1");
+        command
+    }
+    fn wait_started(&self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(pid) = fs::read_to_string(self.root.join("ws/started")) {
+                if !pid.trim().is_empty() {
+                    return pid;
+                }
+            }
+            assert!(Instant::now() < deadline, "build did not start");
+            thread::sleep(Duration::from_millis(20));
         }
     }
     fn request(&self, args: &[&str]) -> std::process::Output {
@@ -191,6 +219,9 @@ fn cli_confirmation_is_reviewable_and_requires_matching_step() {
     let worker = Worker::new("worker-confirm");
     worker.ok(&["submit", "uninstall", "--id", "remove"]);
     let waiting = worker.wait("remove", "waiting_confirmation");
+    let blocked = worker.command(&["build"]).output().unwrap();
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("Workspace is busy"));
     let logs = worker.ok(&["logs", "remove"]);
     let review: Value = logs["entries"]
         .as_array()
@@ -236,4 +267,114 @@ fn cli_excludes_second_worker_and_recovers_crashed_confirmation_without_replay()
     worker.wait("crash", "unknown");
     worker.ok(&["submit", "uninstall", "--id", "crash"]);
     worker.wait("crash", "unknown");
+}
+
+#[test]
+fn worker_excludes_sync_mutations_and_shared_workspace_but_not_other_projects() {
+    let worker = Worker::new("worker-sync-mutex");
+    worker.ok(&["submit", "build", "--id", "holding"]);
+    let pid = worker.wait_started();
+    for args in [
+        vec!["build"],
+        vec!["apply", "--build"],
+        vec!["uninstall", "--yes"],
+        vec!["deps", "install"],
+        vec!["venv", "create"],
+        vec!["lock"],
+        vec!["run", "--interactive"],
+        vec!["shell"],
+        vec!["init", "--force"],
+    ] {
+        let out = worker.command(&args).output().unwrap();
+        assert!(!out.status.success(), "accepted {args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("Workspace is busy"),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    assert!(worker
+        .command(&["build", "--dry-run"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert_eq!(worker.wait_started(), pid);
+    assert_eq!(
+        worker.ok(&["status", "holding"])["snapshot"]["state"],
+        "running"
+    );
+
+    let other = Worker::new("worker-independent");
+    fs::write(other.root.join("ws/fast"), "").unwrap();
+    assert!(other.command(&["build"]).output().unwrap().status.success());
+    other.ok(&["submit", "build", "--id", "independent"]);
+    other.wait("independent", "succeeded");
+
+    // A different manifest/runtime still conflicts through a workspace alias.
+    fs::rename(other.root.join("ws"), other.root.join("own-ws")).unwrap();
+    std::os::unix::fs::symlink(worker.root.join("ws"), other.root.join("ws")).unwrap();
+    let out = other.command(&["build"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Workspace is busy"));
+    other.ok(&["submit", "build", "--id", "shared"]);
+    assert!(other.wait("shared", "failed")["result"]["error"]
+        .as_str()
+        .unwrap()
+        .contains("Workspace is busy"));
+    assert_eq!(worker.wait_started(), pid);
+
+    worker.ok(&["cancel", "holding"]);
+    worker.wait("holding", "cancelled");
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    assert!(other.command(&["build"]).output().unwrap().status.success());
+}
+
+#[test]
+fn synchronous_build_makes_worker_wait_and_release_allows_progress() {
+    let worker = Worker::new("sync-worker-mutex");
+    let mut build = worker
+        .command(&["build"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = worker.wait_started();
+    worker.ok(&["submit", "build", "--id", "queued"]);
+    worker.wait("queued", "pending");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        worker.ok(&["status", "queued"])["snapshot"]["state"],
+        "pending"
+    );
+    assert_eq!(worker.wait_started(), pid);
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = build.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "sync build did not finish");
+        thread::sleep(Duration::from_millis(20));
+    }
+    worker.wait("queued", "succeeded");
+}
+
+#[test]
+fn flat_workspace_reuses_project_lease_without_self_conflict() {
+    let worker = Worker::new("worker-flat-mutex");
+    let manifest = fs::read_to_string(worker.root.join("rospm.toml"))
+        .unwrap()
+        .replace("path = \"ws\"", "path = \".\"");
+    fs::write(worker.root.join("rospm.toml"), manifest).unwrap();
+    fs::write(worker.root.join("fast"), "").unwrap();
+    assert!(worker
+        .command(&["build"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    worker.ok(&["submit", "build", "--id", "flat"]);
+    worker.wait("flat", "succeeded");
 }

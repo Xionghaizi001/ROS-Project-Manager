@@ -175,6 +175,7 @@ impl TaskRunner {
                 log: LogPump::new(store.clone(), task_id.clone(), 256, MAX_FRAME_BYTES - 1024),
             };
             let mut lease = None;
+            let mut mutation = None;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 loop {
                     if interaction.cancel_requested(&task_id) {
@@ -182,7 +183,12 @@ impl TaskRunner {
                     }
                     lease = WorkspaceLock::try_acquire(&runtime, &workspace).map_err(lock_error)?;
                     if lease.is_some() {
-                        break;
+                        mutation =
+                            WorkspaceLock::try_acquire_mutation(&workspace).map_err(lock_error)?;
+                        if mutation.is_some() {
+                            break;
+                        }
+                        lease = None;
                     }
                     thread::sleep(std::time::Duration::from_millis(20));
                 }
@@ -212,6 +218,7 @@ impl TaskRunner {
                 error: result.as_ref().err().map(ToString::to_string),
             });
             store.write_snapshot(&snapshot).map_err(store_error)?;
+            drop(mutation);
             drop(lease);
             result
         });

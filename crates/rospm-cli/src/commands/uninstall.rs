@@ -10,12 +10,12 @@ use rospm_core::provider;
 
 use crate::i18n::tr;
 
-use super::{context, load, Global};
+use super::{context, Global};
 
 /// Removes packages, so unlike `apply` it asks first: `--yes` skips the
 /// prompt, and without a terminal on stdin the prompt cannot be answered.
 pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -> Result<()> {
-    let loaded = load(global)?;
+    let (loaded, _leases) = super::load_mutating(global, dry_run)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_uninstall(&ctx, keep_source)?;

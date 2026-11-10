@@ -13,12 +13,12 @@ use rospm_core::snapshot::{Fetch, Http};
 
 use crate::i18n::tr;
 
-use super::{host_platform, load, Global};
+use super::{host_platform, Global};
 
 /// `rospm lock [--platform <p>]`: resolve the host into `rospm.lock` (spec §3).
 /// Idempotent: the file is rewritten only when its content changes.
 pub fn lock(global: &Global, platform: Option<Platform>) -> Result<()> {
-    let loaded = load(global)?;
+    let (loaded, _leases) = super::load_mutating(global, false)?;
     let host = Host::probe();
     let platform = match platform {
         Some(p) => p,

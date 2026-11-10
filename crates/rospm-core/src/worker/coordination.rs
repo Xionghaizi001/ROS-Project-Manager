@@ -1,4 +1,4 @@
-//! Coordination primitives shared by worker task runners.
+//! Coordination primitives shared by CLI commands and worker task runners.
 //!
 //! The workspace lease is a kernel advisory lock.  It is deliberately held
 //! for the complete task, including confirmation waits, so a second worker
@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -49,6 +49,27 @@ impl WorkspaceLock {
         Self::open(runtime_dir, workspace, true)
     }
 
+    /// A resource lease shared by every frontend and project for this user.
+    /// The namespace is independent of project/runtime and TMPDIR overrides.
+    pub fn try_acquire_mutation(
+        workspace: impl AsRef<Path>,
+    ) -> Result<Option<Self>, WorkspaceLockError> {
+        let uid = unsafe { libc::geteuid() };
+        let runtime = PathBuf::from(format!("/tmp/rospm-leases-{uid}"));
+        match fs::DirBuilder::new().mode(0o700).create(&runtime) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = fs::symlink_metadata(&runtime)?;
+        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return Err(
+                io::Error::new(io::ErrorKind::PermissionDenied, "unsafe lease directory").into(),
+            );
+        }
+        Self::try_acquire(runtime, workspace)
+    }
+
     pub fn workspace(&self) -> &Path {
         &self.workspace
     }
@@ -66,10 +87,11 @@ impl WorkspaceLock {
         fs::create_dir_all(&locks)?;
         fs::set_permissions(&locks, fs::Permissions::from_mode(0o700))?;
         let mut digest = Sha256::new();
-        digest.update(workspace.to_string_lossy().as_bytes());
+        digest.update(workspace.as_os_str().as_encoded_bytes());
         let path = locks.join(format!("{:x}.lock", digest.finalize()));
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .mode(0o600)
@@ -100,19 +122,37 @@ impl Drop for WorkspaceLock {
     }
 }
 
-fn resolve_workspace(path: &Path) -> Result<PathBuf, WorkspaceLockError> {
+/// Canonical resource identity, including paths not created yet.
+pub fn resolve_workspace(path: &Path) -> Result<PathBuf, WorkspaceLockError> {
     if path.as_os_str().is_empty() {
         return Err(WorkspaceLockError::InvalidWorkspace(path.to_path_buf()));
-    }
-    if path.exists() {
-        return fs::canonicalize(path).map_err(WorkspaceLockError::Io);
     }
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
-    Ok(absolute)
+    // Resolve existing ancestors too: a not-yet-created workspace behind a
+    // symlink must keep the same identity after apply creates it.
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
+        use std::path::Component;
+        match component {
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::CurDir => {}
+            other => {
+                resolved.push(other.as_os_str());
+                match fs::canonicalize(&resolved) {
+                    Ok(path) => resolved = path,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
+    }
+    Ok(resolved)
 }
 
 /// A task-scoped confirmation rendezvous. Dropping a client does not answer
@@ -164,6 +204,35 @@ mod tests {
             .unwrap()
             .is_some());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mutation_identity_survives_creation_and_resolves_aliases() {
+        let root = std::env::temp_dir().join(format!("rospm-lease-alias-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        let workspace = root.join("real/new/ws");
+        let first = WorkspaceLock::try_acquire_mutation(root.join("alias/new/./ws"))
+            .unwrap()
+            .unwrap();
+        assert!(WorkspaceLock::try_acquire_mutation(&workspace)
+            .unwrap()
+            .is_none());
+        fs::create_dir_all(&workspace).unwrap();
+        assert!(
+            WorkspaceLock::try_acquire_mutation(root.join("alias/new/ws/../ws"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(WorkspaceLock::try_acquire_mutation(root.join("other"))
+            .unwrap()
+            .is_some());
+        drop(first);
+        assert!(WorkspaceLock::try_acquire_mutation(&workspace)
+            .unwrap()
+            .is_some());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

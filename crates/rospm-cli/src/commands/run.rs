@@ -7,7 +7,7 @@ use rospm_core::probe::Host;
 use rospm_core::provider::{self, Shell};
 use rospm_core::run::{complete_targets, scan_workspace, Target, TargetKind};
 
-use super::{context, load, Global};
+use super::{context, Global};
 
 pub fn run(
     global: &Global,
@@ -17,7 +17,8 @@ pub fn run(
     requested: Option<&str>,
     args: Vec<String>,
 ) -> Result<()> {
-    let mut loaded = load(global)?;
+    let (mut loaded, _leases) =
+        super::load_mutating(global, list || (requested.is_none() && !interactive))?;
     venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;

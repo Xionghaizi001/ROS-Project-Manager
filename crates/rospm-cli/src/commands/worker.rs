@@ -295,6 +295,7 @@ fn execute(
         manifest: Some(root.join(MANIFEST_FILE)),
         json: true,
     })?;
+    let _leases = loaded.workspace_leases()?;
     let locked = operation == Operation::ApplyLocked;
     let lock = if locked || operation == Operation::Verify {
         Some(super::apply::load_locked_lock(&loaded)?)

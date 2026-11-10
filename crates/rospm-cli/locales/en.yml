@@ -275,6 +275,7 @@ cli:
     command: "Subcommand to describe (e.g. `deps install`)"
     unknown: "unknown command `%{command}` (see `rospm --help`)"
   err:
+    workspace_busy: "Workspace is busy: %{path}"
     no_cwd: "cannot determine current directory"
     manifest_not_found: "no %{file} found in %{dir} or any parent directory (run `rospm init`)"
     cannot_resolve: "cannot resolve %{path}"

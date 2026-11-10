@@ -78,6 +78,45 @@ impl Loaded {
     }
 }
 
+/// Acquire at the command boundary; nested build/retry helpers reuse the guard.
+fn load_mutating(
+    global: &Global,
+    dry_run: bool,
+) -> Result<(Loaded, Vec<rospm_core::worker::WorkspaceLock>)> {
+    let loaded = load(global)?;
+    if dry_run {
+        return Ok((loaded, Vec::new()));
+    }
+    let mut leases = vec![mutation_lease(&loaded.root)?];
+    // A previous operation may have changed the manifest before we got the lock.
+    let loaded = load(global)?;
+    leases.extend(loaded.workspace_leases()?);
+    Ok((loaded, leases))
+}
+
+fn mutation_lease(path: &Path) -> Result<rospm_core::worker::WorkspaceLock> {
+    rospm_core::worker::WorkspaceLock::try_acquire_mutation(path)?
+        .with_context(|| msg!("cli.err.workspace_busy", path = path.display()).to_string())
+}
+
+impl Loaded {
+    /// Caller already owns the project lease (CLI boundary or TaskRunner).
+    fn workspace_leases(&self) -> Result<Vec<rospm_core::worker::WorkspaceLock>> {
+        let root = rospm_core::worker::resolve_workspace(&self.root)?;
+        let paths = self
+            .manifest
+            .workspaces
+            .values()
+            .map(|ws| rospm_core::worker::resolve_workspace(&self.root.join(&ws.path)))
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        paths
+            .into_iter()
+            .filter(|path| path != &root)
+            .map(|path| mutation_lease(&path))
+            .collect()
+    }
+}
+
 fn locate(global: &Global) -> Result<PathBuf> {
     if let Some(p) = &global.manifest {
         return Ok(p.clone());

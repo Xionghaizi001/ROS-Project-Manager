@@ -67,14 +67,16 @@ pub fn init(
         .manifest
         .clone()
         .unwrap_or_else(|| cwd.join(MANIFEST_FILE));
-    if path.exists() && !force {
-        bail!("{}", msg!("cli.init.exists", path = path.display()));
-    }
     let root = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or(cwd);
+
+    let _lease = super::mutation_lease(&root)?;
+    if path.exists() && !force {
+        bail!("{}", msg!("cli.init.exists", path = path.display()));
+    }
 
     if from_env {
         return init_from_env(global, &root, &path, base);

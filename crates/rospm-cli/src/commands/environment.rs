@@ -22,7 +22,7 @@ pub fn env(global: &Global, shell: Shell, venv: super::VenvArgs) -> Result<()> {
 }
 
 pub fn shell(global: &Global, venv: super::VenvArgs) -> Result<()> {
-    let mut loaded = load(global)?;
+    let (mut loaded, leases) = super::load_mutating(global, false)?;
     venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
@@ -42,6 +42,9 @@ pub fn shell(global: &Global, venv: super::VenvArgs) -> Result<()> {
     );
     let rc_file = env_dir.join("shellrc");
     std::fs::write(&rc_file, rc)?;
+
+    // Commands launched inside the shell acquire their own leases.
+    drop(leases);
 
     eprintln!(
         "{}",

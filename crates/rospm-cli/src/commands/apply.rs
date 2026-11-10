@@ -19,7 +19,7 @@ use crate::i18n::tr;
 
 use super::build::{run_build, skip_env_checks};
 use super::report::print_probe_table;
-use super::{context, load, Global, Loaded};
+use super::{context, Global, Loaded};
 
 /// `--mirror` beats `ROSPM_MIRROR`; neither means "probe and decide".
 pub(super) fn requested_mirror(flag: Option<Mirror>) -> Result<Option<Mirror>> {
@@ -55,7 +55,7 @@ pub fn apply(
     mirror: Option<Mirror>,
     distro: Option<RosDistro>,
 ) -> Result<()> {
-    let mut loaded = load(global)?;
+    let (mut loaded, _leases) = super::load_mutating(global, dry_run)?;
     if locked && distro.is_some_and(|d| d != loaded.manifest.project.ros_distro) {
         bail!("{}", tr("cli.apply.locked_distro_conflict"));
     }

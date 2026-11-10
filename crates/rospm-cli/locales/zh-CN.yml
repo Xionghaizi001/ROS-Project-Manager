@@ -270,6 +270,7 @@ cli:
     command: "要查看的子命令（例如 `deps install`）"
     unknown: "未知命令 `%{command}`（见 `rospm --help`）"
   err:
+    workspace_busy: "工作区正忙：%{path}"
     no_cwd: "无法确定当前目录"
     manifest_not_found: "在 %{dir} 及其上级目录中均未找到 %{file}（请运行 `rospm init`）"
     cannot_resolve: "无法解析路径 %{path}"

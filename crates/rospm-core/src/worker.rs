@@ -22,7 +22,7 @@ mod store;
 mod submission;
 mod task;
 
-pub use coordination::{ConfirmationWait, WorkspaceLock, WorkspaceLockError};
+pub use coordination::{resolve_workspace, ConfirmationWait, WorkspaceLock, WorkspaceLockError};
 pub use socket::{PeerIdentity, SocketEndpoint};
 pub use store::{DispatchStatus, LogPump, RecoveryCause, StoreError, TaskStore};
 pub use submission::SubmissionStatus;

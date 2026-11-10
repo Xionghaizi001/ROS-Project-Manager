@@ -14,7 +14,7 @@ use rospm_core::Error;
 
 use crate::i18n::tr;
 
-use super::{context, load, Global, Loaded};
+use super::{context, Global, Loaded};
 
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -27,7 +27,7 @@ pub fn build(
     no_env_check: bool,
     dry_run: bool,
 ) -> Result<()> {
-    let mut loaded = load(global)?;
+    let (mut loaded, _leases) = super::load_mutating(global, dry_run)?;
     venv.select(&mut loaded)?;
     // After the manifest's build_args, so colcon's last-wins parsing lets the
     // command line override them; never written back.
@@ -76,6 +76,7 @@ pub(super) fn skip_env_checks(plan: &mut Plan) {
     }
 }
 
+/// Caller holds the mutation leases across this build and any clean retry.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run_build(
     loaded: &Loaded,
