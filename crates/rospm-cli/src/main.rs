@@ -232,6 +232,17 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum VenvCmd {
+    #[command(about = tr("venv.install_about"))]
+    Install {
+        #[command(flatten)]
+        venv: commands::VenvArgs,
+        #[arg(long, short = 'r', value_name = "FILE", help = tr("venv.requirements"))]
+        requirements: PathBuf,
+        #[arg(long, help = tr("venv.uv_install"))]
+        uv: bool,
+        #[arg(long, help = tr("cli.dry_run"))]
+        dry_run: bool,
+    },
     #[command(about = tr("venv.create_about"))]
     Create {
         #[arg(long, help = tr("venv.uv"))]
@@ -332,6 +343,15 @@ fn main() -> ExitCode {
         None
     };
     let result = match cli.command {
+        Cmd::Venv {
+            command:
+                VenvCmd::Install {
+                    venv,
+                    requirements,
+                    uv,
+                    dry_run,
+                },
+        } => commands::venv::install(&global, venv, &requirements, uv, dry_run),
         Cmd::Venv {
             command: VenvCmd::Create { uv, dry_run },
         } => commands::venv::create(&global, uv, dry_run),

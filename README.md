@@ -102,7 +102,7 @@ rospm run --venv package/node
 rospm shell --venv
 ```
 
-显式 venv 覆盖清单 Conda；不传参数则保持原有行为。所选 venv 会清除继承的 Conda/Python 路径并从系统 PATH 组装环境。支持边界与验证记录见 [P4.4 说明](docs/p44-venv.md)。 项目 Python 依赖安装入口尚未实现；现有 pip 字段只记录，`apply --locked` 不重放 venv，`pyproject.toml` / `uv.lock` 不自动同步。详见 [依赖与锁定边界](docs/p44-python-dependencies.md)。
+显式 venv 覆盖清单 Conda；不传参数则保持原有行为。所选 venv 会清除继承的 Conda/Python 路径并从系统 PATH 组装环境。支持边界与验证记录见 [P4.4 说明](docs/p44-venv.md)。 可用 `rospm venv install --venv -r requirements.txt` 安装显式依赖文件，`--uv` 选择 uv 后端，`--dry-run` 预览。现有 pip 字段只记录，`apply --locked` 不重放 venv，`pyproject.toml` / `uv.lock` 不自动同步。详见 [依赖与锁定边界](docs/p44-python-dependencies.md) 和 [Humble / Jazzy 隔离验收](docs/p44-install-validation.md)。
 
 `rospm check --venv --strict`、`rospm verify --venv` 和 `rospm doctor --venv --no-network` 可诊断所选环境与旧 CMake Python 缓存；`verify` 仍需要锁文件，venv 就绪不代表其依赖已锁定。
 

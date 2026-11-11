@@ -700,3 +700,52 @@ fn venv_creation_help_is_localized_and_json_errors_are_single_documents() {
     assert!(!dir.join(".venv").exists());
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn venv_install_requires_explicit_selection_and_input() {
+    let dir = fixture("venv-install-input");
+    fs::write(
+        dir.join("rospm.toml"),
+        include_str!("../../rospm-core/tests/fixtures/minimal.toml"),
+    )
+    .unwrap();
+    fs::write(dir.join("requirements.txt"), "demo==1\n").unwrap();
+    for args in [
+        vec!["venv", "install", "--venv"],
+        vec!["venv", "install", "-r", "requirements.txt", "--dry-run"],
+        vec![
+            "venv",
+            "install",
+            "--venv",
+            "-r",
+            "requirements.txt",
+            "--dry-run",
+        ],
+        vec![
+            "venv",
+            "install",
+            "--venv",
+            "--venv-path",
+            "other",
+            "-r",
+            "requirements.txt",
+        ],
+    ] {
+        let out = rospm().current_dir(&dir).args(args).output().unwrap();
+        assert!(!out.status.success());
+        assert!(!dir.join(".venv").exists());
+        assert!(!dir.join(".rospm").exists());
+    }
+    for lang in ["en", "zh"] {
+        let out = rospm()
+            .args(["--lang", lang, "venv", "install", "--help"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("--venv") && text.contains("--requirements") && text.contains("--uv")
+        );
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

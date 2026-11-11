@@ -1621,3 +1621,44 @@ fn venv_creation_preview_is_read_only_and_refuses_existing_paths() {
     assert!(!root.join("absent").exists());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn venv_install_preview_requires_target_and_regular_input_without_writes() {
+    let root = std::env::temp_dir().join(format!("rospm-install-preview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".venv/bin")).unwrap();
+    std::fs::write(
+        root.join(".venv/pyvenv.cfg"),
+        "include-system-site-packages = true\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", root.join(".venv/bin/python")).unwrap();
+    let requirements = root.join("requirements 'quoted'.txt");
+    std::fs::write(&requirements, "demo==1\n").unwrap();
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let host = ready_host();
+    let path = root.join(".venv");
+    let context = Context {
+        root: &root,
+        venv: Some(&path),
+        ..ctx(&m, &host)
+    };
+    let plan = rospm_core::venv::plan_install(&context, &requirements, false).unwrap();
+    let mut out = Vec::new();
+    plan.execute(true, &mut out).unwrap();
+    assert!(String::from_utf8(out).unwrap().contains("--requirement"));
+    assert!(!root.join(".rospm").exists());
+    assert_eq!(std::fs::read_to_string(&requirements).unwrap(), "demo==1\n");
+    assert!(rospm_core::venv::plan_install(&context, &root, false).is_err());
+    assert!(rospm_core::venv::plan_install(&context, Path::new("relative.txt"), false).is_err());
+    assert!(rospm_core::venv::plan_install(
+        &Context {
+            venv: None,
+            ..context
+        },
+        &requirements,
+        false
+    )
+    .is_err());
+    std::fs::remove_dir_all(&root).unwrap();
+}

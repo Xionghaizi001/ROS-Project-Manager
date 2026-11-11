@@ -175,6 +175,10 @@ sign = false
 
 `env` / `shell`：声明 Conda（名称、路径或受管环境）时，环境脚本先以 `eval "$(<conda> shell.<bash|zsh> hook)"` 与 `conda activate <名称|路径>` 激活所选环境（受管环境使用 rospm 安装的 Conda，否则用 `PATH` 中的 `conda`），再 source ROS 与各 workspace；不执行 `conda init`、不改 shell 启动文件。Conda 构建在全部 workspace 编译后，于环境内运行一个 Python 片段，扫描所构建 workspace 的 `install/` 下可执行的普通文件，把指向其它 Python 的 shebang（`#!/usr/bin/env python3`、`#!/usr/bin/python3` 等，保留参数）改写为环境解释器的绝对路径并逐个列出，使 `ros2 run`（直接执行节点文件）不激活环境也使用目标解释器；符号链接（`--symlink-install` 指向源码）不改，解释器路径含空白时跳过并提示。
 
+`env` / `shell` / `build` / `run` 支持 `--venv`（清单同级 `.venv`）或 `--venv-path PATH`（相对调用目录）。显式 venv 覆盖清单 Conda，并与显式 Conda 构建参数互斥；未选择时保持现有行为。仅复用符合系统 Python / ROS 要求的已有环境，不自动创建；完整规则、PATH 清理边界与验证记录见 [P4.4 规则](p44-venv.md)。不新增 schema v1 字段，不要添加 `build.venv`；显式依赖安装入口为 `rospm venv install --venv|--venv-path PATH --requirements FILE [--uv] [--dry-run]`，默认目标环境 pip，可选 uv，安装前后校验环境且不回退系统 Python；venv 锁定重放仍不支持，见 [接入与验收](p44-install-validation.md)。`rospm venv create [--uv] [--dry-run]` 已提供显式项目创建：默认系统 Python 标准库 venv，可选已有 uv；项目锁、排他目录创建和失败保留规则见 [创建说明](p44-venv.md)。 项目 Python 依赖以用户显式指定的外部 requirements 文件作为显式安装输入；`[dependencies].pip` 与锁中的 `[[pip]]` 保持记录 / 对比语义，不自动安装或重放 venv。`pyproject.toml` / `uv.lock` 不自动读取或同步；目标 Python 安装、防止配置重定向、外部哈希锁与版本兼容要求见 [P4.4 依赖边界](p44-python-dependencies.md)。
+
+`check` / `verify` / `doctor` 也接受上述 venv 参数，读取共享 `venv` / `venv_cache` 诊断；`check --strict`、`verify` 和显式选择环境的 `doctor` 对未就绪返回失败。`verify` 不将现有 pip 锁转换为 venv 包锁，另以 `venv_lock` 信息项提示边界。构建前拒绝引用其他 Python 环境的 CMake 缓存，清理继续由原有确认流程管理；详见 [诊断接入记录](p44-venv.md)。
+
 ### 2.3 叠加顺序的推导
 
 1. 对 `workspaces` 按 `underlays` 做拓扑排序；有环则校验失败。

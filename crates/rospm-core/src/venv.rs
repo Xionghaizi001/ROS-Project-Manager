@@ -1,4 +1,4 @@
-//! Explicit native execution environments; never creates or installs anything.
+//! Explicit native execution environments, diagnostics and mutation plans.
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -401,6 +401,89 @@ mod create_tests {
             .args(["-I", "-B"])
             .arg(source.join("venv_create_test.py"))
             .arg(source.join("venv_create.py"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Explicit dependency installation; callers hold the same project leases as create.
+/// `requirements` is absolute (CLI resolves it from the invocation directory).
+pub fn plan_install(ctx: &Context, requirements: &Path, uv: bool) -> Result<crate::plan::Plan> {
+    let path = selected(ctx)?.ok_or_else(|| Error::Host(msg!("venv.selection_required")))?;
+    if !requirements.is_absolute() {
+        return Err(Error::Host(msg!("venv.requirements_invalid")));
+    }
+    let requirements = input_path(requirements, ctx.root)?;
+    if !requirements.is_file() {
+        return Err(Error::Host(msg!("venv.requirements_invalid")));
+    }
+    std::fs::File::open(&requirements).map_err(|e| Error::io(&requirements, e))?;
+    let tool = if uv {
+        Some(which::which("uv").map_err(|e| Error::Host(msg!("venv.uv_missing", detail = e)))?)
+    } else {
+        None
+    };
+    let python = path.join("bin/python");
+    let install = match &tool {
+        Some(tool) => crate::plan::Command::new(tool.to_string_lossy())
+            .args([
+                "--no-config",
+                "--no-python-downloads",
+                "pip",
+                "install",
+                "--python",
+            ])
+            .arg(python.to_string_lossy()),
+        None => crate::plan::Command::new(python.to_string_lossy()).args([
+            "-I",
+            "-B",
+            "-m",
+            "pip",
+            "--disable-pip-version-check",
+            "--no-input",
+            "install",
+        ]),
+    }
+    .arg("--requirement")
+    .arg(requirements.to_string_lossy());
+    let mut plan = crate::plan::Plan::new(msg!("venv.install_title", path = path.display()));
+    plan.note(msg!("venv.install_command", command = install.render()));
+    plan.note(msg!("venv.not_locked"));
+    plan.run(
+        crate::plan::Command::new("/usr/bin/python3")
+            .args(["-I", "-B", "-c", include_str!("venv_install.py")])
+            .arg(path.to_string_lossy())
+            .arg(format!(
+                "/opt/ros/{}/setup.bash",
+                ctx.manifest.project.ros_distro
+            ))
+            .arg(
+                tool.map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+            .arg(requirements.to_string_lossy())
+            .arg(include_str!("venv_check.py"))
+            .arg(msg!("venv.install_failed", path = path.display()).to_string())
+            .arg(msg!("venv.pip_missing", path = path.display()).to_string())
+            .cwd(ctx.root),
+    );
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod install_tests {
+    #[test]
+    fn install_selection_configuration_and_failures() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let out = std::process::Command::new("/usr/bin/python3")
+            .args(["-I", "-B"])
+            .arg(source.join("venv_install_test.py"))
+            .arg(source.join("venv_install.py"))
             .output()
             .unwrap();
         assert!(
