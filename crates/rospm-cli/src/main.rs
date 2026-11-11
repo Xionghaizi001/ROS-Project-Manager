@@ -488,6 +488,7 @@ fn main() -> ExitCode {
                 status_unknown: tr("cli.status.unknown"),
                 status_info: tr("cli.status.info"),
             },
+            || commands::apply(&global, false, false, false, false, false, None, None),
         ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),

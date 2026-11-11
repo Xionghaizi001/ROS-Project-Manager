@@ -13,7 +13,7 @@ pub(crate) fn draw(
     dashboard: Option<&Dashboard>,
     text: &Text,
     selected: usize,
-    workspace: usize,
+    ros_page: bool,
     scroll: &mut usize,
 ) {
     let areas = Layout::vertical([
@@ -59,20 +59,34 @@ pub(crate) fn draw(
         );
     }
     let content = areas[2];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(text.tabs[selected].as_str());
+    let block = Block::default().borders(Borders::ALL).title(if ros_page {
+        format!("{} / ROS", text.tabs[1])
+    } else {
+        text.tabs[selected].clone()
+    });
     let inner = block.inner(content);
     frame.render_widget(block, content);
-    let rows = pages::rows(dashboard, text, selected, workspace);
+    let rows = pages::rows(dashboard, text, selected, ros_page);
     if !rows.is_empty() {
         crate::table::draw(frame, inner, rows, text, scroll);
     }
     frame.render_widget(
-        Paragraph::new(format!(
-            "←→ / Tab   PgUp/PgDn   j/k {}   r {}   l {}   {}",
-            text.workspace, text.refresh, text.logs, text.quit
-        ))
+        Paragraph::new(if ros_page {
+            format!(
+                "i {}   PgUp/PgDn   r {}   l {}   Esc ↩",
+                text.tabs[1], text.refresh, text.logs
+            )
+        } else if selected == 1 {
+            format!(
+                "Enter › ROS   ←→ / Tab   r {}   {}",
+                text.refresh, text.quit
+            )
+        } else {
+            format!(
+                "←→ / Tab   PgUp/PgDn   j/k {}   r {}   l {}   {}",
+                text.workspace, text.refresh, text.logs, text.quit
+            )
+        })
         .style(Style::default().fg(Color::Gray)),
         areas[3],
     );

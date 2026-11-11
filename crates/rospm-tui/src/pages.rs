@@ -24,7 +24,7 @@ pub(crate) fn rows(
     dashboard: Option<&Dashboard>,
     text: &Text,
     tab: usize,
-    _workspace: usize,
+    ros_page: bool,
 ) -> Vec<Entry> {
     let mut rows = Vec::new();
     let Some(d) = dashboard else {
@@ -66,24 +66,28 @@ pub(crate) fn rows(
                 rows.push(Entry::value(&text.status, error));
             }
         }
-        1 => {
-            heading(&mut rows, &text.tabs[1]);
-            for name in ["ROS", "Conda", &text.components] {
-                let mut row = Entry::value(
-                    name,
-                    if name == "Conda" {
-                        &d.conda
-                    } else {
-                        &text.not_connected
-                    },
-                );
-                row.cells[1] = text.not_connected.clone();
-                rows.push(row);
-            }
+        1 if ros_page => {
+            rows.push(Entry::value(
+                "ROS",
+                if d.ros_installed {
+                    &text.status_ok
+                } else {
+                    &text.not_installed
+                },
+            ));
+            section(&mut rows, &text.apply_plan, &d.apply_plan);
             if d.ros_installed {
                 section(&mut rows, &text.uninstall_plan, &d.uninstall_plan);
             }
-            section(&mut rows, &text.apply_plan, &d.apply_plan);
+            rows.push(Entry::value(&text.logs, &text.open_logs));
+        }
+        1 => {
+            rows.push(Entry::value("› ROS", "Enter ›"));
+            for name in ["Conda", &text.components] {
+                let mut row = Entry::value(name, if name == "Conda" { &d.conda } else { "" });
+                row.cells[1] = text.not_connected.clone();
+                rows.push(row);
+            }
             section(&mut rows, &text.deps_result, &d.deps);
             for item in &d.deps_report.items {
                 let status = match item.status {
@@ -130,5 +134,49 @@ fn section(rows: &mut Vec<Entry>, title: &str, values: &[String]) {
     }
     if values.is_empty() {
         rows.push(Entry::value("", "—"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ros_entry_opens_a_separate_plan_page() {
+        let mut dashboard = Dashboard {
+            manifest: "rospm.toml".into(),
+            project: "test".into(),
+            provider: Default::default(),
+            workspaces: vec![],
+            conda: "system".into(),
+            apply_plan: vec!["install ROS".into()],
+            uninstall_plan: vec!["remove ROS".into()],
+            check: vec![],
+            report: Default::default(),
+            verify: vec![],
+            deps: vec![],
+            deps_report: Default::default(),
+            ros_installed: false,
+            diagnostics: vec![],
+            compile_packages: vec![],
+            root: ".".into(),
+        };
+        let text = Text {
+            not_installed: "missing".into(),
+            status_ok: "ok".into(),
+            ..Text::default()
+        };
+        let parent = rows(Some(&dashboard), &text, 1, false);
+        assert_eq!(parent[0].cells, ["› ROS", "", "Enter ›"]);
+        assert!(!parent.iter().any(|row| row.cells[2] == "install ROS"));
+        let child = rows(Some(&dashboard), &text, 1, true);
+        assert_eq!(child[0].cells[2], "missing");
+        assert!(child.iter().any(|row| row.cells[2] == "install ROS"));
+        assert!(!child.iter().any(|row| row.cells[2] == "remove ROS"));
+        dashboard.ros_installed = true;
+        let child = rows(Some(&dashboard), &text, 1, true);
+        assert_eq!(child[0].cells[2], "ok");
+        assert!(child.iter().any(|row| row.cells[2] == "remove ROS"));
+        assert!(rows(None, &text, 1, false).is_empty());
     }
 }

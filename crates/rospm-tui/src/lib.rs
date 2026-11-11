@@ -77,7 +77,11 @@ pub struct Text {
     pub status_info: String,
 }
 
-pub fn run(manifest_path: Option<&Path>, text: Text) -> Result<()> {
+pub fn run(
+    manifest_path: Option<&Path>,
+    text: Text,
+    mut install_ros: impl FnMut() -> Result<()>,
+) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(anyhow!(text.non_terminal));
     }
@@ -87,7 +91,13 @@ pub fn run(manifest_path: Option<&Path>, text: Text) -> Result<()> {
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
     let mut terminal =
         Terminal::new(CrosstermBackend::new(stdout)).context("failed to initialise terminal UI")?;
-    let result = loop_ui(&mut terminal, manifest_path, dashboard, &text);
+    let result = loop_ui(
+        &mut terminal,
+        manifest_path,
+        dashboard,
+        &text,
+        &mut install_ros,
+    );
     disable_raw_mode().ok();
     let stdout = terminal.backend_mut();
     execute!(stdout, LeaveAlternateScreen).ok();
@@ -96,14 +106,16 @@ pub fn run(manifest_path: Option<&Path>, text: Text) -> Result<()> {
     result
 }
 
-fn loop_ui<B: ratatui::backend::Backend>(
+fn loop_ui<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
     manifest: Option<&Path>,
     mut dashboard: Option<dashboard::Dashboard>,
     text: &Text,
+    install_ros: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
+    let mut ros_page = false;
     let mut workspace = 0usize;
     let mut scroll = 0usize;
     let mut last_runtime_refresh = Instant::now();
@@ -129,7 +141,7 @@ fn loop_ui<B: ratatui::backend::Backend>(
                 dashboard.as_ref(),
                 text,
                 selected,
-                workspace,
+                ros_page,
                 &mut scroll,
             )
         })?;
@@ -163,23 +175,50 @@ fn loop_ui<B: ratatui::backend::Backend>(
                 }
                 let page_size = usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
                 match key.code {
+                    KeyCode::Enter if selected == 1 && !ros_page && dashboard.is_some() => {
+                        ros_page = true;
+                        scroll = 0;
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') if ros_page => {
+                        ros_page = false;
+                        scroll = 0;
+                    }
+                    KeyCode::Char('i') if ros_page => {
+                        disable_raw_mode()?;
+                        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+                        terminal.show_cursor()?;
+                        if let Err(error) = install_ros() {
+                            eprintln!("{error:#}");
+                        }
+                        println!("Enter ↩");
+                        let mut input = String::new();
+                        io::stdin().read_line(&mut input)?;
+                        enable_raw_mode()?;
+                        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                        terminal.hide_cursor()?;
+                        terminal.clear()?;
+                        dashboard = dashboard::Dashboard::load(manifest, text)?;
+                        last_runtime_refresh = Instant::now();
+                    }
                     KeyCode::Char('l') => {
                         if let Some(d) = &dashboard {
                             browser = Some(logs::Browser::new(&d.root, selected));
                         }
                     }
                     KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-                    KeyCode::Left | KeyCode::BackTab => {
+                    KeyCode::Left | KeyCode::BackTab if !ros_page => {
                         selected = (selected + 7) % 8;
                         scroll = 0;
                     }
-                    KeyCode::Right | KeyCode::Tab => {
+                    KeyCode::Right | KeyCode::Tab if !ros_page => {
                         selected = (selected + 1) % 8;
                         scroll = 0;
                     }
                     KeyCode::PageDown => scroll = scroll.saturating_add(page_size),
                     KeyCode::PageUp => scroll = scroll.saturating_sub(page_size),
                     KeyCode::Home => scroll = 0,
+                    KeyCode::Down => scroll = scroll.saturating_add(1),
+                    KeyCode::Up => scroll = scroll.saturating_sub(1),
                     KeyCode::Char('j') => {
                         if let Some(dashboard) = dashboard.as_ref() {
                             if !dashboard.workspaces.is_empty() {
@@ -189,8 +228,9 @@ fn loop_ui<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('k') => workspace = workspace.saturating_sub(1),
                     KeyCode::Char('r') => {
-                        dashboard = dashboard::Dashboard::load(manifest, text)?;
                         workspace = 0;
+                        dashboard = dashboard::Dashboard::load(manifest, text)?;
+                        scroll = 0;
                         last_runtime_refresh = Instant::now();
                     }
                     _ => {}
