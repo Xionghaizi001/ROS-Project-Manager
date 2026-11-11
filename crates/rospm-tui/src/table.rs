@@ -14,7 +14,7 @@ pub(crate) fn draw(
     area: Rect,
     entries: Vec<Entry>,
     text: &Text,
-    scroll: u16,
+    scroll: &mut usize,
 ) {
     let entries: Vec<_> = entries
         .into_iter()
@@ -27,29 +27,34 @@ pub(crate) fn draw(
         })
         .collect();
     let widths = column_widths(&entries, text, area.width);
+    // Split logical entries into screen rows so even an entry taller than the viewport can scroll.
     let rows: Vec<_> = entries
         .into_iter()
-        .skip(scroll as usize)
-        .map(|entry| {
-            let mut height = 1;
+        .flat_map(|entry| {
             let cells: Vec<_> = entry
                 .cells
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(i, value)| {
-                    let wrapped = wrap(&value, widths[i].max(1) as usize);
+                    let wrapped = wrap(value, widths[i].max(1) as usize);
                     let wrapped = if entry.heading {
                         format!("\n{wrapped}\n ")
                     } else {
                         wrapped
                     };
-                    height = height.max(wrapped.lines().count() as u16);
+                    wrapped.lines().map(str::to_owned).collect::<Vec<_>>()
+                })
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+            (0..height).map(move |line| {
+                let row = cells.iter().enumerate().map(|(i, lines)| {
                     let alignment = if i < 2 {
                         Alignment::Center
                     } else {
                         Alignment::Left
                     };
-                    let mut cell = Cell::from(CellText::from(wrapped).alignment(alignment));
+                    let value = lines.get(line).cloned().unwrap_or_default();
+                    let mut cell = Cell::from(CellText::from(value).alignment(alignment));
                     if i == 1 && entry.running {
                         cell = cell.style(Style::default().fg(Color::Blue));
                     } else if i == 1 {
@@ -64,30 +69,34 @@ pub(crate) fn draw(
                         }
                     }
                     cell
+                });
+                Row::new(row).style(if entry.heading {
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
                 })
-                .collect();
-            Row::new(cells).height(height).style(if entry.heading {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
             })
         })
         .collect();
+    let visible = usize::from(area.height.saturating_sub(1));
+    *scroll = (*scroll).min(rows.len().saturating_sub(visible.max(1)));
     frame.render_widget(
-        Table::new(rows, widths.map(Constraint::Length))
-            .flex(Flex::Start)
-            .column_spacing(1)
-            .header(
-                Row::new(
-                    [text.item.clone(), text.status.clone(), text.actual.clone()].map(|label| {
-                        Cell::from(CellText::from(label).alignment(Alignment::Center))
-                    }),
-                )
-                .style(Style::default().fg(Color::Black).bg(Color::Gray))
-                .height(1),
-            ),
+        Table::new(
+            rows.into_iter().skip(*scroll),
+            widths.map(Constraint::Length),
+        )
+        .flex(Flex::Start)
+        .column_spacing(1)
+        .header(
+            Row::new(
+                [text.item.clone(), text.status.clone(), text.actual.clone()]
+                    .map(|label| Cell::from(CellText::from(label).alignment(Alignment::Center))),
+            )
+            .style(Style::default().fg(Color::Black).bg(Color::Gray))
+            .height(1),
+        ),
         area,
     );
 }
@@ -147,6 +156,70 @@ mod tests {
     }
 
     #[test]
+    fn oversized_entry_and_following_entry_remain_reachable() {
+        let text = Text {
+            item: "I".into(),
+            status: "S".into(),
+            actual: "A".into(),
+            ..Text::default()
+        };
+        let expected: Vec<_> = (0..30).map(|i| format!("{i:012}")).collect();
+        let entries = || {
+            vec![
+                Entry {
+                    cells: ["1".into(), String::new(), expected.concat()],
+                    status: None,
+                    heading: false,
+                    running: false,
+                },
+                Entry {
+                    cells: ["2".into(), String::new(), "tail".into()],
+                    status: None,
+                    heading: false,
+                    running: false,
+                },
+            ]
+        };
+        for height in [4, 8, 13] {
+            let mut terminal = Terminal::new(TestBackend::new(20, height)).unwrap();
+            let mut scroll = 0;
+            let mut seen = std::collections::BTreeSet::new();
+            for _ in 0..32 {
+                terminal
+                    .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                assert!((8..20).any(|x| buffer[(x, 0)].symbol() == "A"));
+                for y in 1..height {
+                    let value: String = (8..20).map(|x| buffer[(x, y)].symbol()).collect();
+                    seen.insert(value.trim_end().to_owned());
+                }
+                if seen.contains("tail") {
+                    break;
+                }
+                scroll += usize::from((height - 1).min(10));
+            }
+            assert!(seen.contains("tail"));
+            assert!(expected.iter().all(|line| seen.contains(line)));
+
+            scroll = usize::MAX;
+            terminal
+                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                .unwrap();
+            assert_eq!(scroll, 31 - usize::from(height - 1));
+
+            terminal.backend_mut().resize(40, 40);
+            terminal
+                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                .unwrap();
+            assert_eq!(
+                scroll, 0,
+                "resize should clamp the offset to the new content height"
+            );
+        }
+    }
+
+    #[test]
     fn running_row_has_arrow_and_blue_status_without_background() {
         let mut terminal = Terminal::new(TestBackend::new(80, 5)).unwrap();
         let text = Text {
@@ -165,7 +238,7 @@ mod tests {
                         running: true,
                     }],
                     &text,
-                    0,
+                    &mut 0,
                 )
             })
             .unwrap();
@@ -191,7 +264,7 @@ mod tests {
                         running: false,
                     }],
                     &Text::default(),
-                    0,
+                    &mut 0,
                 );
             })
             .unwrap();

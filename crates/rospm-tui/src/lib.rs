@@ -105,7 +105,7 @@ fn loop_ui<B: ratatui::backend::Backend>(
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
     let mut workspace = 0usize;
-    let mut scroll = 0u16;
+    let mut scroll = 0usize;
     let mut last_runtime_refresh = Instant::now();
     loop {
         if last_runtime_refresh.elapsed() >= Duration::from_secs(1) {
@@ -130,7 +130,7 @@ fn loop_ui<B: ratatui::backend::Backend>(
                 text,
                 selected,
                 workspace,
-                scroll,
+                &mut scroll,
             )
         })?;
         if event::poll(Duration::from_millis(250))? {
@@ -161,6 +161,7 @@ fn loop_ui<B: ratatui::backend::Backend>(
                     }
                     continue;
                 }
+                let page_size = usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
                 match key.code {
                     KeyCode::Char('l') => {
                         if let Some(d) = &dashboard {
@@ -176,8 +177,8 @@ fn loop_ui<B: ratatui::backend::Backend>(
                         selected = (selected + 1) % 8;
                         scroll = 0;
                     }
-                    KeyCode::PageDown => scroll = scroll.saturating_add(10),
-                    KeyCode::PageUp => scroll = scroll.saturating_sub(10),
+                    KeyCode::PageDown => scroll = scroll.saturating_add(page_size),
+                    KeyCode::PageUp => scroll = scroll.saturating_sub(page_size),
                     KeyCode::Home => scroll = 0,
                     KeyCode::Char('j') => {
                         if let Some(dashboard) = dashboard.as_ref() {

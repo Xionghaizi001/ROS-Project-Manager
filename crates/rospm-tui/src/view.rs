@@ -14,7 +14,7 @@ pub(crate) fn draw(
     text: &Text,
     selected: usize,
     workspace: usize,
-    scroll: u16,
+    scroll: &mut usize,
 ) {
     let areas = Layout::vertical([
         Constraint::Length(1),
