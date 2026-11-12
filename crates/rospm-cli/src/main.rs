@@ -65,6 +65,8 @@ enum Cmd {
     Worker {
         #[arg(long, help = tr("worker_cli.runtime"))]
         runtime: PathBuf,
+        #[arg(long, value_name = "SECONDS", default_value_t = commands::worker::DEFAULT_AUTO_EXIT_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..), help = tr("worker_cli.auto_exit_timeout"))]
+        auto_exit_timeout: u64,
     },
     #[command(about = tr("worker_cli.task"))]
     Task {
@@ -355,7 +357,14 @@ fn main() -> ExitCode {
         Cmd::Venv {
             command: VenvCmd::Create { uv, dry_run },
         } => commands::venv::create(&global, uv, dry_run),
-        Cmd::Worker { runtime } => commands::worker::serve(&global, &runtime),
+        Cmd::Worker {
+            runtime,
+            auto_exit_timeout,
+        } => commands::worker::serve(
+            &global,
+            &runtime,
+            std::time::Duration::from_secs(auto_exit_timeout),
+        ),
         Cmd::Task { runtime, command } => commands::worker::client(&global, &runtime, command),
         Cmd::Init {
             from_env,
@@ -543,4 +552,43 @@ fn init_logging(verbosity: u8) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_auto_exit_timeout_defaults_and_validates() {
+        for (args, expected) in [
+            (vec!["rospm", "worker", "--runtime", "/tmp/test"], 60),
+            (
+                vec![
+                    "rospm",
+                    "worker",
+                    "--runtime",
+                    "/tmp/test",
+                    "--auto-exit-timeout",
+                    "120",
+                ],
+                120,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(
+                matches!(cli.command, Cmd::Worker { auto_exit_timeout, .. } if auto_exit_timeout == expected)
+            );
+        }
+        for invalid in ["0", "-1", "abc", "18446744073709551616"] {
+            assert!(Cli::try_parse_from([
+                "rospm",
+                "worker",
+                "--runtime",
+                "/tmp/test",
+                "--auto-exit-timeout",
+                invalid
+            ])
+            .is_err());
+        }
+    }
 }

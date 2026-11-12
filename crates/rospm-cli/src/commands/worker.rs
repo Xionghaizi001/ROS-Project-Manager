@@ -12,6 +12,7 @@ use rospm_core::{
     worker::*,
 };
 use std::{
+    cell::RefCell,
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     os::unix::{
@@ -20,7 +21,7 @@ use std::{
     },
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Subcommand)]
@@ -177,7 +178,9 @@ extern "C" fn stop(_: libc::c_int) {
     STOP.store(true, Ordering::Release);
 }
 
-pub fn serve(global: &Global, runtime: &Path) -> Result<()> {
+pub const DEFAULT_AUTO_EXIT_TIMEOUT_SECS: u64 = 60;
+
+pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Result<()> {
     let loaded = load(global)?;
     anyhow::ensure!(
         loaded.path.canonicalize()? == loaded.root.join(MANIFEST_FILE),
@@ -211,70 +214,91 @@ pub fn serve(global: &Global, runtime: &Path) -> Result<()> {
     // A previous process may have left children running; never replay its work.
     store.recover_active_tasks(RecoveryCause::HostFailure)?;
     let runner = TaskRunner::new(store.clone(), data.join("leases"));
-    let mut tasks: HashMap<String, TaskHandle> = HashMap::new();
+    let tasks: RefCell<HashMap<String, TaskHandle>> = RefCell::new(HashMap::new());
+    let mut disconnected_since = Instant::now();
+    let mut disconnected_with_tasks = false;
     unsafe {
         libc::signal(libc::SIGINT, stop as *const () as libc::sighandler_t);
         libc::signal(libc::SIGTERM, stop as *const () as libc::sighandler_t);
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
-    let result = endpoint.serve_tasks(&STOP, &store, |_, message| {
-        let finished: Vec<_> = tasks
-            .iter()
-            .filter(|(_, h)| h.is_finished())
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in finished {
-            if let Err(error) = tasks.remove(&id).unwrap().join() {
-                eprintln!("{id}: {error}");
-            }
-        }
-        match message {
-            Message::Submit {
-                task_id,
-                workspace,
-                operation,
-                ..
-            } => {
-                if Path::new(&workspace) != loaded.root {
-                    return Err("workspace does not match worker".into());
-                }
-                if tasks.len() >= 32 {
-                    return Err("worker task capacity reached".into());
-                }
-                let root = loaded.root.clone();
-                let id = task_id.clone();
-                let handle = runner
-                    .start_with(&task_id, &workspace, move |interaction| {
-                        execute(&root, &id, operation, interaction).map_err(|e| {
-                            let description = super::describe(&e);
-                            e.downcast::<rospm_core::Error>().unwrap_or_else(|_| {
-                                rospm_core::Error::Host(rospm_core::Message::text(description))
+    let result = endpoint.serve_tasks_while(
+        &STOP,
+        &store,
+        |_, message| {
+            let mut tasks = tasks.borrow_mut();
+            match message {
+                Message::Submit {
+                    task_id,
+                    workspace,
+                    operation,
+                    ..
+                } => {
+                    if Path::new(&workspace) != loaded.root {
+                        return Err("workspace does not match worker".into());
+                    }
+                    if tasks.len() >= 32 {
+                        return Err("worker task capacity reached".into());
+                    }
+                    let root = loaded.root.clone();
+                    let id = task_id.clone();
+                    let handle = runner
+                        .start_with(&task_id, &workspace, move |interaction| {
+                            execute(&root, &id, operation, interaction).map_err(|e| {
+                                let description = super::describe(&e);
+                                e.downcast::<rospm_core::Error>().unwrap_or_else(|_| {
+                                    rospm_core::Error::Host(rospm_core::Message::text(description))
+                                })
                             })
                         })
-                    })
-                    .map_err(|e| e.to_string())?;
-                tasks.insert(task_id, handle);
-            }
-            Message::Confirm {
-                task_id,
-                step,
-                response,
-            } => {
-                tasks
+                        .map_err(|e| e.to_string())?;
+                    tasks.insert(task_id, handle);
+                }
+                Message::Confirm {
+                    task_id,
+                    step,
+                    response,
+                } => {
+                    tasks
+                        .get(&task_id)
+                        .ok_or("task is not active")?
+                        .respond_at(step, response)
+                        .map_err(|e| e.to_string())?;
+                }
+                Message::Cancel { task_id } => tasks
                     .get(&task_id)
                     .ok_or("task is not active")?
-                    .respond_at(step, response)
-                    .map_err(|e| e.to_string())?;
+                    .cancel()
+                    .map_err(|e| e.to_string())?,
+                _ => return Err("unsupported request".into()),
             }
-            Message::Cancel { task_id } => tasks
-                .get(&task_id)
-                .ok_or("task is not active")?
-                .cancel()
-                .map_err(|e| e.to_string())?,
-            _ => return Err("unsupported request".into()),
-        }
-        Ok(())
-    });
+            Ok(())
+        },
+        |connected| {
+            let mut tasks = tasks.borrow_mut();
+            let finished: Vec<_> = tasks
+                .iter()
+                .filter(|(_, handle)| handle.is_finished())
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in finished {
+                if let Err(error) = tasks.remove(&id).unwrap().join() {
+                    eprintln!("{id}: {error}");
+                }
+            }
+            if connected {
+                disconnected_since = Instant::now();
+                disconnected_with_tasks = false;
+                true
+            } else if !tasks.is_empty() {
+                disconnected_with_tasks = true;
+                true
+            } else {
+                !disconnected_with_tasks && disconnected_since.elapsed() < auto_exit_timeout
+            }
+        },
+    );
+    let tasks = tasks.into_inner();
     for (id, handle) in &tasks {
         if let Err(error) = handle.cancel() {
             eprintln!("{id}: {error}");

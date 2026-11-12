@@ -25,12 +25,32 @@ impl SocketEndpoint {
         &self,
         stop: &AtomicBool,
         store: &TaskStore,
-        mut dispatch: impl FnMut(PeerIdentity, Message) -> Result<(), String>,
+        dispatch: impl FnMut(PeerIdentity, Message) -> Result<(), String>,
     ) -> io::Result<()> {
-        self.serve(stop, |peer, message| {
-            dispatch_persisted(store, peer, message, &mut dispatch)
-                .unwrap_or_else(|e| error("store_error", e))
-        })
+        self.serve_tasks_while(stop, store, dispatch, |_| true)
+    }
+
+    /// Like `serve_tasks`, with a lifecycle check after each transport poll.
+    /// `keep_running` receives whether any handshaken client remains connected.
+    /// It must return promptly; returning false ends the service without cancelling tasks.
+    pub fn serve_tasks_while(
+        &self,
+        stop: &AtomicBool,
+        store: &TaskStore,
+        mut dispatch: impl FnMut(PeerIdentity, Message) -> Result<(), String>,
+        mut keep_running: impl FnMut(bool) -> bool,
+    ) -> io::Result<()> {
+        self.listener.set_nonblocking(true)?;
+        let result = self.serve_loop(
+            stop,
+            &mut |peer, message| {
+                dispatch_persisted(store, peer, message, &mut dispatch)
+                    .unwrap_or_else(|e| error("store_error", e))
+            },
+            &mut keep_running,
+        );
+        self.listener.set_nonblocking(false)?;
+        result
     }
 
     /// Serve authenticated clients until `stop` is set. Disconnects only drop
@@ -46,7 +66,7 @@ impl SocketEndpoint {
         mut dispatch: impl FnMut(PeerIdentity, Message) -> Message,
     ) -> io::Result<()> {
         self.listener.set_nonblocking(true)?;
-        let result = self.serve_loop(stop, &mut dispatch);
+        let result = self.serve_loop(stop, &mut dispatch, &mut |_| true);
         self.listener.set_nonblocking(false)?;
         result
     }
@@ -55,6 +75,7 @@ impl SocketEndpoint {
         &self,
         stop: &AtomicBool,
         dispatch: &mut impl FnMut(PeerIdentity, Message) -> Message,
+        keep_running: &mut impl FnMut(bool) -> bool,
     ) -> io::Result<()> {
         let mut clients = Vec::new();
         while !stop.load(Ordering::Acquire) {
@@ -88,6 +109,9 @@ impl SocketEndpoint {
                 }
             }
             clients.retain_mut(|client| client.poll(dispatch).unwrap_or(false));
+            if !keep_running(clients.iter().any(|client| client.hello && !client.closing)) {
+                break;
+            }
             thread::sleep(Duration::from_millis(10));
         }
         Ok(())

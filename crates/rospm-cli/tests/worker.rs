@@ -4,7 +4,9 @@ use common::*;
 use serde_json::Value;
 use std::{
     fs,
+    io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
+    os::unix::net::UnixStream,
     path::PathBuf,
     process::{Child, Stdio},
     thread,
@@ -18,6 +20,9 @@ struct Worker {
 }
 impl Worker {
     fn new(name: &str) -> Self {
+        Self::with_timeout(name, None)
+    }
+    fn with_timeout(name: &str, timeout: Option<u64>) -> Self {
         let root = fixture(name);
         fs::write(
             root.join("rospm.toml"),
@@ -40,14 +45,21 @@ impl Worker {
             runtime,
             child: None,
         };
-        this.start();
+        this.start_with_timeout(timeout);
         this
     }
     fn start(&mut self) {
+        self.start_with_timeout(None);
+    }
+    fn start_with_timeout(&mut self, timeout: Option<u64>) {
+        let mut command = rospm();
+        command.arg("worker");
+        if let Some(timeout) = timeout {
+            command.args(["--auto-exit-timeout", &timeout.to_string()]);
+        }
         self.child = Some(
-            rospm()
+            command
                 .current_dir(&self.root)
-                .arg("worker")
                 .arg("--runtime")
                 .arg(&self.runtime)
                 .env(
@@ -75,6 +87,37 @@ impl Worker {
                 break;
             }
             assert!(Instant::now() < deadline, "startup timeout");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+    fn connect(&self) -> BufReader<UnixStream> {
+        let stream = UnixStream::connect(self.runtime.join("worker.sock")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut stream = BufReader::new(stream);
+        stream
+            .get_mut()
+            .write_all(b"{\"version\":1,\"type\":\"hello\",\"client\":\"test\"}\n")
+            .unwrap();
+        let mut reply = String::new();
+        stream.read_line(&mut reply).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply).unwrap()["type"],
+            "hello"
+        );
+        stream
+    }
+    fn wait_exit(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+                assert!(status.success());
+                assert!(!self.runtime.join("worker.sock").exists());
+                self.child.take();
+                return;
+            }
+            assert!(Instant::now() < deadline, "worker did not exit");
             thread::sleep(Duration::from_millis(20));
         }
     }
@@ -377,4 +420,87 @@ fn flat_workspace_reuses_project_lease_without_self_conflict() {
         .success());
     worker.ok(&["submit", "build", "--id", "flat"]);
     worker.wait("flat", "succeeded");
+}
+
+#[test]
+fn idle_disconnect_times_out_and_one_remaining_client_keeps_worker_alive() {
+    let mut worker = Worker::with_timeout("worker-idle-exit", Some(1));
+    let first = worker.connect();
+    let second = worker.connect();
+    drop(first);
+    thread::sleep(Duration::from_millis(1200));
+    assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    drop(second);
+    thread::sleep(Duration::from_millis(200));
+    assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    worker.wait_exit();
+}
+
+#[test]
+fn disconnected_tasks_finish_before_exit_including_failure() {
+    for (name, fail) in [
+        ("worker-exit-success", false),
+        ("worker-exit-failure", true),
+    ] {
+        // Success must exit promptly even before the default timeout; failure outlives its timeout.
+        let mut worker = Worker::with_timeout(name, if fail { Some(1) } else { None });
+        if fail {
+            fs::write(worker.root.join("bin/bash"), "#!/bin/sh\necho $$ > started\nwhile [ ! -f fast ]; do sleep 0.05; done\necho failed >&2\nexit 7\n").unwrap();
+        }
+        worker.ok(&["submit", "build", "--id", "task"]);
+        worker.wait_started();
+        thread::sleep(Duration::from_millis(1200));
+        assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        fs::write(worker.root.join("ws/fast"), "").unwrap();
+        worker.wait_exit();
+        assert_eq!(
+            worker.ok(&["status", "task"])["snapshot"]["state"],
+            if fail { "failed" } else { "succeeded" }
+        );
+        assert!(!worker.ok(&["logs", "task"])["entries"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[test]
+fn reconnect_clears_pending_exit_after_task_finishes() {
+    let mut worker = Worker::with_timeout("worker-exit-reconnect", Some(1));
+    worker.ok(&["submit", "build", "--id", "task"]);
+    worker.wait_started();
+    thread::sleep(Duration::from_millis(1200));
+    let client = worker.connect();
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    worker.wait("task", "succeeded");
+    thread::sleep(Duration::from_millis(1200));
+    assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    drop(client);
+    thread::sleep(Duration::from_millis(200));
+    assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    worker.wait_exit();
+}
+
+#[test]
+fn waiting_confirmation_is_not_idle_and_disconnect_does_not_approve() {
+    let mut worker = Worker::with_timeout("worker-exit-confirm", Some(1));
+    worker.ok(&["submit", "uninstall", "--id", "task"]);
+    worker.wait("task", "waiting_confirmation");
+    thread::sleep(Duration::from_millis(1200));
+    assert!(worker.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    let snapshot = worker.ok(&["status", "task"]);
+    assert_eq!(snapshot["snapshot"]["state"], "waiting_confirmation");
+    worker.ok(&["cancel", "task"]);
+    worker.wait_exit();
+    assert_eq!(
+        worker.ok(&["status", "task"])["snapshot"]["state"],
+        "cancelled"
+    );
+}
+
+#[test]
+fn idle_startup_without_hello_also_times_out() {
+    let mut worker = Worker::with_timeout("worker-exit-no-hello", Some(1));
+    let _unhandshaken = UnixStream::connect(worker.runtime.join("worker.sock")).unwrap();
+    worker.wait_exit();
 }

@@ -759,6 +759,7 @@ confirmation:
   directory_changed: "已审阅的目录发生变化，请重新审阅后再清理：%{path}"
 
 worker_cli:
+  auto_exit_timeout: "无客户端时空闲 worker 自动退出的秒数；活动任务先运行至结束"
   worker: "前台启动工作区 worker（SIGINT/SIGTERM 取消并等待任务退出）"
   task: "提交或控制 worker 任务；响应为协议 JSON"
   runtime: "worker 与客户端共用的私有 socket 目录"
