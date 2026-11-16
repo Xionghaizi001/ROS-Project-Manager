@@ -36,7 +36,7 @@ impl WorkspaceLock {
         runtime_dir: impl AsRef<Path>,
         workspace: impl AsRef<Path>,
     ) -> Result<Self, WorkspaceLockError> {
-        Self::open(runtime_dir, workspace, false)
+        Self::open(runtime_dir, workspace, false, libc::LOCK_EX)
             .map(|lock| lock.expect("blocking lock always returns a lease"))
     }
 
@@ -46,7 +46,20 @@ impl WorkspaceLock {
         runtime_dir: impl AsRef<Path>,
         workspace: impl AsRef<Path>,
     ) -> Result<Option<Self>, WorkspaceLockError> {
-        Self::open(runtime_dir, workspace, true)
+        Self::open(runtime_dir, workspace, true, libc::LOCK_EX)
+    }
+
+    /// Acquire a shared lease for read-only workspace use. Multiple readers
+    /// may run together, while a mutation lease still excludes them.
+    pub fn acquire_shared(workspace: impl AsRef<Path>) -> Result<Self, WorkspaceLockError> {
+        Self::open(mutation_runtime()?, workspace, false, libc::LOCK_SH)
+            .map(|lock| lock.expect("blocking lock always returns a lease"))
+    }
+
+    pub fn try_acquire_shared(
+        workspace: impl AsRef<Path>,
+    ) -> Result<Option<Self>, WorkspaceLockError> {
+        Self::open(mutation_runtime()?, workspace, true, libc::LOCK_SH)
     }
 
     /// A resource lease shared by every frontend and project for this user.
@@ -54,20 +67,7 @@ impl WorkspaceLock {
     pub fn try_acquire_mutation(
         workspace: impl AsRef<Path>,
     ) -> Result<Option<Self>, WorkspaceLockError> {
-        let uid = unsafe { libc::geteuid() };
-        let runtime = PathBuf::from(format!("/tmp/rospm-leases-{uid}"));
-        match fs::DirBuilder::new().mode(0o700).create(&runtime) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-        let metadata = fs::symlink_metadata(&runtime)?;
-        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
-            return Err(
-                io::Error::new(io::ErrorKind::PermissionDenied, "unsafe lease directory").into(),
-            );
-        }
-        Self::try_acquire(runtime, workspace)
+        Self::open(mutation_runtime()?, workspace, true, libc::LOCK_EX)
     }
 
     pub fn workspace(&self) -> &Path {
@@ -81,6 +81,7 @@ impl WorkspaceLock {
         runtime_dir: impl AsRef<Path>,
         workspace: impl AsRef<Path>,
         nonblocking: bool,
+        lock_type: libc::c_int,
     ) -> Result<Option<Self>, WorkspaceLockError> {
         let workspace = resolve_workspace(workspace.as_ref())?;
         let locks = runtime_dir.as_ref().join("workspace-locks");
@@ -96,7 +97,7 @@ impl WorkspaceLock {
             .write(true)
             .mode(0o600)
             .open(&path)?;
-        let mut flags = libc::LOCK_EX;
+        let mut flags = lock_type;
         if nonblocking {
             flags |= libc::LOCK_NB;
         }
@@ -114,6 +115,21 @@ impl WorkspaceLock {
             path,
         }))
     }
+}
+
+fn mutation_runtime() -> Result<PathBuf, WorkspaceLockError> {
+    let uid = unsafe { libc::geteuid() };
+    let runtime = PathBuf::from(format!("/tmp/rospm-leases-{uid}"));
+    match fs::DirBuilder::new().mode(0o700).create(&runtime) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(&runtime)?;
+    if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "unsafe lease directory").into());
+    }
+    Ok(runtime)
 }
 
 impl Drop for WorkspaceLock {
@@ -203,6 +219,19 @@ mod tests {
         assert!(WorkspaceLock::try_acquire(&root, &workspace)
             .unwrap()
             .is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_workspace_leases_allow_readers_and_block_mutation() {
+        let root = std::env::temp_dir().join(format!("rospm-shared-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let first = WorkspaceLock::acquire_shared(&root).unwrap();
+        assert!(WorkspaceLock::try_acquire_shared(&root).unwrap().is_some());
+        assert!(WorkspaceLock::try_acquire_mutation(&root).unwrap().is_none());
+        drop(first);
+        assert!(WorkspaceLock::try_acquire_mutation(&root).unwrap().is_some());
         let _ = fs::remove_dir_all(root);
     }
 

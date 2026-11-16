@@ -28,6 +28,7 @@ struct VerifyReport {
 /// `rospm verify`: compare `rospm.lock` with the host (spec §4, read-only).
 pub fn verify(global: &Global, venv: super::VenvArgs) -> Result<()> {
     let mut loaded = load(global)?;
+    let _read_leases = loaded.workspace_read_leases()?;
     venv.select_report(&mut loaded)?;
     let lock = loaded
         .load_lock()?

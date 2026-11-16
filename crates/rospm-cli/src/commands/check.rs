@@ -53,6 +53,7 @@ pub fn check(
             return Err(err);
         }
     };
+    let _read_leases = loaded.workspace_read_leases()?;
     venv.select_report(&mut loaded)?;
     let m = &loaded.manifest;
     let host = Host::probe();

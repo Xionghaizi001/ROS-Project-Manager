@@ -115,6 +115,27 @@ impl Loaded {
             .map(|path| mutation_lease(&path))
             .collect()
     }
+
+    /// Shared leases let read-only commands run together while waiting for
+    /// worker-owned mutations to finish.
+    fn workspace_read_leases(&self) -> Result<Vec<rospm_core::worker::WorkspaceLock>> {
+        let root = rospm_core::worker::resolve_workspace(&self.root)?;
+        let paths = self
+            .manifest
+            .workspaces
+            .values()
+            .map(|ws| rospm_core::worker::resolve_workspace(&self.root.join(&ws.path)))
+            .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
+        let mut leases = vec![rospm_core::worker::WorkspaceLock::acquire_shared(&root)?];
+        leases.extend(
+            paths
+                .into_iter()
+                .filter(|path| path != &root)
+                .map(rospm_core::worker::WorkspaceLock::acquire_shared)
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        );
+        Ok(leases)
+    }
 }
 
 fn locate(global: &Global) -> Result<PathBuf> {

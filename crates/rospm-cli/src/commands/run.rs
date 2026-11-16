@@ -18,6 +18,7 @@ pub fn run(
     args: Vec<String>,
 ) -> Result<()> {
     let mut loaded = super::load(global)?;
+    let _read_leases = loaded.workspace_read_leases()?;
     venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
