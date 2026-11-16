@@ -64,6 +64,7 @@ pub fn build(
         no_env_check,
         dry_run,
         global.json,
+        global.verbose,
     )
 }
 
@@ -86,6 +87,7 @@ pub(super) fn run_build(
     no_env_check: bool,
     dry_run: bool,
     json: bool,
+    verbose: bool,
 ) -> Result<()> {
     let ctx = context(loaded, host, false, None, false, mirror::OFFICIAL)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
@@ -94,7 +96,10 @@ pub(super) fn run_build(
     }
     let mut out = std::io::stdout().lock();
     let started = std::time::SystemTime::now();
-    let Err(err) = plan.execute(dry_run, &mut out) else {
+    let Err(err) = plan.execute_verbose(dry_run, verbose, &mut out) else {
+        if !dry_run {
+            writeln!(out, "{}", tr("cli.build.success"))?;
+        }
         out.flush()?;
         return Ok(());
     };
@@ -114,13 +119,14 @@ pub(super) fn run_build(
             writeln!(out, "# {}", tr("cli.build.clean_retry"))
                 .map_err(|e| Error::io("<stdout>", e))?;
             retry_started = std::time::SystemTime::now();
-            plan.perform(&mut out)
+            plan.perform_verbose(verbose, &mut out)
         },
     )
     .map_err(|error| build_failure(&plan, error, retry_started))?;
     if !retried {
         return Err(build_failure(&plan, err, started));
     }
+    writeln!(out, "{}", tr("cli.build.success"))?;
     out.flush()?;
     Ok(())
 }

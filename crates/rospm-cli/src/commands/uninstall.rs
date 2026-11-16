@@ -37,7 +37,7 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
         &plan,
         yes,
         &super::interaction::Terminal,
-        |plan| plan.perform(&mut out),
+        |plan| plan.perform_verbose(global.verbose, &mut out),
     )?;
     out.flush()?;
     Ok(())

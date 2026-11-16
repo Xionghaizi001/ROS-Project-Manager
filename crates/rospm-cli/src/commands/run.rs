@@ -16,6 +16,7 @@ pub fn run(
     interactive: bool,
     requested: Option<&str>,
     args: Vec<String>,
+    verbosity: u8,
 ) -> Result<()> {
     let mut loaded = super::load(global)?;
     let _read_leases = loaded.workspace_read_leases()?;
@@ -73,7 +74,8 @@ pub fn run(
             shell_quote(&target.name)
         ),
         TargetKind::Launch => format!(
-            "{ros2} launch {} {}",
+            "{ros2} launch{} {} {}",
+            if verbosity > 0 { " --debug" } else { "" },
             shell_quote(&target.package),
             shell_quote(&target.name)
         ),
@@ -85,6 +87,24 @@ pub fn run(
             .collect::<Vec<_>>()
             .join(" ")
     );
+    println!(
+        "{}",
+        rospm_core::msg!(
+            "cli.run.running",
+            package = &target.package,
+            name = &target.name
+        )
+    );
+    if verbosity > 0 {
+        println!(
+            "$ {}",
+            rospm_core::plan::Command::new("bash")
+                .args(["--noprofile", "--norc", "-c", &script])
+                .cwd(&loaded.root)
+                .render()
+        );
+    }
+    io::stdout().flush()?;
     let status = Command::new("bash")
         .args(["--noprofile", "--norc", "-c", &script])
         .current_dir(&loaded.root)

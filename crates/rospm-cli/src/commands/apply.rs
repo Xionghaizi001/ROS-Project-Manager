@@ -116,7 +116,7 @@ pub fn apply(
         );
     }
     let mut out = std::io::stdout().lock();
-    let result = plan.execute(dry_run, &mut out);
+    let result = plan.execute_verbose(dry_run, global.verbose, &mut out);
     out.flush()?;
     match result {
         Err(Error::CommandFailed { command, status }) if !dry_run && sources.is_official() => {
@@ -137,6 +137,7 @@ pub fn apply(
                 no_env_check,
                 dry_run,
                 global.json,
+                global.verbose,
             )
         }
         Ok(()) => Ok(()),

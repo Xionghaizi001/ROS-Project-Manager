@@ -28,7 +28,7 @@ cli:
   long_about: "rospm 用一份清单（rospm.toml）和一份锁文件（rospm.lock）封装 rosdep、vcstool、colcon、apt、pixi 与 docker。\n\n会修改系统的命令（apply、uninstall、build、export、import、deps install）总是先打印计划，并支持 --dry-run。"
   manifest: "rospm.toml 的路径（默认从当前目录逐级向上查找）"
   json: "在支持的命令上输出机器可读的 JSON"
-  verbose: "提高日志详细程度（-v、-vv）"
+  verbose: "显示完整执行命令并提高日志详细程度（-v、-vv）"
   lang: "输出语言：zh | en（覆盖 ROSPM_LANG 与系统语言环境）"
   help_flag: "显示帮助"
   version_flag: "显示版本"
@@ -133,6 +133,7 @@ cli:
     confirm: "按上面的计划继续？[y/N] "
     aborted: "已中止"
   build:
+    success: "编译成功"
     about: "按叠加顺序用 colcon 编译 workspace；失败时显示摘要和完整日志路径（仅摘要常见 C++ / Python 错误；未知错误请查看原始输出及 .rospm/log/build.log；--json 保证 stdout 为机器可读结果）[产出产物]"
     workspace: "只编译这个 workspace（其 underlay 必须已编译）"
     conda_env: "本次构建使用此 Conda 环境名称，覆盖 build.conda（与 --conda-prefix 互斥）"
@@ -142,6 +143,7 @@ cli:
     clean_confirm: "删除并重试构建？[y/N] "
     clean_retry: "已删除，重新构建"
   run:
+    running: "正在运行 %{package}/%{name}"
     about: "扫描项目并运行 ROS 包节点或 launch 文件"
     list: "列出可运行的节点和 launch 文件"
     interactive: "交互选择目标（Tab 补全名称）"
@@ -394,6 +396,8 @@ conda:
   python_conflict: "环境定义文件中的 Python 约束 %{found} 与 %{expected} 冲突；请省略文件中的 Python 约束，或与清单完全一致"
 
 plan:
+  running: "正在执行 %{program}"
+  conda: "正在准备／检查 Conda 环境"
   title: "计划：%{title}"
   write_file: "写入 %{path}（%{bytes} 字节）"
   write_file_sudo: "写入 %{path}（sudo）（%{bytes} 字节）"

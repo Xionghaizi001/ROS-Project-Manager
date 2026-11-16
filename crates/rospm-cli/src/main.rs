@@ -324,6 +324,7 @@ fn main() -> ExitCode {
     let cli = parse_cli();
     init_logging(cli.verbose);
     let global = Global {
+        verbose: cli.verbose > 0,
         manifest: cli.manifest,
         json: cli.json,
     };
@@ -436,7 +437,15 @@ fn main() -> ExitCode {
             interactive,
             target,
             args,
-        } => commands::run(&global, venv, list, interactive, target.as_deref(), args),
+        } => commands::run(
+            &global,
+            venv,
+            list,
+            interactive,
+            target.as_deref(),
+            args,
+            cli.verbose,
+        ),
         Cmd::Env { shell, venv } => commands::env(&global, shell, venv),
         Cmd::Shell { venv } => commands::shell(&global, venv),
         Cmd::Tui => rospm_tui::run(

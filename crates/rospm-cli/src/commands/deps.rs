@@ -117,7 +117,7 @@ pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
     let mut plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
     super::logging::commands(&mut plan, &loaded.root, "deps");
     let mut out = std::io::stdout().lock();
-    plan.execute(dry_run, &mut out)?;
+    plan.execute_verbose(dry_run, global.verbose, &mut out)?;
     out.flush()?;
     Ok(())
 }

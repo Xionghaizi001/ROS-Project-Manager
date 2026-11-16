@@ -5,21 +5,32 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 impl Plan {
-    /// Render the plan to `out`, then execute it unless `dry_run`.
+    /// Preview the plan for dry runs, or execute with concise step output.
     pub fn execute(&self, dry_run: bool, out: &mut dyn Write) -> Result<()> {
+        self.execute_verbose(dry_run, false, out)
+    }
+
+    /// Preview all details for dry runs; otherwise show only the current step.
+    pub fn execute_verbose(&self, dry_run: bool, verbose: bool, out: &mut dyn Write) -> Result<()> {
         let stdout = || PathBuf::from("<stdout>");
-        write!(out, "{}", self.render()).map_err(|e| Error::io(stdout(), e))?;
         if dry_run {
+            write!(out, "{}", self.render()).map_err(|e| Error::io(stdout(), e))?;
             writeln!(out, "# {}", msg!("plan.dry_run")).map_err(|e| Error::io(stdout(), e))?;
             return Ok(());
         }
-        self.perform(out)
+        writeln!(out, "# {}", self.title).map_err(|e| Error::io(stdout(), e))?;
+        self.perform_verbose(verbose, out)
     }
 
     /// Execute the steps without rendering first. Callers that need a
     /// confirmation between the rendered plan and execution use this.
     pub fn perform(&self, out: &mut dyn Write) -> Result<()> {
-        self.perform_inner(out, None)
+        self.perform_verbose(false, out)
+    }
+
+    /// Execute with optional full command echo, without a plan preview.
+    pub fn perform_verbose(&self, verbose: bool, out: &mut dyn Write) -> Result<()> {
+        self.perform_inner(out, None, verbose)
     }
 
     /// Execute with structured events and captured child output, without writing
@@ -36,7 +47,7 @@ impl Plan {
             total: self.steps.len(),
             error: None,
         });
-        let result = self.perform_inner(&mut std::io::sink(), Some((task, interaction)));
+        let result = self.perform_inner(&mut std::io::sink(), Some((task, interaction)), true);
         interaction.event(Event::Task {
             task,
             state: match &result {
@@ -54,6 +65,7 @@ impl Plan {
         &self,
         out: &mut dyn Write,
         observer: Option<(&str, &dyn Interaction)>,
+        verbose: bool,
     ) -> Result<()> {
         let checkpoint = |step| match observer {
             Some((task, interaction)) => crate::execution::checkpoint(task, step, interaction),
@@ -87,8 +99,17 @@ impl Plan {
             let result = (|| -> Result<()> {
                 match step {
                     Step::Conda(step) => {
-                        writeln!(out, "==> [{}] {}", i + 1, step.render())
-                            .map_err(|e| Error::io(stdout(), e))?;
+                        writeln!(
+                            out,
+                            "==> [{}] {}",
+                            i + 1,
+                            if verbose {
+                                step.render()
+                            } else {
+                                msg!("plan.conda").to_string()
+                            }
+                        )
+                        .map_err(|e| Error::io(stdout(), e))?;
                         step.perform_observed(out, execution.as_ref())?;
                     }
                     Step::Run(c) => {
@@ -101,8 +122,18 @@ impl Plan {
                                 ));
                             }
                         }
-                        writeln!(out, "==> [{}] {}", i + 1, c.render())
-                            .map_err(|e| Error::io(stdout(), e))?;
+                        writeln!(
+                            out,
+                            "==> [{}] {}",
+                            i + 1,
+                            if verbose {
+                                c.render()
+                            } else {
+                                msg!("plan.running", program = &c.program).to_string()
+                            }
+                        )
+                        .map_err(|e| Error::io(stdout(), e))?;
+                        out.flush().map_err(|e| Error::io(stdout(), e))?;
                         let status = match (&self.log, &c.log) {
                             (Some(path), Some(header)) => {
                                 if log.is_none() {
@@ -182,6 +213,9 @@ impl Plan {
                         fetch_key_observed(url, dest, fingerprint, execution.as_ref())?;
                     }
                     Step::Note(text) => {
+                        if !verbose && text.key_name() == Some("venv.install_command") {
+                            return Ok(());
+                        }
                         writeln!(out, "==> # {text}").map_err(|e| Error::io(stdout(), e))?;
                     }
                 }

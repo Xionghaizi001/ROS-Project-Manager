@@ -20,7 +20,9 @@ fn preview(dir: &Path, args: &[&str]) -> String {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    String::from_utf8(out.stdout).unwrap()
+    let output = String::from_utf8(out.stdout).unwrap();
+    assert!(!output.contains("Build succeeded"));
+    output
 }
 
 #[test]
@@ -483,6 +485,8 @@ exit 19
             }
             let out = command.output().unwrap();
             assert_eq!(out.status.code(), Some(1));
+            assert!(!String::from_utf8_lossy(&out.stdout).contains("Build succeeded"));
+            assert!(!String::from_utf8_lossy(&out.stdout).contains("编译成功"));
             let stderr = String::from_utf8_lossy(&out.stderr);
             if json {
                 let value: serde_json::Value = serde_json::from_slice(&out.stdout)
@@ -523,6 +527,29 @@ exit 19
             .replace("exit 19", "exit 0"),
     )
     .unwrap();
+    for (lang, success) in [("en", "Build succeeded"), ("zh", "编译成功")] {
+        for verbosity in [None, Some("-v"), Some("-vv")] {
+            let mut command = rospm();
+            command
+                .current_dir(&dir)
+                .env("PATH", &bin)
+                .env("CONDA_CALL", &call)
+                .env("FAKE_ENV", &environment)
+                .args(["--lang", lang, "build"]);
+            if let Some(flag) = verbosity {
+                command.arg(flag);
+            }
+            let out = command.output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.contains(success), "{stdout}");
+            assert_eq!(
+                stdout.contains("--no-capture-output"),
+                verbosity.is_some(),
+                "{stdout}"
+            );
+        }
+    }
     let out = rospm()
         .current_dir(&dir)
         .env("PATH", &bin)

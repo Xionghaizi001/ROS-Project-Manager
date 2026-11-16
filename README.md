@@ -77,6 +77,8 @@ rospm apply --dry-run --mirror tuna      # official / tuna / ustc / aliyun
 rospm uninstall --dry-run                # 先审阅卸载范围
 ```
 
+执行时默认仅回显当前步骤，`-v` 或 `-vv` 显示完整执行命令；子进程日志和错误照常输出。`build` 成功后显示“编译成功”。`--dry-run` 和删除操作的确认界面仍显示完整计划。
+
 `apply`、`build`、`deps install` 与 `uninstall` 支持 `--dry-run`。`apply` 拒绝与清单不匹配的 Ubuntu 版本；`uninstall` 还要求确认（或显式传 `--yes`），其范围包含清单发行版的 ROS 系统包，应先检查计划。无需默认使用 `sudo rospm`，系统步骤按需提权。
 
 构建与 `apply --build` 的完整输出保存在 `.rospm/log/build.log`，每次执行覆盖。失败摘要用于辅助排查，不替代原始日志；`--json` 提供机器可读结果，构建计划和子进程输出转到 stderr。

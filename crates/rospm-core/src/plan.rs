@@ -1,8 +1,8 @@
 //! Execution plans.
 //!
 //! Every command in the "mutates the system / produces artifacts" class
-//! (decision #2) first builds a [`Plan`], renders it, and only then executes it.
-//! `--dry-run` stops after rendering.
+//! (decision #2) first builds a [`Plan`], then executes it with step progress.
+//! `--dry-run` renders the complete plan without executing it.
 
 use std::fmt::Write as _;
 use std::io::Write;

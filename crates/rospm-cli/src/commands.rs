@@ -50,6 +50,7 @@ pub use uninstall::uninstall;
 pub use verify::verify;
 
 pub struct Global {
+    pub verbose: bool,
     pub manifest: Option<PathBuf>,
     pub json: bool,
 }

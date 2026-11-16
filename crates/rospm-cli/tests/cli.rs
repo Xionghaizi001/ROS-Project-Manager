@@ -749,3 +749,48 @@ fn venv_install_requires_explicit_selection_and_input() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn run_echoes_full_command_only_when_verbose() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture("run-output");
+    fs::write(
+        dir.join("rospm.toml"),
+        include_str!("../../rospm-core/tests/fixtures/minimal.toml"),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("ws/install/my_pkg/lib/my_pkg")).unwrap();
+    fs::write(dir.join("ws/install/setup.bash"), "").unwrap();
+    let node = dir.join("ws/install/my_pkg/lib/my_pkg/talker");
+    fs::write(&node, "").unwrap();
+    fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(bin.join("bash"), "#!/bin/sh\nprintf 'node-output\\n'\n").unwrap();
+    fs::set_permissions(bin.join("bash"), fs::Permissions::from_mode(0o755)).unwrap();
+    for verbosity in [None, Some("-v"), Some("-vv")] {
+        let mut command = rospm();
+        command.current_dir(&dir).env("PATH", &bin);
+        if let Some(flag) = verbosity {
+            command.arg(flag);
+        }
+        let out = command
+            .args(["run", "my_pkg/talker", "--", "argument with spaces"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("Running my_pkg/talker"), "{stdout}");
+        assert!(stdout.contains("node-output"), "{stdout}");
+        assert_eq!(
+            stdout.contains("argument with spaces"),
+            verbosity.is_some(),
+            "{stdout}"
+        );
+        assert_eq!(
+            stdout.contains("--noprofile"),
+            verbosity.is_some(),
+            "{stdout}"
+        );
+    }
+}

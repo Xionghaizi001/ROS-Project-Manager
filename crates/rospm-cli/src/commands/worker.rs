@@ -320,6 +320,7 @@ fn execute(
     interaction: &dyn Interaction,
 ) -> Result<()> {
     let loaded = load(&Global {
+        verbose: false,
         manifest: Some(root.join(MANIFEST_FILE)),
         json: true,
     })?;

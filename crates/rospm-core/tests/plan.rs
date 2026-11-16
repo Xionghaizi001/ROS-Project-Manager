@@ -1662,3 +1662,24 @@ fn venv_install_preview_requires_target_and_regular_input_without_writes() {
     .is_err());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn command_details_are_opt_in_but_dry_runs_remain_complete() {
+    let mut plan = rospm_core::plan::Plan::new(rospm_core::Message::text("Test step"));
+    plan.run(rospm_core::plan::Command::new("true").arg("private-command-argument"));
+    plan.note(rospm_core::msg!(
+        "venv.install_command",
+        command = "pip-command-detail"
+    ));
+    for (dry_run, verbose) in [(false, false), (false, true), (true, false)] {
+        let mut out = Vec::new();
+        plan.execute_verbose(dry_run, verbose, &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("true"), "{output}");
+        assert_eq!(
+            output.contains("private-command-argument"),
+            dry_run || verbose
+        );
+        assert_eq!(output.contains("pip-command-detail"), dry_run || verbose);
+    }
+}
