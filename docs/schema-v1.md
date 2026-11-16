@@ -64,6 +64,8 @@ Pixi / Docker、editor / export 字段是已存在的格式预留，冻结它们
 - `lock` 解析本机平台，合并符合清单与共享快照约束的其它平台 apt / Conda 记录。两种架构共享 `provider.native` 快照字段，不能暗示每平台独立快照。apt 按平台（x86_64 在前）、包名排序；Conda 按平台排序；源码按 workspace 拓扑与 repos 顺序。仅生成时间不同不重写锁。
 - 外部 Conda 的名称 / prefix 不锁包，不生成 `conda[]`。受管环境的 `lock_sha256` 是显式锁文件原文摘要，`definition_sha256` 是规范化 YAML 的摘要（移除输入 name / prefix，按清单处理 channels / Python 并添加 nodefaults）。具体构建由 `conda/definition.rs` 定义并由 Conda 测试覆盖；重放必须核对定义和显式锁摘要，不允许重新求解兜底。
 
+P4.4 的项目 venv 不新增 v1 字段：`dependencies.pip` 仍只记录，`pip[]` 不作为 venv 安装或重放锁。后续持久化环境 / 外部锁引用须单独评审 schema 版本；具体边界见 [Python 依赖规则](p44-python-dependencies.md)。
+
 ## 验证入口
 
 `cargo test -p rospm-core --test schema_v1` 固定完整字段往返、缺省值、原文哈希、版本 / 类型 / 平台拒绝及每层固定表的未知字段拒绝。现有 `tests/manifest.rs`、`tests/lock.rs`、`tests/lock_shared_snapshot.rs`、Conda 核心测试与 CLI 的 lock / apply_locked / verify 测试覆盖业务约束。fixtures 的 URL、提交及包摘要是合成数据，只供离线解析测试，不作为安装或真实快照验收证据。

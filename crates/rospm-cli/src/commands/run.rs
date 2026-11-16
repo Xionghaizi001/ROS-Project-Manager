@@ -17,8 +17,7 @@ pub fn run(
     requested: Option<&str>,
     args: Vec<String>,
 ) -> Result<()> {
-    let (mut loaded, _leases) =
-        super::load_mutating(global, list || (requested.is_none() && !interactive))?;
+    let mut loaded = super::load(global)?;
     venv.select(&mut loaded)?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
