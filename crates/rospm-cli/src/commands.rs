@@ -49,10 +49,48 @@ pub use run::run;
 pub use uninstall::uninstall;
 pub use verify::verify;
 
-pub struct Global {
+pub struct Global<'a> {
     pub verbose: bool,
     pub manifest: Option<PathBuf>,
     pub json: bool,
+    pub interaction: Option<&'a dyn rospm_core::execution::Interaction>,
+    pub task: Option<&'a str>,
+    pub interactive: bool,
+}
+
+impl Global<'_> {
+    fn interaction(&self) -> &dyn rospm_core::execution::Interaction {
+        self.interaction.unwrap_or(&interaction::Terminal)
+    }
+
+    fn perform_plan(
+        &self,
+        plan: &rospm_core::plan::Plan,
+        out: &mut dyn std::io::Write,
+    ) -> rospm_core::Result<()> {
+        match self.interaction {
+            Some(interaction) => plan.perform_observed(
+                self.task.expect("worker task"),
+                interaction,
+                self.verbose,
+                out,
+            ),
+            None => plan.perform_verbose(self.verbose, out),
+        }
+    }
+
+    fn execute_plan(
+        &self,
+        plan: &rospm_core::plan::Plan,
+        dry_run: bool,
+        out: &mut dyn std::io::Write,
+    ) -> rospm_core::Result<()> {
+        if dry_run || self.interaction.is_none() {
+            return plan.execute_verbose(dry_run, self.verbose, out);
+        }
+        writeln!(out, "# {}", plan.title).map_err(|e| Error::io("<stdout>", e))?;
+        self.perform_plan(plan, out)
+    }
 }
 
 struct Loaded {
@@ -88,7 +126,11 @@ fn load_mutating(
     if dry_run {
         return Ok((loaded, Vec::new()));
     }
-    let mut leases = vec![mutation_lease(&loaded.root)?];
+    let mut leases = if global.interaction.is_some() {
+        Vec::new()
+    } else {
+        vec![mutation_lease(&loaded.root)?]
+    };
     // A previous operation may have changed the manifest before we got the lock.
     let loaded = load(global)?;
     leases.extend(loaded.workspace_leases()?);

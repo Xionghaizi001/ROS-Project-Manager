@@ -232,7 +232,13 @@ fn apply_distro_conflicts_with_locked_and_dry_run_keeps_manifest() {
 
 #[test]
 fn uninstall_refuses_without_a_terminal_and_dry_run_only_prints() {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/minimal/rospm.toml");
+    let dir = fixture("uninstall-noninteractive");
+    let example = dir.join("rospm.toml");
+    fs::write(
+        &example,
+        include_str!("../../rospm-core/tests/fixtures/minimal.toml"),
+    )
+    .unwrap();
     let manifest = example.to_string_lossy().into_owned();
     // Planning needs dpkg-query; on hosts without it the command must fail
     // cleanly rather than guess.

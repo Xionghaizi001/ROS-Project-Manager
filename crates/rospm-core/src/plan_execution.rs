@@ -41,13 +41,24 @@ impl Plan {
     /// may signal explicitly interruptible commands; completed changes are not
     /// rolled back. Ordinary command failures take precedence over cancellation.
     pub fn perform_with(&self, task: &str, interaction: &dyn Interaction) -> Result<()> {
+        self.perform_observed(task, interaction, true, &mut std::io::sink())
+    }
+
+    /// Structured execution with the caller's progress writer and verbosity.
+    pub fn perform_observed(
+        &self,
+        task: &str,
+        interaction: &dyn Interaction,
+        verbose: bool,
+        out: &mut dyn Write,
+    ) -> Result<()> {
         interaction.event(Event::Task {
             task,
             state: State::Running,
             total: self.steps.len(),
             error: None,
         });
-        let result = self.perform_inner(&mut std::io::sink(), Some((task, interaction)), true);
+        let result = self.perform_inner(out, Some((task, interaction)), verbose);
         interaction.event(Event::Task {
             task,
             state: match &result {

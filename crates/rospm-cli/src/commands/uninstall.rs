@@ -33,11 +33,11 @@ pub fn uninstall(global: &Global, keep_source: bool, yes: bool, dry_run: bool) -
         return Ok(());
     }
     rospm_core::confirmation::uninstall(
-        &super::interaction::task_id(),
+        global.task.unwrap_or(&super::interaction::task_id()),
         &plan,
         yes,
-        &super::interaction::Terminal,
-        |plan| plan.perform_verbose(global.verbose, &mut out),
+        global.interaction(),
+        |plan| global.perform_plan(plan, &mut out),
     )?;
     out.flush()?;
     Ok(())

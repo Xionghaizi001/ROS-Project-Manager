@@ -221,7 +221,7 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
         let error = String::from_utf8(out.stderr).unwrap();
         assert!(error.contains(expected), "{error}");
     }
-    assert!(!dir.join(".rospm").exists() && !user.exists());
+    assert!(dir.join(".rospm/worker/tasks").is_dir() && !user.exists());
     assert!(!dir.join("ws/build").exists());
     let build = preview(&nested, &[]);
     assert!(build.contains(&format!(
@@ -252,7 +252,8 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
     assert!(!preview.contains("explicit.lock"), "{preview}");
     assert_eq!(fs::read_to_string(dir.join("rospm.toml")).unwrap(), locked);
     assert!(!dir.join("locks").exists());
-    assert!(!dir.join(".rospm").exists());
+    assert!(dir.join(".rospm/worker/tasks").is_dir());
+    assert!(!dir.join(".rospm/conda").exists());
 }
 
 #[cfg(unix)]
@@ -284,7 +285,7 @@ fn missing_existing_environment_has_a_localized_error_and_never_runs_build() {
             error.contains(expected) && error.contains("-n absent"),
             "{error}"
         );
-        assert!(!error.contains("99"));
+        assert!(!error.contains("status 99"));
     }
     let out = rospm()
         .current_dir(&dir)
@@ -294,7 +295,7 @@ fn missing_existing_environment_has_a_localized_error_and_never_runs_build() {
         .unwrap();
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("Conda could not be started"));
-    assert!(!dir.join(".rospm").exists());
+    assert!(dir.join(".rospm/worker/tasks").is_dir());
     assert!(!dir.join("ws/build").exists());
 }
 

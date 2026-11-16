@@ -237,6 +237,7 @@ fn cli_build_cancel_reconnect_deduplicate_and_restart() {
         .unwrap()
         .is_empty());
     worker.start();
+    let _connection = worker.connect();
     assert_eq!(worker.ok(&["status", "build-1"])["snapshot"], cancelled);
     worker.ok(&["submit", "build", "--id", "build-1"]);
     assert_eq!(worker.ok(&["status", "build-1"])["snapshot"], cancelled);
@@ -324,8 +325,6 @@ fn worker_excludes_sync_mutations_and_shared_workspace_but_not_other_projects() 
         vec!["deps", "install"],
         vec!["venv", "create"],
         vec!["lock"],
-        vec!["run", "--interactive"],
-        vec!["shell"],
         vec!["init", "--force"],
     ] {
         let out = worker.command(&args).output().unwrap();
@@ -349,6 +348,7 @@ fn worker_excludes_sync_mutations_and_shared_workspace_but_not_other_projects() 
     );
 
     let other = Worker::new("worker-independent");
+    let _connection = other.connect();
     fs::write(other.root.join("ws/fast"), "").unwrap();
     assert!(other.command(&["build"]).output().unwrap().status.success());
     other.ok(&["submit", "build", "--id", "independent"]);
@@ -503,4 +503,172 @@ fn idle_startup_without_hello_also_times_out() {
     let mut worker = Worker::with_timeout("worker-exit-no-hello", Some(1));
     let _unhandshaken = UnixStream::connect(worker.runtime.join("worker.sock")).unwrap();
     worker.wait_exit();
+}
+
+#[test]
+fn synchronous_cli_detaches_and_preserves_arguments_logs_and_live_ownership() {
+    let mut worker = Worker::new("sync-detach");
+    worker.stop();
+    fs::write(worker.root.join("bin/bash"), "#!/bin/sh\ncase \"$*\" in *'colcon build'*) printf '%s' \"$*\" > argv; echo $$ > started; echo out; echo err >&2; while [ ! -f fast ]; do sleep 0.05; done;; *) exec /bin/bash \"$@\";; esac\n").unwrap();
+    let mut cli = worker
+        .command(&["--json", "build", "--", "--packages-select", "my_pkg"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = worker.wait_started();
+    let store =
+        rospm_core::worker::TaskStore::open(worker.root.join(".rospm/worker/tasks")).unwrap();
+    let id = fs::read_dir(worker.root.join(".rospm/worker/tasks"))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .find(|entry| entry.file_type().unwrap().is_dir())
+        .unwrap()
+        .file_name()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(fs::read_to_string(worker.root.join("ws/argv"))
+        .unwrap()
+        .contains("--packages-select my_pkg"));
+    cli.kill().unwrap();
+    cli.wait().unwrap();
+    assert!(store
+        .recover_active_tasks(rospm_core::worker::RecoveryCause::HostFailure)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store.load_snapshot(&id).unwrap().state,
+        rospm_core::worker::TaskState::Running
+    );
+    assert_eq!(worker.wait_started(), pid);
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let snapshot = store.load_snapshot(&id).unwrap();
+        if snapshot.state.is_terminal() {
+            assert_eq!(snapshot.state, rospm_core::worker::TaskState::Succeeded);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    let entries = store.read_logs(&id, 0, 256).unwrap();
+    let stdout: String = entries
+        .iter()
+        .filter(|entry| entry.stream == rospm_core::worker::LogStream::Stdout)
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout).unwrap(),
+        serde_json::json!({"ok": true})
+    );
+    let stderr: String = entries
+        .iter()
+        .filter(|entry| entry.stream == rospm_core::worker::LogStream::Stderr)
+        .map(|entry| entry.text.as_str())
+        .collect();
+    assert!(stderr.contains("out") && stderr.contains("err"));
+    let runtime = PathBuf::from(format!("/tmp/rospm-cli-{}-{id}", unsafe {
+        libc::geteuid()
+    }));
+    while runtime.exists() {
+        assert!(Instant::now() < deadline, "detached worker did not exit");
+        thread::sleep(Duration::from_millis(20));
+    }
+    let out = worker
+        .command(&[
+            "task",
+            "--runtime",
+            runtime.to_str().unwrap(),
+            "status",
+            &id,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(json(&out)["snapshot"]["state"], "succeeded");
+}
+
+#[test]
+fn synchronous_confirmation_survives_disconnect_and_can_be_cancelled() {
+    use std::os::fd::FromRawFd;
+    let mut worker = Worker::new("sync-confirm-disconnect");
+    worker.stop();
+    let (mut master, mut slave) = (-1, -1);
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    let _master = unsafe { std::fs::File::from_raw_fd(master) };
+    let slave = unsafe { std::fs::File::from_raw_fd(slave) };
+    let mut cli = worker
+        .command(&["uninstall", "--keep-source"])
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let store =
+        rospm_core::worker::TaskStore::open(worker.root.join(".rospm/worker/tasks")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let id = loop {
+        let waiting = fs::read_dir(worker.root.join(".rospm/worker/tasks"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .find_map(|entry| {
+                let id = entry.file_name().to_str()?.to_owned();
+                let snapshot = store.load_snapshot(&id).ok()?;
+                (snapshot.state == rospm_core::worker::TaskState::WaitingConfirmation).then_some(id)
+            });
+        if let Some(id) = waiting {
+            break id;
+        }
+        assert!(Instant::now() < deadline, "confirmation did not appear");
+        thread::sleep(Duration::from_millis(20));
+    };
+    cli.kill().unwrap();
+    cli.wait().unwrap();
+    assert_eq!(
+        store.load_snapshot(&id).unwrap().state,
+        rospm_core::worker::TaskState::WaitingConfirmation
+    );
+    let entries = store.read_logs(&id, 0, 256).unwrap();
+    let request: Value = entries
+        .iter()
+        .find_map(|entry| {
+            let value: Value = serde_json::from_str(&entry.text).ok()?;
+            (value["operation"]["kind"] == "uninstall").then_some(value)
+        })
+        .unwrap();
+    assert_eq!(request["task"], id);
+    assert!(request.to_string().contains("ros-jazzy-demo"));
+    let runtime = format!("/tmp/rospm-cli-{}-{id}", unsafe { libc::geteuid() });
+    let out = worker
+        .command(&["task", "--runtime", &runtime, "cancel", &id])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    loop {
+        let snapshot = store.load_snapshot(&id).unwrap();
+        if snapshot.state.is_terminal() {
+            assert_eq!(snapshot.state, rospm_core::worker::TaskState::Cancelled);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!store
+        .read_logs(&id, 0, 256)
+        .unwrap()
+        .iter()
+        .any(|entry| entry.text.contains("unexpected-sudo")));
 }

@@ -7,7 +7,7 @@ pub fn create(global: &Global, uv: bool, dry_run: bool) -> Result<()> {
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let plan = rospm_core::venv::plan_create(&ctx, uv)?;
-    plan.execute_verbose(dry_run, global.verbose, &mut std::io::stdout().lock())?;
+    global.execute_plan(&plan, dry_run, &mut std::io::stdout().lock())?;
     Ok(())
 }
 
@@ -24,6 +24,6 @@ pub fn install(
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let plan = rospm_core::venv::plan_install(&ctx, &requirements, uv)?;
-    plan.execute_verbose(dry_run, global.verbose, &mut std::io::stdout().lock())?;
+    global.execute_plan(&plan, dry_run, &mut std::io::stdout().lock())?;
     Ok(())
 }

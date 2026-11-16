@@ -97,7 +97,7 @@ pub fn apply(
             .as_ref()
             .and_then(|l| l.provider.native.as_ref())
             .is_some_and(|n| n.ros_snapshot.is_some());
-        select_sources(&loaded, requested, ros_snapshot)?
+        select_sources(global, &loaded, requested, ros_snapshot)?
     };
     let ctx = context(&loaded, &host, locked, lock.as_ref(), offline, sources)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_apply(&ctx)?;
@@ -116,7 +116,7 @@ pub fn apply(
         );
     }
     let mut out = std::io::stdout().lock();
-    let result = plan.execute_verbose(dry_run, global.verbose, &mut out);
+    let result = global.execute_plan(&plan, dry_run, &mut out);
     out.flush()?;
     match result {
         Err(Error::CommandFailed { command, status }) if !dry_run && sources.is_official() => {
@@ -129,16 +129,7 @@ pub fn apply(
         Ok(()) if build => {
             // Re-probe: apply may just have installed ROS or Miniforge.
             let host = if dry_run { host } else { Host::probe() };
-            run_build(
-                &loaded,
-                &host,
-                None,
-                true,
-                no_env_check,
-                dry_run,
-                global.json,
-                global.verbose,
-            )
+            run_build(&loaded, &host, None, true, no_env_check, dry_run, global)
         }
         Ok(()) => Ok(()),
     }
@@ -283,6 +274,7 @@ fn probe_snapshot(base: &str, codename: &str) -> bool {
 /// (decision #17). Never switches silently: a mirror is used only when the
 /// user passed `--mirror` / `ROSPM_MIRROR` or confirmed the prompt.
 fn select_sources(
+    global: &Global,
     loaded: &Loaded,
     requested: Option<Mirror>,
     ros_snapshot: bool,
@@ -377,11 +369,11 @@ fn select_sources(
                 msg!("cli.apply.mirrors_answered", names = names.join(", "))
             );
             let best = rospm_core::confirmation::switch_mirror(
-                &super::interaction::task_id(),
+                global.task.unwrap_or(&super::interaction::task_id()),
                 best,
                 &candidates,
                 ros_snapshot,
-                &super::interaction::Terminal,
+                global.interaction(),
             )?;
             println!(
                 "{}",

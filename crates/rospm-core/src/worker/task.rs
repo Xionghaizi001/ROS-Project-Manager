@@ -172,6 +172,11 @@ impl TaskRunner {
     where
         F: FnOnce(&dyn Interaction) -> Result<()> + Send + 'static,
     {
+        let owner = self
+            .store
+            .try_own_task(&task_id)
+            .map_err(store_error)?
+            .ok_or_else(|| Error::Host(UserMessage::text("task already owned")))?;
         let snapshot = self.store.load_snapshot(&task_id).map_err(store_error)?;
         if snapshot.state != TaskState::Pending {
             return Err(Error::Host(UserMessage::text("task is not pending")));
@@ -187,6 +192,7 @@ impl TaskRunner {
         let runtime = self.runtime_dir.clone();
         let handle_task_id = task_id.clone();
         let thread = thread::spawn(move || {
+            let _owner = owner;
             let interaction = WorkerInteraction {
                 store: store.clone(),
                 task_id: task_id.clone(),

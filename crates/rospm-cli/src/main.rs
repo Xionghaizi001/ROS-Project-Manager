@@ -50,6 +50,13 @@ struct Cli {
     #[arg(short = 'V', long, action = ArgAction::Version, help = tr("cli.version_flag"))]
     version: Option<bool>,
 
+    #[arg(long, hide = true)]
+    internal_worker_runtime: Option<PathBuf>,
+    #[arg(long, hide = true)]
+    internal_worker_task: Option<String>,
+    #[arg(long, hide = true)]
+    internal_worker_interactive: bool,
+
     #[command(subcommand)]
     command: Cmd,
 }
@@ -265,6 +272,36 @@ enum DepsCmd {
     },
 }
 
+impl Cmd {
+    fn mutation(&self) -> Option<rospm_core::worker::Operation> {
+        use rospm_core::worker::Operation;
+        match self {
+            Self::Build { dry_run: false, .. } => Some(Operation::Build),
+            Self::Apply {
+                dry_run: false,
+                locked,
+                ..
+            } => Some(if *locked {
+                Operation::ApplyLocked
+            } else {
+                Operation::Apply
+            }),
+            Self::Uninstall { dry_run: false, .. } => Some(Operation::Uninstall),
+            Self::Deps {
+                command: DepsCmd::Install { dry_run: false },
+            } => Some(Operation::DepsInstall),
+            Self::Venv {
+                command: VenvCmd::Create { dry_run: false, .. },
+            } => Some(Operation::VenvCreate),
+            Self::Venv {
+                command: VenvCmd::Install { dry_run: false, .. },
+            } => Some(Operation::VenvInstall),
+            Self::Lock { .. } => Some(Operation::Lock),
+            _ => None,
+        }
+    }
+}
+
 /// clap hard-codes its section headings ("Usage:", "Commands:", …); a
 /// per-command template supplies translated ones instead. Applied
 /// recursively because templates are not inherited by subcommands.
@@ -323,10 +360,55 @@ fn main() -> ExitCode {
     i18n::install(i18n::from_process());
     let cli = parse_cli();
     init_logging(cli.verbose);
+    let json = cli.json;
+    if cli.command.mutation().is_some() {
+        let result = if cli.internal_worker_runtime.is_some() {
+            commands::worker::synchronous::serve(cli)
+        } else {
+            commands::worker::synchronous::submit(&cli)
+        };
+        return match result {
+            Ok(code) => code,
+            Err(error) => {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"ok": false, "error": commands::describe(&error)})
+                    );
+                } else {
+                    eprintln!("{}", commands::describe(&error));
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if execute_cli(
+        cli,
+        None,
+        None,
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+    )
+    .is_ok()
+    {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn execute_cli(
+    cli: Cli,
+    interaction: Option<&dyn rospm_core::execution::Interaction>,
+    task: Option<&str>,
+    interactive: bool,
+) -> rospm_core::Result<()> {
     let global = Global {
         verbose: cli.verbose > 0,
         manifest: cli.manifest,
         json: cli.json,
+        interaction,
+        task,
+        interactive,
     };
 
     let build_json = global.json
@@ -339,7 +421,7 @@ fn main() -> ExitCode {
             Ok(guard) => Some(guard),
             Err(err) => {
                 eprintln!("{err}");
-                return ExitCode::FAILURE;
+                return Err(rospm_core::Error::io("<stdout>", err));
             }
         }
     } else {
@@ -525,7 +607,7 @@ fn main() -> ExitCode {
             if build_json {
                 println!("{}", serde_json::json!({"ok": true}));
             }
-            ExitCode::SUCCESS
+            Ok(())
         }
         Err(err) => {
             let text = commands::describe(&err);
@@ -542,7 +624,14 @@ fn main() -> ExitCode {
                 }
                 eprintln!("{}", rospm_core::msg!("cli.err.prefix", text = text));
             }
-            ExitCode::FAILURE
+            if err
+                .downcast_ref::<rospm_core::Error>()
+                .is_some_and(|e| matches!(e, rospm_core::Error::Cancelled))
+            {
+                Err(rospm_core::Error::Cancelled)
+            } else {
+                Err(rospm_core::Error::Host(rospm_core::Message::text(text)))
+            }
         }
     }
 }
@@ -566,6 +655,60 @@ fn init_logging(verbosity: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutation_routes_cover_all_entries_and_leave_previews_local() {
+        for args in [
+            vec!["build", "ws", "--venv-path", "../env", "--no-env-check"],
+            vec![
+                "apply",
+                "--locked",
+                "--build",
+                "--offline",
+                "--mirror",
+                "tuna",
+            ],
+            vec!["uninstall", "--keep-source", "--yes"],
+            vec!["deps", "install"],
+            vec!["venv", "create", "--uv"],
+            vec![
+                "venv",
+                "install",
+                "--venv",
+                "-r",
+                "../requirements.txt",
+                "--uv",
+            ],
+        ] {
+            let mut argv = vec!["rospm", "--manifest", "../custom.toml", "--json"];
+            argv.extend(args);
+            assert!(Cli::try_parse_from(&argv)
+                .unwrap()
+                .command
+                .mutation()
+                .is_some());
+            argv.push("--dry-run");
+            assert!(Cli::try_parse_from(&argv)
+                .unwrap()
+                .command
+                .mutation()
+                .is_none());
+        }
+        assert!(
+            Cli::try_parse_from(["rospm", "lock", "--platform", "linux-aarch64"])
+                .unwrap()
+                .command
+                .mutation()
+                .is_some()
+        );
+        for command in ["check", "verify", "run", "env", "doctor"] {
+            assert!(Cli::try_parse_from(["rospm", command])
+                .unwrap()
+                .command
+                .mutation()
+                .is_none());
+        }
+    }
 
     #[test]
     fn worker_auto_exit_timeout_defaults_and_validates() {

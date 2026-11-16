@@ -768,6 +768,7 @@ confirmation:
   directory_changed: "The reviewed directory changed; review it again before cleaning: %{path}"
 
 worker_cli:
+  follow: "Task %{id}; inspect with: rospm task --runtime %{runtime} status/logs %{id}"
   auto_exit_timeout: "Seconds without clients before an idle worker exits; active tasks finish first"
   worker: "Run a workspace worker in the foreground (SIGINT/SIGTERM drains tasks)"
   task: "Submit or control worker tasks; replies are protocol JSON"

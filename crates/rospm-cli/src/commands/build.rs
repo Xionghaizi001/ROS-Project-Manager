@@ -1,6 +1,6 @@
 //! Build command implementation.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
@@ -63,8 +63,7 @@ pub fn build(
         false,
         no_env_check,
         dry_run,
-        global.json,
-        global.verbose,
+        global,
     )
 }
 
@@ -86,8 +85,7 @@ pub(super) fn run_build(
     verify: bool,
     no_env_check: bool,
     dry_run: bool,
-    json: bool,
-    verbose: bool,
+    global: &Global,
 ) -> Result<()> {
     let ctx = context(loaded, host, false, None, false, mirror::OFFICIAL)?;
     let mut plan = provider::for_manifest(&loaded.manifest).plan_build(&ctx, workspace, verify)?;
@@ -96,7 +94,7 @@ pub(super) fn run_build(
     }
     let mut out = std::io::stdout().lock();
     let started = std::time::SystemTime::now();
-    let Err(err) = plan.execute_verbose(dry_run, verbose, &mut out) else {
+    let Err(err) = global.execute_plan(&plan, dry_run, &mut out) else {
         if !dry_run {
             writeln!(out, "{}", tr("cli.build.success"))?;
         }
@@ -104,22 +102,22 @@ pub(super) fn run_build(
         return Ok(());
     };
     out.flush()?;
-    if json || !std::io::stdin().is_terminal() {
+    if global.json || !global.interactive {
         return Err(build_failure(&plan, err, started));
     }
     let mut retry_started = started;
     let retried = rospm_core::confirmation::retry_build(
-        &super::interaction::task_id(),
+        global.task.unwrap_or(&super::interaction::task_id()),
         &plan,
         &ctx,
         workspace,
         &err,
-        &super::interaction::Terminal,
+        global.interaction(),
         |plan| {
             writeln!(out, "# {}", tr("cli.build.clean_retry"))
                 .map_err(|e| Error::io("<stdout>", e))?;
             retry_started = std::time::SystemTime::now();
-            plan.perform_verbose(verbose, &mut out)
+            global.perform_plan(plan, &mut out)
         },
     )
     .map_err(|error| build_failure(&plan, error, retry_started))?;

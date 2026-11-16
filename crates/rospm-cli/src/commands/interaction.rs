@@ -20,7 +20,7 @@ impl Interaction for Terminal {
     }
 }
 
-fn prompt(request: &Confirmation, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+pub(super) fn render(request: &Confirmation, out: &mut dyn Write) -> Result<()> {
     (|| -> io::Result<()> {
         if let Some(message) = &request.explanation {
             writeln!(out, "{message}")?;
@@ -48,7 +48,11 @@ fn prompt(request: &Confirmation, input: &mut dyn BufRead, out: &mut dyn Write) 
         write!(out, "{}", request.prompt)?;
         out.flush()
     })()
-    .map_err(|e| Error::io("<stderr>", e))?;
+    .map_err(|e| Error::io("<stderr>", e))
+}
+
+fn prompt(request: &Confirmation, input: &mut dyn BufRead, out: &mut dyn Write) -> Result<bool> {
+    render(request, out)?;
     let mut answer = String::new();
     let read = input
         .read_line(&mut answer)

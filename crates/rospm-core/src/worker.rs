@@ -119,6 +119,10 @@ pub enum Operation {
     Check,
     Verify,
     Deps,
+    DepsInstall,
+    VenvCreate,
+    VenvInstall,
+    Lock,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

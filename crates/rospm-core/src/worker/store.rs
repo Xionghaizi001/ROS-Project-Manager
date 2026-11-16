@@ -288,6 +288,29 @@ impl TaskStore {
         Ok(serde_json::from_slice(&fs::read(snapshot)?)?)
     }
 
+    // A store may be shared by independent CLI workers. Recovery must not
+    // invalidate a task still owned by a live process.
+    pub(super) fn try_own_task(&self, id: &str) -> Result<Option<File>, StoreError> {
+        self.files(id)?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(self.root.join(id).join("owner.lock"))?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(Some(file));
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            Ok(None)
+        } else {
+            Err(error.into())
+        }
+    }
+
     /// Resolve active tasks left by a previous worker instance. This only
     /// changes durable state; it never starts a command or replays a plan.
     /// UI and SSH disconnects must not call this method: their tasks continue
@@ -303,6 +326,9 @@ impl TaskStore {
                 continue;
             }
             let id = item.file_name().to_string_lossy().into_owned();
+            let Some(_owner) = self.try_own_task(&id)? else {
+                continue;
+            };
             let mut snapshot = match self.load_snapshot(&id) {
                 Ok(snapshot) => snapshot,
                 Err(StoreError::MissingTask) => continue,

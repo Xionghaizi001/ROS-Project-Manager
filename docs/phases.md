@@ -43,20 +43,18 @@
 
 ---
 
-## Phase 4.4 — 项目 `.venv` 支持
+## Phase 4.4 — Worker 化修改任务与工作区并发协调
 
-状态：**已完成；x86_64 Humble / Jazzy 隔离闭环与 Jazzy 双架构 QEMU 验收通过**。
+状态：**进行中**
 
-目标：在 native 提供者下支持项目级 Python 虚拟环境，让 Python 依赖、ROS 构建与节点运行使用一致的 `.venv` 环境，复用现有环境选择与执行流程。
+目标：将构建、安装、卸载、依赖处理和环境创建等修改任务统一交给 worker 执行，使终端或 TUI 断开后任务仍能继续；同时为 `run`、`check`、`verify` 等只读命令增加共享工作区租约，避免读取正在修改的构建产物，并允许多个节点同时运行。
 
-- [x] 定义项目 `.venv` 的发现、显式选择与创建规则（标准库 venv / 可选 uv）；使用与 apt 版 ROS 匹配的系统 Python，明确 `--system-site-packages` 的使用边界，已有环境不覆盖、不自动删除。
-- [x] 将 `.venv` 接入 `env` / `shell` / `build` / `run` 的共享环境组装；明确与 Conda 的互斥及选择优先级，避免同时激活两种环境，系统安装步骤保持原有系统环境。
-- [x] 明确项目 Python 依赖的声明、安装及锁定重放边界；安装使用目标环境的 `python -m pip` 或显式指定目标解释器的 `uv pip`，不写入系统 Python；明确 `pyproject.toml` / `uv.lock` 的支持边界；涉及 manifest / lock 新字段时遵守 schema v1 兼容约束。
-- [x] 扩展 `check` / `verify` / `doctor` 与构建诊断，报告环境缺失、Python 版本或 ROS ABI 不匹配、旧构建缓存引用其他环境等问题；清理构建目录继续复用现有确认流程。
-- [x] 补齐显式 `.venv` 创建入口：标准库默认、uv 可选；已有路径不覆盖、并发排他创建、失败保留现场、项目写锁及 dry-run 无副作用；同步帮助、文档与共享 core 接口。
-- [x] 补齐目标环境依赖安装入口，补充环境选择与冲突回归测试，在隔离环境完成创建、依赖安装、ROS Python 包导入、构建及节点运行的完整验收；同步命令帮助、README 与 spec，并为后续 TUI 提供共享接口。
-- [x] QEMU 干净系统实例专项验收：Ubuntu 24.04/Jazzy 的 x86_64（KVM）与 aarch64（TCG）均通过 pip / uv 创建、安装、构建、节点运行，以及 Bash / PTY shell、诊断正负与旧缓存保护；通过后删除实例，保留基础镜像和证据。
-- **产出**：native 项目可明确选择 `.venv`，完成依赖安装、构建和运行闭环；不污染系统 Python，不破坏现有 Conda 工作流，支持范围与锁定限制有验收记录。
+- [x] 复用现有 `TaskRunner`、任务快照、日志和 Unix socket 通信，确认 worker 持有工作区独占租约覆盖整个修改任务生命周期。
+- [x] 增加用户范围的共享工作区租约；只读命令等待修改任务完成，多个只读命令之间仍可并行。
+- [ ] 将同步 `build`、`apply`、`uninstall`、`deps install`、`venv create/install` 和 `lock` 入口统一提交到 worker，保留现有参数、计划确认、退出码和 JSON 输出语义。
+- [ ] 为 CLI 提供按需启动或连接 worker 的最小流程：提交任务后显示任务 ID，断开后可通过 `status` / `logs` 查询，不自动重复提交副作用任务。
+- [ ] 覆盖 worker 与同步入口、多个只读命令、共享 workspace、取消与异常断开场景；验证构建期间 `run` 不会读取半成品。
+- **产出**：所有修改工作由 worker 持有统一租约并可断连续跑；只读命令与修改任务安全协调，多个 ROS 节点可并行启动。
 
 ---
 

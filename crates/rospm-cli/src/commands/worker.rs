@@ -1,4 +1,5 @@
 //! Explicit worker lifecycle; clients may disconnect without ending tasks.
+pub mod synchronous;
 use super::{context, load, Global};
 use crate::i18n::tr;
 use anyhow::{bail, Context as _, Result};
@@ -323,6 +324,9 @@ fn execute(
         verbose: false,
         manifest: Some(root.join(MANIFEST_FILE)),
         json: true,
+        interaction: None,
+        task: None,
+        interactive: false,
     })?;
     let _leases = loaded.workspace_leases()?;
     let locked = operation == Operation::ApplyLocked;
@@ -342,6 +346,10 @@ fn execute(
     )?;
     let provider = provider::for_manifest(&loaded.manifest);
     let plan = match operation {
+        Operation::DepsInstall
+        | Operation::VenvCreate
+        | Operation::VenvInstall
+        | Operation::Lock => bail!("operation requires the synchronous CLI entry"),
         Operation::Apply | Operation::ApplyLocked => provider.plan_apply(&ctx)?,
         Operation::Build => provider.plan_build(&ctx, None, false)?,
         Operation::Uninstall => {
