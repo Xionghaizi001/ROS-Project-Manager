@@ -569,9 +569,7 @@ fn synchronous_cli_detaches_and_preserves_arguments_logs_and_live_ownership() {
         .map(|entry| entry.text.as_str())
         .collect();
     assert!(stderr.contains("out") && stderr.contains("err"));
-    let runtime = PathBuf::from(format!("/tmp/rospm-cli-{}-{id}", unsafe {
-        libc::geteuid()
-    }));
+    let runtime = worker.root.join(".rospm/worker/runtime");
     while runtime.exists() {
         assert!(Instant::now() < deadline, "detached worker did not exit");
         thread::sleep(Duration::from_millis(20));
@@ -651,7 +649,11 @@ fn synchronous_confirmation_survives_disconnect_and_can_be_cancelled() {
         .unwrap();
     assert_eq!(request["task"], id);
     assert!(request.to_string().contains("ros-jazzy-demo"));
-    let runtime = format!("/tmp/rospm-cli-{}-{id}", unsafe { libc::geteuid() });
+    let runtime = worker
+        .root
+        .join(".rospm/worker/runtime")
+        .to_string_lossy()
+        .into_owned();
     let out = worker
         .command(&["task", "--runtime", &runtime, "cancel", &id])
         .output()

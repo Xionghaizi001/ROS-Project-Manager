@@ -27,50 +27,69 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
         let _workspaces = loaded.workspace_leases()?;
     }
     let id = super::super::interaction::task_id();
-    let runtime = std::path::PathBuf::from(format!("/tmp/rospm-cli-{}-{id}", unsafe {
-        libc::geteuid()
-    }));
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .arg("--internal-worker-runtime")
-        .arg(&runtime)
-        .arg("--internal-worker-task")
-        .arg(&id);
-    if global.interactive {
-        command.arg("--internal-worker-interactive");
-    }
-    command.args(std::env::args_os().skip(1));
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // No terminal or parent-owned output pipe survives in the worker.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(io::Error::last_os_error());
+    // A stable project-local runtime lets separate CLI invocations reconnect to
+    // the same worker. The task ID is still unique, so reconnecting cannot
+    // replay a side-effecting submission.
+    let runtime = loaded.root.join(".rospm/worker/runtime");
+    let stream = match connect(&runtime) {
+        Ok(stream) => stream,
+        Err(error) if is_missing_worker(&error) => {
+            let socket = runtime.join("worker.sock");
+            if let Ok(metadata) = std::fs::symlink_metadata(&socket) {
+                anyhow::ensure!(
+                    metadata.file_type().is_socket(),
+                    "worker socket path is not a socket"
+                );
+                // A refused connection means the old listener is gone. Remove
+                // only that stale socket; an active worker was already returned
+                // by `connect` above.
+                std::fs::remove_file(socket)?;
             }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let stream = loop {
-        match connect(&runtime) {
-            Ok(stream) => break stream,
-            Err(error) => {
-                if let Some(status) = child.try_wait()? {
-                    bail!("worker startup failed ({status}): {error}");
-                }
-                if Instant::now() >= deadline {
-                    // Nothing has been submitted yet.
-                    child.kill()?;
-                    child.wait()?;
-                    return Err(error);
-                }
-                thread::sleep(Duration::from_millis(20));
+            let mut command = Command::new(std::env::current_exe()?);
+            command
+                .arg("--internal-worker-runtime")
+                .arg(&runtime)
+                .arg("--internal-worker-task")
+                .arg(&id);
+            if global.interactive {
+                command.arg("--internal-worker-interactive");
             }
+            command.args(std::env::args_os().skip(1));
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // No terminal or parent-owned output pipe survives in the worker.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut spawned = command.spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let stream = loop {
+                match connect(&runtime) {
+                    Ok(stream) => break stream,
+                    Err(error) => {
+                        if let Some(status) = spawned.try_wait()? {
+                            bail!("worker startup failed ({status}): {error}");
+                        }
+                        if Instant::now() >= deadline {
+                            // Nothing has been submitted yet.
+                            spawned.kill()?;
+                            spawned.wait()?;
+                            return Err(error);
+                        }
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                }
+            };
+            stream
         }
+        Err(error) => return Err(error),
     };
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
@@ -190,6 +209,15 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn is_missing_worker(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+        )
+    })
 }
 
 pub(crate) fn serve(cli: Cli) -> Result<ExitCode> {
