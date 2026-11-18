@@ -52,6 +52,7 @@ fn print_deps_environment(r: &EnvReport) {
 /// `rospm deps check`: rosdep keys of every workspace versus the installed set.
 pub fn deps_check(global: &Global) -> Result<()> {
     let loaded = load(global)?;
+    let _read_leases = loaded.workspace_read_leases()?;
     let host = Host::probe();
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let report = provider::for_manifest(&loaded.manifest).probe_deps(&ctx)?;

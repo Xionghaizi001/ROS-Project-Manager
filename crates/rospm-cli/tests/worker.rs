@@ -423,6 +423,56 @@ fn flat_workspace_reuses_project_lease_without_self_conflict() {
 }
 
 #[test]
+fn read_only_run_waits_for_build_and_multiple_readers_share_workspace() {
+    let mut worker = Worker::new("worker-readers");
+    worker.stop();
+    fs::write(
+        worker.root.join("bin/bash"),
+        "#!/bin/sh\ncase \"$*\" in *'colcon build'*) mkdir -p install; : > install/setup.bash; echo $$ > started; while [ ! -f fast ]; do sleep 0.05 & wait; done; mkdir -p install/my_pkg/lib/my_pkg; printf '#!/bin/sh\\n' > install/my_pkg/lib/my_pkg/talker; chmod +x install/my_pkg/lib/my_pkg/talker;; *) exec /bin/bash \"$@\";; esac\n",
+    )
+    .unwrap();
+    let mut build = worker
+        .command(&["build"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    worker.wait_started();
+
+    let mut readers = (0..2)
+        .map(|_| {
+            worker
+                .command(&["run", "--list"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    thread::sleep(Duration::from_millis(200));
+    assert!(readers
+        .iter_mut()
+        .all(|reader| reader.try_wait().unwrap().is_none()));
+    assert!(worker.root.join("ws/install/setup.bash").is_file());
+    assert!(!worker
+        .root
+        .join("ws/install/my_pkg/lib/my_pkg/talker")
+        .exists());
+
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    assert!(build.wait().unwrap().success());
+    for reader in readers {
+        let output = reader.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("my_pkg/talker"));
+    }
+}
+
+#[test]
 fn idle_disconnect_times_out_and_one_remaining_client_keeps_worker_alive() {
     let mut worker = Worker::with_timeout("worker-idle-exit", Some(1));
     let first = worker.connect();
