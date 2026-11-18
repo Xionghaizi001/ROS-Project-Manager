@@ -73,18 +73,18 @@ pub(crate) fn draw(
     frame.render_widget(
         Paragraph::new(if ros_page {
             format!(
-                "i {}   PgUp/PgDn   r {}   l {}   Esc ↩",
-                text.tabs[1], text.refresh, text.logs
+                "i {}   PgUp/PgDn   r {}   l {}   {}   Esc ↩",
+                text.tabs[1], text.refresh, text.logs, text.mouse_help
             )
         } else if selected == 1 {
             format!(
-                "Enter › ROS   ←→ / Tab   r {}   {}",
-                text.refresh, text.quit
+                "Enter › ROS   ←→ / Tab   r {}   {}   {}",
+                text.refresh, text.mouse_help, text.quit
             )
         } else {
             format!(
-                "←→ / Tab   PgUp/PgDn   j/k {}   r {}   l {}   {}",
-                text.workspace, text.refresh, text.logs, text.quit
+                "←→ / Tab   PgUp/PgDn   j/k {}   r {}   l {}   {}   {}",
+                text.workspace, text.refresh, text.logs, text.mouse_help, text.quit
             )
         })
         .style(Style::default().fg(Color::Gray)),

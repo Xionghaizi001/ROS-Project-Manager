@@ -566,6 +566,7 @@ fn execute_cli(
                 details: tr("cli.tui.details"),
                 manifest_search: tr("cli.tui.manifest_search"),
                 quit: tr("cli.tui.quit"),
+                mouse_help: tr("cli.tui.mouse_help"),
                 non_terminal: tr("cli.tui.non_terminal"),
                 actions: tr("cli.tui.actions"),
                 check: tr("cli.tui.check"),
