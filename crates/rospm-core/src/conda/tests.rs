@@ -952,6 +952,39 @@ fn missing_conda_is_bootstrapped_once_and_then_used_by_apply_and_build() {
 }
 
 #[test]
+fn standalone_conda_installation_reuses_available_tools_and_never_creates_an_environment() {
+    let project = Project::new();
+    let platform = Some(Platform::LinuxX86_64);
+    let host = project.host();
+    let available = ToolInstallation::probe_with(&host, platform, &Fake::default());
+    assert!(available.render().contains("conda.on_path"));
+
+    let fake = Fake {
+        path_conda: Some("conda 4.12.0"),
+        ..Fake::default()
+    };
+    let ToolInstallation::Needed(mut bootstrap) =
+        ToolInstallation::probe_with(&host, platform, &fake)
+    else {
+        panic!("old Conda on PATH should require Miniforge");
+    };
+    assert!(!host.data_dir.exists() && !host.cache_dir.exists());
+    let pinned_digest = bootstrap.sha256;
+    let fake_digest = digest(INSTALLER);
+    bootstrap.sha256 = Box::leak(fake_digest.into_boxed_str());
+    let mut out = Vec::new();
+    bootstrap.install(&mut out, &fake).unwrap();
+    bootstrap.install(&mut out, &fake).unwrap();
+    assert_eq!((fake.downloads.get(), fake.installs.get()), (1, 1));
+    assert!(fake.creates.borrow().is_empty());
+
+    let ready = format!("{}.ready", bootstrap.root.display());
+    fs::write(ready, pinned_digest).unwrap();
+    let installed = ToolInstallation::probe_with(&host, platform, &fake);
+    assert!(installed.render().contains("conda.installed"));
+}
+
+#[test]
 fn incompatible_conda_bootstraps_for_apply_but_build_only_reports() {
     let project = Project::new();
     let config = project.managed();
@@ -995,8 +1028,7 @@ fn digest_mismatch_is_refused_and_bad_cache_is_replaced() {
     );
     assert!(error.contains(&digest(INSTALLER)));
     assert_eq!(tampered.installs.get(), 0);
-    let downloads = bootstrap.cache.parent().unwrap();
-    assert_eq!(fs::read_dir(downloads).unwrap().count(), 0);
+    assert!(!bootstrap.cache.exists() && !bootstrap.cache.with_extension("sh.part").exists());
     assert!(!bootstrap.root.exists() && !project.0.join(".rospm").exists());
 
     // A cached file with another digest is downloaded again, not run.

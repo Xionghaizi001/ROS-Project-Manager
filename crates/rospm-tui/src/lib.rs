@@ -23,6 +23,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use rospm_core::conda::ToolInstallation;
 use std::time::{Duration, Instant};
 
 /// Localized strings supplied by the CLI layer.
@@ -80,6 +81,23 @@ pub struct Text {
     pub status_info: String,
 }
 
+enum InstallPage {
+    Ros,
+    Conda(ToolInstallation),
+}
+
+impl InstallPage {
+    fn can_install(&self) -> bool {
+        matches!(self, Self::Ros | Self::Conda(ToolInstallation::Needed(_)))
+    }
+
+    fn refresh(&mut self) {
+        if let Self::Conda(tool) = self {
+            *tool = ToolInstallation::probe();
+        }
+    }
+}
+
 pub fn run(
     manifest_path: Option<&Path>,
     text: Text,
@@ -119,9 +137,9 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
 ) -> Result<()> {
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
-    let mut ros_page = false;
+    let mut install_page: Option<InstallPage> = None;
     let mut scroll = 0usize;
-    let mut focused_row = first_selectable(dashboard.as_ref(), text, selected, ros_page);
+    let mut focused_row = first_selectable(dashboard.as_ref(), text, selected, None);
     let mut last_runtime_refresh = Instant::now();
     loop {
         if last_runtime_refresh.elapsed() >= Duration::from_secs(1) {
@@ -141,11 +159,10 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
             }
             view::draw(
                 frame,
-                manifest,
                 dashboard.as_ref(),
                 text,
                 selected,
-                ros_page,
+                install_page.as_ref(),
                 &mut scroll,
                 focused_row,
             )
@@ -188,13 +205,15 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                     let page_size =
                         usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
                     match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') if ros_page => {
-                            ros_page = false;
+                        KeyCode::Esc | KeyCode::Char('q') if install_page.is_some() => {
+                            install_page = None;
                             scroll = 0;
                             focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
+                                first_selectable(dashboard.as_ref(), text, selected, None);
                         }
-                        KeyCode::Char('i') if ros_page => {
+                        KeyCode::Char('i')
+                            if install_page.as_ref().is_some_and(InstallPage::can_install) =>
+                        {
                             disable_raw_mode()?;
                             execute!(
                                 terminal.backend_mut(),
@@ -202,7 +221,14 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 LeaveAlternateScreen
                             )?;
                             terminal.show_cursor()?;
-                            if let Err(error) = install_ros() {
+                            let result = match install_page.as_ref() {
+                                Some(InstallPage::Ros) => install_ros(),
+                                Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
+                                    bootstrap.perform(&mut io::stdout()).map_err(Into::into)
+                                }
+                                _ => unreachable!(),
+                            };
+                            if let Err(error) = result {
                                 eprintln!("{error:#}");
                             }
                             println!("Enter ↩");
@@ -216,13 +242,17 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             )?;
                             terminal.hide_cursor()?;
                             terminal.clear()?;
+                            if let Some(page) = &mut install_page {
+                                page.refresh();
+                            }
                             dashboard = dashboard::Dashboard::load(manifest, text)?;
+                            scroll = 0;
                             last_runtime_refresh = Instant::now();
                         }
                         KeyCode::Enter => {
                             activate(
                                 &mut browser,
-                                &mut ros_page,
+                                &mut install_page,
                                 &mut focused_row,
                                 &mut scroll,
                                 dashboard.as_ref(),
@@ -231,17 +261,17 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             );
                         }
                         KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
-                        KeyCode::Left | KeyCode::BackTab if !ros_page => {
+                        KeyCode::Left | KeyCode::BackTab if install_page.is_none() => {
                             selected = (selected + 7) % 8;
                             scroll = 0;
                             focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
+                                first_selectable(dashboard.as_ref(), text, selected, None);
                         }
-                        KeyCode::Right | KeyCode::Tab if !ros_page => {
+                        KeyCode::Right | KeyCode::Tab if install_page.is_none() => {
                             selected = (selected + 1) % 8;
                             scroll = 0;
                             focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
+                                first_selectable(dashboard.as_ref(), text, selected, None);
                         }
                         KeyCode::PageDown => scroll = scroll.saturating_add(page_size),
                         KeyCode::PageUp => scroll = scroll.saturating_sub(page_size),
@@ -253,7 +283,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 dashboard.as_ref(),
                                 text,
                                 selected,
-                                ros_page,
+                                install_page.as_ref(),
                                 true,
                             ) {
                                 scroll = scroll.saturating_add(1);
@@ -266,17 +296,24 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 dashboard.as_ref(),
                                 text,
                                 selected,
-                                ros_page,
+                                install_page.as_ref(),
                                 false,
                             ) {
                                 scroll = scroll.saturating_sub(1);
                             }
                         }
                         KeyCode::Char('r') => {
+                            if let Some(page) = &mut install_page {
+                                page.refresh();
+                            }
                             dashboard = dashboard::Dashboard::load(manifest, text)?;
                             scroll = 0;
-                            focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
+                            focused_row = first_selectable(
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                install_page.as_ref(),
+                            );
                             last_runtime_refresh = Instant::now();
                         }
                         _ => {}
@@ -309,13 +346,18 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(3),
                         MouseEventKind::Down(MouseButton::Left) if mouse.row == 1 => {
                             selected = tab_at(mouse.column, size.width);
-                            ros_page = false;
+                            install_page = None;
                             scroll = 0;
                             focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
+                                first_selectable(dashboard.as_ref(), text, selected, None);
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
-                            let rows = pages::rows(dashboard.as_ref(), text, selected, ros_page);
+                            let rows = pages::rows(
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                install_page.as_ref(),
+                            );
                             if let Some(index) = table::row_at(
                                 view::table_area(ratatui::layout::Rect::new(
                                     0,
@@ -347,9 +389,9 @@ fn first_selectable(
     dashboard: Option<&dashboard::Dashboard>,
     text: &Text,
     tab: usize,
-    ros_page: bool,
+    install_page: Option<&InstallPage>,
 ) -> Option<usize> {
-    pages::rows(dashboard, text, tab, ros_page)
+    pages::rows(dashboard, text, tab, install_page)
         .iter()
         .position(|row| row.selectable)
 }
@@ -360,10 +402,10 @@ fn move_focus(
     dashboard: Option<&dashboard::Dashboard>,
     text: &Text,
     tab: usize,
-    ros_page: bool,
+    install_page: Option<&InstallPage>,
     forward: bool,
 ) -> bool {
-    let rows = pages::rows(dashboard, text, tab, ros_page);
+    let rows = pages::rows(dashboard, text, tab, install_page);
     let selectable: Vec<_> = rows
         .iter()
         .enumerate()
@@ -387,30 +429,32 @@ fn move_focus(
 
 fn activate(
     browser: &mut Option<logs::Browser>,
-    ros_page: &mut bool,
+    install_page: &mut Option<InstallPage>,
     focused: &mut Option<usize>,
     scroll: &mut usize,
     dashboard: Option<&dashboard::Dashboard>,
     text: &Text,
     selected: usize,
 ) {
-    let Some(dashboard) = dashboard else {
-        return;
-    };
-    let rows = pages::rows(Some(dashboard), text, selected, *ros_page);
+    let rows = pages::rows(dashboard, text, selected, install_page.as_ref());
     let Some(index) = *focused else {
         return;
     };
     if !rows.get(index).is_some_and(|row| row.selectable) {
         return;
     }
-    if selected == 1 && !*ros_page && index == 0 {
-        *ros_page = true;
-        *focused = first_selectable(Some(dashboard), text, selected, true);
-        *scroll = 0;
-    } else {
-        *browser = Some(logs::Browser::new(&dashboard.root, selected));
-    }
+    *install_page = match (selected, install_page.as_ref(), index) {
+        (1, None, 0) => Some(InstallPage::Ros),
+        (1, None, 1) => Some(InstallPage::Conda(ToolInstallation::probe())),
+        _ => {
+            if let Some(dashboard) = dashboard {
+                *browser = Some(logs::Browser::new(&dashboard.root, selected));
+            }
+            return;
+        }
+    };
+    *focused = first_selectable(dashboard, text, selected, install_page.as_ref());
+    *scroll = 0;
 }
 
 fn tab_at(column: u16, width: u16) -> usize {

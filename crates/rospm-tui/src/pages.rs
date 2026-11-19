@@ -1,6 +1,6 @@
 //! Page data stays independent of terminal drawing and column widths.
-use crate::{dashboard::Dashboard, Text};
-use rospm_core::probe::Status;
+use crate::{dashboard::Dashboard, InstallPage, Text};
+use rospm_core::{conda::ToolInstallation, probe::Status};
 
 pub(crate) struct Entry {
     pub cells: [String; 3],
@@ -32,9 +32,32 @@ pub(crate) fn rows(
     dashboard: Option<&Dashboard>,
     text: &Text,
     tab: usize,
-    ros_page: bool,
+    install_page: Option<&InstallPage>,
 ) -> Vec<Entry> {
+    if let Some(InstallPage::Conda(tool)) = install_page {
+        let mut row = Entry::value(&text.conda, tool.render());
+        let (label, status) = if matches!(tool, ToolInstallation::Ready(_)) {
+            (&text.status_ok, Status::Ok)
+        } else {
+            (&text.not_installed, Status::Missing)
+        };
+        row.cells[1] = label.clone();
+        row.status = Some(status);
+        return vec![row];
+    }
     let mut rows = Vec::new();
+    if tab == 1 && install_page.is_none() {
+        rows.push(if dashboard.is_some() {
+            Entry::link("ROS")
+        } else {
+            Entry::value("ROS", &text.manifest_search)
+        });
+        let mut conda = Entry::link(&text.conda);
+        if let Some(dashboard) = dashboard {
+            conda.cells[2].clone_from(&dashboard.conda);
+        }
+        rows.push(conda);
+    }
     let Some(d) = dashboard else {
         if tab == 0 {
             rows.push(Entry::value(&text.manifest_label, &text.manifest_search));
@@ -75,7 +98,7 @@ pub(crate) fn rows(
                 rows.push(Entry::value(&text.status, error));
             }
         }
-        1 if ros_page => {
+        1 if matches!(install_page, Some(InstallPage::Ros)) => {
             rows.push(Entry::value(
                 "ROS",
                 if d.ros_installed {
@@ -91,12 +114,9 @@ pub(crate) fn rows(
             rows.push(Entry::link(&text.logs));
         }
         1 => {
-            rows.push(Entry::link("ROS"));
-            for name in ["Conda", &text.components] {
-                let mut row = Entry::value(name, if name == "Conda" { &d.conda } else { "" });
-                row.cells[1] = text.not_connected.clone();
-                rows.push(row);
-            }
+            let mut components = Entry::value(&text.components, "");
+            components.cells[1] = text.not_connected.clone();
+            rows.push(components);
             section(&mut rows, &text.deps_result, &d.deps);
             for item in &d.deps_report.items {
                 let status = match item.status {
@@ -171,24 +191,28 @@ mod tests {
             root: ".".into(),
         };
         let text = Text {
+            conda: "Conda".into(),
             not_installed: "missing".into(),
             status_ok: "ok".into(),
             ..Text::default()
         };
-        let parent = rows(Some(&dashboard), &text, 1, false);
+        let parent = rows(Some(&dashboard), &text, 1, None);
         assert_eq!(parent[0].cells, ["ROS", "", ""]);
         assert!(parent[0].selectable);
         assert!(!parent.iter().any(|row| row.cells[2] == "install ROS"));
-        let child = rows(Some(&dashboard), &text, 1, true);
+        let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Ros));
         assert_eq!(child[0].cells[2], "missing");
         assert!(!child[0].selectable);
         assert!(child.iter().any(|row| row.cells[2] == "install ROS"));
         assert!(!child.iter().any(|row| row.cells[2] == "remove ROS"));
         assert!(child.last().is_some_and(|row| row.selectable));
         dashboard.ros_installed = true;
-        let child = rows(Some(&dashboard), &text, 1, true);
+        let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Ros));
         assert_eq!(child[0].cells[2], "ok");
         assert!(child.iter().any(|row| row.cells[2] == "remove ROS"));
-        assert!(rows(None, &text, 1, false).is_empty());
+        let parent = rows(None, &text, 1, None);
+        assert!(!parent[0].selectable);
+        assert_eq!(parent[1].cells[0], "Conda");
+        assert!(parent[1].selectable);
     }
 }

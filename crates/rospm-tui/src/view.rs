@@ -1,19 +1,17 @@
 //! Three horizontal regions: project title, workflow tabs, and page content.
-use crate::{dashboard::Dashboard, pages, Text};
+use crate::{dashboard::Dashboard, pages, InstallPage, Text};
 use ratatui::{
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
 };
-use std::path::Path;
 
 pub(crate) fn draw(
     frame: &mut ratatui::Frame<'_>,
-    _manifest: Option<&Path>,
     dashboard: Option<&Dashboard>,
     text: &Text,
     selected: usize,
-    ros_page: bool,
+    install_page: Option<&InstallPage>,
     scroll: &mut usize,
     focused: Option<usize>,
 ) {
@@ -60,22 +58,34 @@ pub(crate) fn draw(
         );
     }
     let content = areas[2];
-    let block = Block::default().borders(Borders::ALL).title(if ros_page {
-        format!("{} / ROS", text.tabs[1])
-    } else {
-        text.tabs[selected].clone()
-    });
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(match install_page {
+            Some(InstallPage::Ros) => format!("{} / ROS", text.tabs[1]),
+            Some(InstallPage::Conda(_)) => format!("{} / {}", text.tabs[1], text.conda),
+            None => text.tabs[selected].clone(),
+        });
     let inner = block.inner(content);
     frame.render_widget(block, content);
-    let rows = pages::rows(dashboard, text, selected, ros_page);
+    let rows = pages::rows(dashboard, text, selected, install_page);
     if !rows.is_empty() {
         crate::table::draw(frame, inner, rows, text, scroll, focused);
     }
     frame.render_widget(
-        Paragraph::new(if ros_page {
+        Paragraph::new(if let Some(page) = install_page {
+            let enter = if matches!(page, InstallPage::Ros) {
+                "Enter   "
+            } else {
+                ""
+            };
+            let install = if page.can_install() {
+                format!("i {}   ", text.tabs[1])
+            } else {
+                String::new()
+            };
             format!(
-                "↑↓ Enter   i {}   PgUp/PgDn   r {}   {}   Esc ↩",
-                text.tabs[1], text.refresh, text.mouse_help
+                "↑↓ {enter}{install}PgUp/PgDn   r {}   {}   Esc ↩",
+                text.refresh, text.mouse_help
             )
         } else if selected == 1 {
             format!(

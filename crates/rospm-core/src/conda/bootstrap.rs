@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::System;
+use super::{Real, System};
 use crate::error::{Error, Result};
 use crate::msg;
 use crate::pixi::conda_platform;
@@ -70,6 +70,49 @@ pub fn compatible(output: &str) -> bool {
     version(output).is_some_and(|found| found >= minimum)
 }
 
+/// A standalone Conda installation for the current user.
+#[derive(Debug)]
+pub enum ToolInstallation {
+    Ready(crate::Message),
+    Needed(Bootstrap),
+    Unavailable,
+}
+
+impl ToolInstallation {
+    pub fn probe() -> Self {
+        Self::probe_with(&CondaHost::probe(), Platform::current(), &Real)
+    }
+
+    pub(super) fn probe_with(
+        host: &CondaHost,
+        platform: Option<Platform>,
+        system: &dyn System,
+    ) -> Self {
+        let bootstrap = platform.and_then(|platform| Bootstrap::new(host, platform));
+        if let Some(ready) = bootstrap.as_ref().filter(|bootstrap| bootstrap.is_ready()) {
+            return Self::Ready(msg!("conda.installed", conda = ready.conda().display()));
+        }
+        if let Some(found) = system
+            .query("conda", &["--version"])
+            .ok()
+            .filter(|found| compatible(found))
+        {
+            return Self::Ready(msg!("conda.on_path", version = found.trim()));
+        }
+        bootstrap.map_or(Self::Unavailable, Self::Needed)
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::Ready(message) => message.to_string(),
+            Self::Needed(bootstrap) => bootstrap.render(),
+            Self::Unavailable => {
+                msg!("conda.no_installer", minimum = miniforge().minimum_conda).to_string()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Bootstrap {
     pub version: &'static str,
@@ -123,10 +166,20 @@ impl Bootstrap {
         .to_string()
     }
 
+    pub fn perform(&self, out: &mut dyn Write) -> Result<()> {
+        self.install(out, &Real)
+    }
+
     pub(crate) fn install(&self, out: &mut dyn Write, system: &dyn System) -> Result<()> {
         let say = |out: &mut dyn Write, text: crate::Message| {
             writeln!(out, "{text}").map_err(|e| Error::io("<stdout>", e))
         };
+        // TUI and apply from different workspaces share the same installation.
+        let _prefix_lock = install_lock(&self.ready.with_extension("lock"))?;
+        if self.is_ready() {
+            return say(out, msg!("conda.installed", conda = self.conda().display()));
+        }
+        let _cache_lock = install_lock(&self.cache.with_extension("sh.lock"))?;
         // The cache is rospm's own: a file with another digest (truncated,
         // tampered, or from an older table) is replaced, never executed.
         if fs::metadata(&self.cache).is_ok() {
@@ -141,8 +194,6 @@ impl Bootstrap {
         }
         if !self.cache.is_file() {
             say(out, msg!("conda.downloading", url = self.url))?;
-            let parent = self.cache.parent().expect("cache file has a parent");
-            fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
             let part = self.cache.with_extension("sh.part");
             let downloaded = system.download(self.url, &part).and_then(|()| {
                 let actual = file_sha256(&part)?;
@@ -171,7 +222,6 @@ impl Bootstrap {
             fs::remove_dir_all(&self.root).map_err(|e| Error::io(&self.root, e))?;
         }
         let parent = self.root.parent().expect("install prefix has a parent");
-        fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
         say(
             out,
             msg!(
@@ -194,6 +244,19 @@ impl Bootstrap {
         fs::write(&self.ready, self.sha256).map_err(|e| Error::io(&self.ready, e))?;
         say(out, msg!("conda.installed", conda = conda.display()))
     }
+}
+
+fn install_lock(path: &Path) -> Result<fs::File> {
+    let parent = path.parent().expect("lock file has a parent");
+    fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+    let file = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .map_err(|e| Error::io(path, e))?;
+    file.lock().map_err(|e| Error::io(path, e))?;
+    Ok(file)
 }
 
 /// `-b` is the installer's batch mode: no prompts, no license pager and no

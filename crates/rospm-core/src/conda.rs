@@ -40,6 +40,7 @@ use definition::environment_yaml;
 use explicit::replay;
 use system::{Real, System};
 
+pub use bootstrap::ToolInstallation;
 pub use conda_verify::verify;
 #[cfg(test)]
 pub(crate) use conda_verify::verify_with;
