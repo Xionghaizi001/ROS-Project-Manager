@@ -170,7 +170,6 @@ cli:
   tui:
     no_logs: "暂无日志输出"
     log_error: "日志不可用"
-    open_logs: "l：查看日志"
     log_help: "Esc/q：返回  Tab/Shift-Tab 或点击标题：切换日志  ↑↓/PgUp/PgDn 或滚轮：滚动  ←→：横向滚动\n n/p：下一块/上一块  Home/End：块首/块尾  r：刷新（每秒自动刷新）"
     build_order: "编译包 / 编译顺序"
     running: "正在执行"

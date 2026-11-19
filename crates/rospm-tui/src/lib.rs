@@ -31,7 +31,6 @@ pub struct Text {
     pub no_logs: String,
     pub log_error: String,
     pub log_help: String,
-    pub open_logs: String,
     pub build_order: String,
     pub running: String,
     pub not_installed: String,
@@ -121,8 +120,8 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
     let mut ros_page = false;
-    let mut workspace = 0usize;
     let mut scroll = 0usize;
+    let mut focused_row = first_selectable(dashboard.as_ref(), text, selected, ros_page);
     let mut last_runtime_refresh = Instant::now();
     loop {
         if last_runtime_refresh.elapsed() >= Duration::from_secs(1) {
@@ -148,6 +147,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 selected,
                 ros_page,
                 &mut scroll,
+                focused_row,
             )
         })?;
         if event::poll(Duration::from_millis(250))? {
@@ -188,13 +188,11 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                     let page_size =
                         usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
                     match key.code {
-                        KeyCode::Enter if selected == 1 && !ros_page && dashboard.is_some() => {
-                            ros_page = true;
-                            scroll = 0;
-                        }
                         KeyCode::Esc | KeyCode::Char('q') if ros_page => {
                             ros_page = false;
                             scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
                         }
                         KeyCode::Char('i') if ros_page => {
                             disable_raw_mode()?;
@@ -221,37 +219,64 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             dashboard = dashboard::Dashboard::load(manifest, text)?;
                             last_runtime_refresh = Instant::now();
                         }
-                        KeyCode::Char('l') => {
-                            if let Some(d) = &dashboard {
-                                browser = Some(logs::Browser::new(&d.root, selected));
-                            }
+                        KeyCode::Enter => {
+                            activate(
+                                &mut browser,
+                                &mut ros_page,
+                                &mut focused_row,
+                                &mut scroll,
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                            );
                         }
                         KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                         KeyCode::Left | KeyCode::BackTab if !ros_page => {
                             selected = (selected + 7) % 8;
                             scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
                         }
                         KeyCode::Right | KeyCode::Tab if !ros_page => {
                             selected = (selected + 1) % 8;
                             scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
                         }
                         KeyCode::PageDown => scroll = scroll.saturating_add(page_size),
                         KeyCode::PageUp => scroll = scroll.saturating_sub(page_size),
                         KeyCode::Home => scroll = 0,
-                        KeyCode::Down => scroll = scroll.saturating_add(1),
-                        KeyCode::Up => scroll = scroll.saturating_sub(1),
-                        KeyCode::Char('j') => {
-                            if let Some(dashboard) = dashboard.as_ref() {
-                                if !dashboard.workspaces.is_empty() {
-                                    workspace = (workspace + 1) % dashboard.workspaces.len();
-                                }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if !move_focus(
+                                &mut focused_row,
+                                &mut scroll,
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                ros_page,
+                                true,
+                            ) {
+                                scroll = scroll.saturating_add(1);
                             }
                         }
-                        KeyCode::Char('k') => workspace = workspace.saturating_sub(1),
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if !move_focus(
+                                &mut focused_row,
+                                &mut scroll,
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                ros_page,
+                                false,
+                            ) {
+                                scroll = scroll.saturating_sub(1);
+                            }
+                        }
                         KeyCode::Char('r') => {
-                            workspace = 0;
                             dashboard = dashboard::Dashboard::load(manifest, text)?;
                             scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
                             last_runtime_refresh = Instant::now();
                         }
                         _ => {}
@@ -286,15 +311,27 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             selected = tab_at(mouse.column, size.width);
                             ros_page = false;
                             scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, ros_page);
                         }
-                        MouseEventKind::Down(MouseButton::Left)
-                            if selected == 1
-                                && !ros_page
-                                && mouse.row == 4
-                                && dashboard.is_some() =>
-                        {
-                            ros_page = true;
-                            scroll = 0;
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            let rows = pages::rows(dashboard.as_ref(), text, selected, ros_page);
+                            if let Some(index) = table::row_at(
+                                view::table_area(ratatui::layout::Rect::new(
+                                    0,
+                                    0,
+                                    size.width,
+                                    size.height,
+                                )),
+                                &rows,
+                                text,
+                                scroll,
+                                mouse.row,
+                            ) {
+                                if rows.get(index).is_some_and(|row| row.selectable) {
+                                    focused_row = Some(index);
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -303,6 +340,76 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 _ => {}
             }
         }
+    }
+}
+
+fn first_selectable(
+    dashboard: Option<&dashboard::Dashboard>,
+    text: &Text,
+    tab: usize,
+    ros_page: bool,
+) -> Option<usize> {
+    pages::rows(dashboard, text, tab, ros_page)
+        .iter()
+        .position(|row| row.selectable)
+}
+
+fn move_focus(
+    focused: &mut Option<usize>,
+    scroll: &mut usize,
+    dashboard: Option<&dashboard::Dashboard>,
+    text: &Text,
+    tab: usize,
+    ros_page: bool,
+    forward: bool,
+) -> bool {
+    let rows = pages::rows(dashboard, text, tab, ros_page);
+    let selectable: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| row.selectable.then_some(index))
+        .collect();
+    let Some(current) = (*focused).and_then(|index| selectable.iter().position(|&i| i == index))
+    else {
+        *focused = selectable.first().copied();
+        *scroll = if forward { 0 } else { usize::MAX };
+        return !selectable.is_empty();
+    };
+    let next = if forward {
+        (current + 1) % selectable.len()
+    } else {
+        (current + selectable.len() - 1) % selectable.len()
+    };
+    *focused = Some(selectable[next]);
+    *scroll = if next == 0 { 0 } else { usize::MAX };
+    true
+}
+
+fn activate(
+    browser: &mut Option<logs::Browser>,
+    ros_page: &mut bool,
+    focused: &mut Option<usize>,
+    scroll: &mut usize,
+    dashboard: Option<&dashboard::Dashboard>,
+    text: &Text,
+    selected: usize,
+) {
+    let Some(dashboard) = dashboard else {
+        return;
+    };
+    let rows = pages::rows(Some(dashboard), text, selected, *ros_page);
+    let Some(index) = *focused else {
+        return;
+    };
+    if !rows.get(index).is_some_and(|row| row.selectable) {
+        return;
+    }
+    if selected == 1 && !*ros_page && index == 0 {
+        *ros_page = true;
+        *focused = first_selectable(Some(dashboard), text, selected, true);
+        *scroll = 0;
+    } else {
+        *browser = Some(logs::Browser::new(&dashboard.root, selected));
     }
 }
 

@@ -175,7 +175,6 @@ cli:
   tui:
     no_logs: "No log output yet"
     log_error: "Log unavailable"
-    open_logs: "l: open logs"
     log_help: "Esc/q: back  Tab/Shift-Tab or click title: source  Up/Down/PgUp/PgDn or wheel: scroll  Left/Right: horizontal\n n/p: next/previous block  Home/End: block start/end  r: refresh (automatic every second)"
     build_order: "Packages / build order"
     running: "Running"

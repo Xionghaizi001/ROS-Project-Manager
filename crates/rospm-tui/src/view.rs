@@ -15,6 +15,7 @@ pub(crate) fn draw(
     selected: usize,
     ros_page: bool,
     scroll: &mut usize,
+    focused: Option<usize>,
 ) {
     let areas = Layout::vertical([
         Constraint::Length(1),
@@ -68,26 +69,37 @@ pub(crate) fn draw(
     frame.render_widget(block, content);
     let rows = pages::rows(dashboard, text, selected, ros_page);
     if !rows.is_empty() {
-        crate::table::draw(frame, inner, rows, text, scroll);
+        crate::table::draw(frame, inner, rows, text, scroll, focused);
     }
     frame.render_widget(
         Paragraph::new(if ros_page {
             format!(
-                "i {}   PgUp/PgDn   r {}   l {}   {}   Esc ↩",
-                text.tabs[1], text.refresh, text.logs, text.mouse_help
+                "↑↓ Enter   i {}   PgUp/PgDn   r {}   {}   Esc ↩",
+                text.tabs[1], text.refresh, text.mouse_help
             )
         } else if selected == 1 {
             format!(
-                "Enter › ROS   ←→ / Tab   r {}   {}   {}",
+                "↑↓ Enter   ←→ / Tab   r {}   {}   {}",
                 text.refresh, text.mouse_help, text.quit
             )
         } else {
             format!(
-                "←→ / Tab   PgUp/PgDn   j/k {}   r {}   l {}   {}   {}",
-                text.workspace, text.refresh, text.logs, text.mouse_help, text.quit
+                "↑↓ Enter   ←→ / Tab   PgUp/PgDn   r {}   {}   {}",
+                text.refresh, text.mouse_help, text.quit
             )
         })
         .style(Style::default().fg(Color::Gray)),
         areas[3],
     );
+}
+
+pub(crate) fn table_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let areas = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    Block::default().borders(Borders::ALL).inner(areas[2])
 }

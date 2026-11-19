@@ -19,7 +19,6 @@ pub(crate) struct Dashboard {
     pub(crate) manifest: PathBuf,
     pub(crate) project: String,
     pub(crate) provider: ProviderKind,
-    pub(crate) workspaces: Vec<(String, String, Vec<String>)>,
     pub(crate) conda: String,
     pub(crate) apply_plan: Vec<String>,
     pub(crate) uninstall_plan: Vec<String>,
@@ -65,17 +64,6 @@ impl Dashboard {
                     .unwrap_or_default()
             })
             .unwrap_or_else(|| "system".to_string());
-        let workspaces = manifest
-            .workspaces
-            .iter()
-            .map(|(name, ws)| {
-                (
-                    name.clone(),
-                    ws.path.display().to_string(),
-                    ws.colcon.build_args.clone(),
-                )
-            })
-            .collect::<Vec<_>>();
         let distro = manifest.project.ros_distro.to_string();
         let root = path
             .parent()
@@ -174,7 +162,6 @@ impl Dashboard {
             manifest: path.clone(),
             project: manifest.project.name,
             provider: manifest.environment.provider,
-            workspaces,
             conda,
             apply_plan,
             uninstall_plan,

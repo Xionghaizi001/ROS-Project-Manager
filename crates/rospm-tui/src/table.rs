@@ -15,6 +15,7 @@ pub(crate) fn draw(
     entries: Vec<Entry>,
     text: &Text,
     scroll: &mut usize,
+    focused: Option<usize>,
 ) {
     let entries: Vec<_> = entries
         .into_iter()
@@ -30,7 +31,8 @@ pub(crate) fn draw(
     // Split logical entries into screen rows so even an entry taller than the viewport can scroll.
     let rows: Vec<_> = entries
         .into_iter()
-        .flat_map(|entry| {
+        .enumerate()
+        .flat_map(|(index, entry)| {
             let cells: Vec<_> = entry
                 .cells
                 .iter()
@@ -70,7 +72,12 @@ pub(crate) fn draw(
                     }
                     cell
                 });
-                Row::new(row).style(if entry.heading {
+                Row::new(row).style(if focused == Some(index) {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Blue)
+                        .add_modifier(Modifier::BOLD)
+                } else if entry.heading {
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD)
@@ -99,6 +106,45 @@ pub(crate) fn draw(
         ),
         area,
     );
+}
+
+pub(crate) fn row_at(
+    area: Rect,
+    entries: &[Entry],
+    text: &Text,
+    scroll: usize,
+    screen_row: u16,
+) -> Option<usize> {
+    if screen_row < area.y.saturating_add(1) {
+        return None;
+    }
+    let widths = column_widths(entries, text, area.width);
+    let mut line = scroll + usize::from(screen_row - area.y - 1);
+    for (index, entry) in entries.iter().enumerate() {
+        let height = entry_height(entry, &widths);
+        if line < height {
+            return Some(index);
+        }
+        line -= height;
+    }
+    None
+}
+
+fn entry_height(entry: &Entry, widths: &[u16; 3]) -> usize {
+    entry
+        .cells
+        .iter()
+        .enumerate()
+        .map(|(i, value)| {
+            let wrapped = wrap(value, widths[i].max(1) as usize);
+            if entry.heading {
+                format!("\n{wrapped}\n ").lines().count()
+            } else {
+                wrapped.lines().count().max(1)
+            }
+        })
+        .max()
+        .unwrap_or(1)
 }
 
 /// Measure terminal cells (including wide Chinese characters), with two cells
@@ -170,12 +216,14 @@ mod tests {
                     cells: ["1".into(), String::new(), expected.concat()],
                     status: None,
                     heading: false,
+                    selectable: false,
                     running: false,
                 },
                 Entry {
                     cells: ["2".into(), String::new(), "tail".into()],
                     status: None,
                     heading: false,
+                    selectable: false,
                     running: false,
                 },
             ]
@@ -186,7 +234,7 @@ mod tests {
             let mut seen = std::collections::BTreeSet::new();
             for _ in 0..32 {
                 terminal
-                    .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                    .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll, None))
                     .unwrap();
                 let buffer = terminal.backend().buffer();
                 assert!((8..20).any(|x| buffer[(x, 0)].symbol() == "A"));
@@ -204,13 +252,13 @@ mod tests {
 
             scroll = usize::MAX;
             terminal
-                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll, None))
                 .unwrap();
             assert_eq!(scroll, 31 - usize::from(height - 1));
 
             terminal.backend_mut().resize(40, 40);
             terminal
-                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll))
+                .draw(|frame| draw(frame, frame.area(), entries(), &text, &mut scroll, None))
                 .unwrap();
             assert_eq!(
                 scroll, 0,
@@ -235,10 +283,12 @@ mod tests {
                         cells: ["pkg".into(), "✓".into(), "1".into()],
                         status: Some(Status::Ok),
                         heading: false,
+                        selectable: false,
                         running: true,
                     }],
                     &text,
                     &mut 0,
+                    None,
                 )
             })
             .unwrap();
@@ -247,6 +297,68 @@ mod tests {
         assert_eq!(buffer[(9, 1)].symbol(), "正");
         assert_eq!(buffer[(9, 1)].fg, Color::Blue);
         assert_eq!(buffer[(9, 1)].bg, Color::Reset);
+    }
+
+    #[test]
+    fn focused_row_is_highlighted_across_the_table() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+        let text = Text {
+            item: "I".into(),
+            status: "S".into(),
+            actual: "A".into(),
+            ..Text::default()
+        };
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    frame.area(),
+                    vec![Entry {
+                        cells: ["menu".into(), String::new(), String::new()],
+                        status: None,
+                        heading: false,
+                        selectable: true,
+                        running: false,
+                    }],
+                    &text,
+                    &mut 0,
+                    Some(0),
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(1, 1)].bg, Color::Blue);
+        assert_eq!(buffer[(20, 1)].bg, Color::Blue);
+    }
+
+    #[test]
+    fn mouse_rows_skip_the_table_header() {
+        let text = Text {
+            item: "I".into(),
+            status: "S".into(),
+            actual: "A".into(),
+            ..Text::default()
+        };
+        let entries = vec![
+            Entry {
+                cells: ["first".into(), String::new(), String::new()],
+                status: None,
+                heading: false,
+                selectable: true,
+                running: false,
+            },
+            Entry {
+                cells: ["second".into(), String::new(), String::new()],
+                status: None,
+                heading: false,
+                selectable: true,
+                running: false,
+            },
+        ];
+        let area = Rect::new(0, 2, 30, 5);
+        assert_eq!(row_at(area, &entries, &text, 0, 2), None);
+        assert_eq!(row_at(area, &entries, &text, 0, 3), Some(0));
+        assert_eq!(row_at(area, &entries, &text, 0, 4), Some(1));
     }
 
     #[test]
@@ -261,10 +373,12 @@ mod tests {
                         cells: ["git".into(), "✓".into(), "/usr/bin/git".into()],
                         status: Some(Status::Ok),
                         heading: false,
+                        selectable: false,
                         running: false,
                     }],
                     &Text::default(),
                     &mut 0,
+                    None,
                 );
             })
             .unwrap();

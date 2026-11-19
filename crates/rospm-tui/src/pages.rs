@@ -6,6 +6,7 @@ pub(crate) struct Entry {
     pub cells: [String; 3],
     pub status: Option<Status>,
     pub heading: bool,
+    pub selectable: bool,
     /// Set only when the executor identifies this exact dependency/package row.
     pub running: bool,
 }
@@ -15,8 +16,15 @@ impl Entry {
             cells: [name.into(), String::new(), value.into()],
             status: None,
             heading: false,
+            selectable: false,
             running: false,
         }
+    }
+
+    fn link(name: impl Into<String>) -> Self {
+        let mut entry = Self::value(name, "");
+        entry.selectable = true;
+        entry
     }
 }
 
@@ -59,6 +67,7 @@ pub(crate) fn rows(
                     ],
                     status: Some(item.status),
                     heading: false,
+                    selectable: false,
                     running: false,
                 });
             }
@@ -79,10 +88,10 @@ pub(crate) fn rows(
             if d.ros_installed {
                 section(&mut rows, &text.uninstall_plan, &d.uninstall_plan);
             }
-            rows.push(Entry::value(&text.logs, &text.open_logs));
+            rows.push(Entry::link(&text.logs));
         }
         1 => {
-            rows.push(Entry::value("› ROS", "Enter ›"));
+            rows.push(Entry::link("ROS"));
             for name in ["Conda", &text.components] {
                 let mut row = Entry::value(name, if name == "Conda" { &d.conda } else { "" });
                 row.cells[1] = text.not_connected.clone();
@@ -101,22 +110,23 @@ pub(crate) fn rows(
                     cells: [item.subject.to_string(), status, item.actual.to_string()],
                     status: Some(item.status),
                     heading: false,
+                    selectable: false,
                     running: false,
                 });
             }
-            rows.push(Entry::value(&text.logs, &text.open_logs));
+            rows.push(Entry::link(&text.logs));
         }
         2 => {
             heading(&mut rows, &text.build_order);
             for package in &d.compile_packages {
                 rows.push(Entry::value(&package.name, &package.detail));
             }
-            rows.push(Entry::value(&text.logs, &text.open_logs));
+            rows.push(Entry::link(&text.logs));
         }
         5 => {
             section(&mut rows, &text.verify_result, &d.verify);
             section(&mut rows, &text.diagnostics, &d.diagnostics);
-            rows.push(Entry::value(&text.logs, &text.open_logs));
+            rows.push(Entry::link(&text.logs));
         }
         _ => {}
     }
@@ -147,7 +157,6 @@ mod tests {
             manifest: "rospm.toml".into(),
             project: "test".into(),
             provider: Default::default(),
-            workspaces: vec![],
             conda: "system".into(),
             apply_plan: vec!["install ROS".into()],
             uninstall_plan: vec!["remove ROS".into()],
@@ -167,12 +176,15 @@ mod tests {
             ..Text::default()
         };
         let parent = rows(Some(&dashboard), &text, 1, false);
-        assert_eq!(parent[0].cells, ["› ROS", "", "Enter ›"]);
+        assert_eq!(parent[0].cells, ["ROS", "", ""]);
+        assert!(parent[0].selectable);
         assert!(!parent.iter().any(|row| row.cells[2] == "install ROS"));
         let child = rows(Some(&dashboard), &text, 1, true);
         assert_eq!(child[0].cells[2], "missing");
+        assert!(!child[0].selectable);
         assert!(child.iter().any(|row| row.cells[2] == "install ROS"));
         assert!(!child.iter().any(|row| row.cells[2] == "remove ROS"));
+        assert!(child.last().is_some_and(|row| row.selectable));
         dashboard.ros_installed = true;
         let child = rows(Some(&dashboard), &text, 1, true);
         assert_eq!(child[0].cells[2], "ok");

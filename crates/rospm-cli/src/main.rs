@@ -535,7 +535,6 @@ fn execute_cli(
             rospm_tui::Text {
                 no_logs: tr("cli.tui.no_logs"),
                 log_error: tr("cli.tui.log_error"),
-                open_logs: tr("cli.tui.open_logs"),
                 log_help: tr("cli.tui.log_help"),
 
                 build_order: tr("cli.tui.build_order"),
