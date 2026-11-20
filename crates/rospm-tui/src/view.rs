@@ -63,6 +63,7 @@ pub(crate) fn draw(
         .title(match install_page {
             Some(InstallPage::Ros) => format!("{} / ROS", text.tabs[1]),
             Some(InstallPage::Conda(_)) => format!("{} / {}", text.tabs[1], text.conda),
+            Some(InstallPage::Components) => format!("{} / {}", text.tabs[1], text.components),
             None => text.tabs[selected].clone(),
         });
     let inner = block.inner(content);

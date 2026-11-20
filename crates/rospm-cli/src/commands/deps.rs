@@ -122,3 +122,17 @@ pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
     out.flush()?;
     Ok(())
 }
+
+/// Install the explicit apt and pip components declared by the project.
+pub fn components_install(global: &Global, dry_run: bool) -> Result<()> {
+    let (loaded, _leases) = super::load_mutating(global, dry_run)?;
+    let host = Host::probe();
+    let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
+    let ctx = context(&loaded, &host, false, None, false, mirror)?;
+    let mut plan = provider::for_manifest(&loaded.manifest).plan_components_install(&ctx)?;
+    super::logging::commands(&mut plan, &loaded.root, "components");
+    let mut out = std::io::stdout().lock();
+    global.execute_plan(&plan, dry_run, &mut out)?;
+    out.flush()?;
+    Ok(())
+}

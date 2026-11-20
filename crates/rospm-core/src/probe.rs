@@ -643,6 +643,15 @@ impl Host {
         self.ros_distros.iter().any(|d| d == distro)
     }
 
+    /// Whether this host has a usable installation for one ROS distribution.
+    pub fn has_ros_install(&self, distro: &str) -> bool {
+        self.has_ros_distro(distro)
+            || self
+                .packages
+                .installed_with_prefix(&format!("ros-{distro}-"))
+                .is_some_and(|packages| !packages.is_empty())
+    }
+
     /// Whether `colcon mixin` works. The `mixin` verb is a separate package
     /// (`python3-colcon-mixin`) that `python3-colcon-common-extensions` from
     /// the ROS apt repository does not pull in, so a manifest that names

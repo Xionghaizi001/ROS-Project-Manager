@@ -530,7 +530,7 @@ fn execute_cli(
         ),
         Cmd::Env { shell, venv } => commands::env(&global, shell, venv),
         Cmd::Shell { venv } => commands::shell(&global, venv),
-        Cmd::Tui => rospm_tui::run(
+        Cmd::Tui => rospm_tui::run_with_installers(
             global.manifest.as_deref(),
             rospm_tui::Text {
                 no_logs: tr("cli.tui.no_logs"),
@@ -589,6 +589,7 @@ fn execute_cli(
                 status_info: tr("cli.status.info"),
             },
             || commands::apply(&global, false, false, false, false, false, None, None),
+            || commands::components_install(&global, false),
         ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),

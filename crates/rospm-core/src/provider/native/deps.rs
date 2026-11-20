@@ -410,6 +410,43 @@ pub fn plan_install(ctx: &Context) -> Result<Plan> {
     Ok(plan)
 }
 
+/// Build the project-component plan shown by the TUI. The regular `deps
+/// install` command keeps its existing rosdep-only contract. This plan adds
+/// the explicit apt and pip entries from the manifest after rosdep.
+pub fn plan_components_install(ctx: &Context) -> Result<Plan> {
+    let distro = ctx.manifest.project.ros_distro;
+    if !ctx.host.has_ros_install(distro.as_str()) {
+        return Err(crate::error::Error::Host(msg!(
+            "components.plan.ros_required"
+        )));
+    }
+
+    let mut plan = plan_install(ctx)?;
+    plan.title = msg!(
+        "components.plan.title",
+        name = ctx.manifest.project.name,
+        distro = distro
+    );
+
+    let apt = ctx.manifest.resolve_apt(ctx.platform).packages;
+    if !apt.is_empty() {
+        plan.run(
+            crate::plan::Command::new("apt-get")
+                .args(["install", "-y"])
+                .args(apt)
+                .sudo(),
+        );
+    }
+    if !ctx.manifest.dependencies.pip.is_empty() {
+        plan.run(
+            crate::plan::Command::new("python3")
+                .args(["-m", "pip", "install", "--user"])
+                .args(ctx.manifest.dependencies.pip.clone()),
+        );
+    }
+    Ok(plan)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

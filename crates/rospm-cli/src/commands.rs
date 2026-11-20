@@ -40,7 +40,7 @@ pub mod worker;
 pub use apply::apply;
 pub use build::build;
 pub use check::check;
-pub use deps::{deps_check, deps_install};
+pub use deps::{components_install, deps_check, deps_install};
 pub use doctor::doctor;
 pub use environment::{env, shell};
 pub use init::init;

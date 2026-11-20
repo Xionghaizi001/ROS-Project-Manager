@@ -638,6 +638,11 @@ deps:
     unresolved_reason: "rosdep could not resolve this key: %{reason}"
     no_apt_package: "resolved, but not to an apt package"
 
+components:
+  plan:
+    title: "install project components for `%{name}` (%{distro})"
+    ros_required: "a valid ROS %{distro} installation is required before project components can be installed"
+
 init:
   platforms:
     host: "project.platforms: host is %{platform}"

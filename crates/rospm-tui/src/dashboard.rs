@@ -27,10 +27,18 @@ pub(crate) struct Dashboard {
     pub(crate) verify: Vec<String>,
     pub(crate) deps: Vec<String>,
     pub(crate) deps_report: rospm_core::probe::EnvReport,
+    pub(crate) components: Vec<Component>,
     pub(crate) ros_installed: bool,
     pub(crate) diagnostics: Vec<String>,
     pub(crate) compile_packages: Vec<crate::packages::BuildPackage>,
     pub(crate) root: PathBuf,
+}
+
+pub(crate) struct Component {
+    pub(crate) kind: &'static str,
+    pub(crate) name: String,
+    pub(crate) actual: String,
+    pub(crate) status: rospm_core::probe::Status,
 }
 
 impl Dashboard {
@@ -75,6 +83,7 @@ impl Dashboard {
         let mut verify = Vec::new();
         let mut deps = Vec::new();
         let mut deps_report = rospm_core::probe::EnvReport::default();
+        let mut components = Vec::new();
         let mut ros_installed = false;
         let mut apply_plan = vec![
             format!("provider  {}", manifest.environment.provider),
@@ -86,11 +95,7 @@ impl Dashboard {
             let host = Host::probe();
             // Match the distro targeted by the uninstall plan. An apt source
             // alone does not mean ROS is installed.
-            ros_installed = host.has_ros_distro(&distro)
-                || host
-                    .packages
-                    .installed_with_prefix(&format!("ros-{distro}-"))
-                    .is_some_and(|packages| !packages.is_empty());
+            ros_installed = host.has_ros_install(&distro);
             let provider = provider::for_manifest(&manifest);
             let ctx = ProviderContext {
                 venv: None,
@@ -103,6 +108,7 @@ impl Dashboard {
                 host: &host,
                 mirror: mirror::OFFICIAL,
             };
+            components = scan_components(&manifest, &host, platform);
             match provider.probe_env(&ctx) {
                 Ok(value) => report = value,
                 Err(error) => check.push(format!("! {error}")),
@@ -170,6 +176,7 @@ impl Dashboard {
             verify,
             deps,
             deps_report,
+            components,
             ros_installed,
             diagnostics,
             compile_packages,
@@ -180,6 +187,53 @@ impl Dashboard {
     pub(crate) fn refresh_runtime(&mut self) {
         self.diagnostics = crate::logs::diagnostics(&self.root);
     }
+}
+
+fn scan_components(manifest: &Manifest, host: &Host, platform: Platform) -> Vec<Component> {
+    let apt = manifest.resolve_apt(platform).packages;
+    let apt_status = host.packages.status(&apt);
+    let mut components = apt
+        .into_iter()
+        .map(|name| {
+            let status = match apt_status.as_ref().and_then(|s| s.get(&name)) {
+                Some(package) if package.installed => rospm_core::probe::Status::Ok,
+                Some(_) => rospm_core::probe::Status::Missing,
+                None => rospm_core::probe::Status::Unknown,
+            };
+            let actual = match apt_status.as_ref().and_then(|s| s.get(&name)) {
+                Some(package) if package.installed => package
+                    .version
+                    .clone()
+                    .unwrap_or_else(|| "installed".into()),
+                Some(_) => "not installed".into(),
+                None => "unavailable".into(),
+            };
+            Component {
+                kind: "deb",
+                name,
+                actual,
+                status,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let pip_status = host.pip_freeze();
+    components.extend(manifest.dependencies.pip.iter().map(|requirement| {
+        let name = rospm_core::probe::pip_requirement_name(requirement);
+        let installed = pip_status.as_ref().and_then(|packages| packages.get(&name));
+        let status = match pip_status.as_ref() {
+            Some(_) if installed.is_some() => rospm_core::probe::Status::Ok,
+            Some(_) => rospm_core::probe::Status::Missing,
+            None => rospm_core::probe::Status::Unknown,
+        };
+        Component {
+            kind: "pip",
+            name: requirement.clone(),
+            actual: installed.cloned().unwrap_or_else(|| "not installed".into()),
+            status,
+        }
+    }));
+    components
 }
 
 fn load_lock(root: &Path) -> Result<Option<Lock>> {

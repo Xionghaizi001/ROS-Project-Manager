@@ -687,4 +687,8 @@ impl Provider for Native {
     fn plan_deps_install(&self, ctx: &Context) -> Result<Plan> {
         deps::plan_install(ctx)
     }
+
+    fn plan_components_install(&self, ctx: &Context) -> Result<Plan> {
+        deps::plan_components_install(ctx)
+    }
 }

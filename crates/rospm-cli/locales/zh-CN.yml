@@ -633,6 +633,11 @@ deps:
     unresolved_reason: "rosdep 无法解析该键：%{reason}"
     no_apt_package: "已解析，但不是 apt 包"
 
+components:
+  plan:
+    title: "安装项目基础组件 `%{name}`（%{distro}）"
+    ros_required: "安装项目基础组件前需要有效的 ROS %{distro} 安装"
+
 init:
   platforms:
     host: "project.platforms：本机为 %{platform}"

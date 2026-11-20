@@ -84,11 +84,15 @@ pub struct Text {
 enum InstallPage {
     Ros,
     Conda(ToolInstallation),
+    Components,
 }
 
 impl InstallPage {
     fn can_install(&self) -> bool {
-        matches!(self, Self::Ros | Self::Conda(ToolInstallation::Needed(_)))
+        matches!(
+            self,
+            Self::Ros | Self::Components | Self::Conda(ToolInstallation::Needed(_))
+        )
     }
 
     fn refresh(&mut self) {
@@ -101,7 +105,18 @@ impl InstallPage {
 pub fn run(
     manifest_path: Option<&Path>,
     text: Text,
+    install_ros: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    run_with_installers(manifest_path, text, install_ros, || {
+        Err(anyhow!("project component installer unavailable"))
+    })
+}
+
+pub fn run_with_installers(
+    manifest_path: Option<&Path>,
+    text: Text,
     mut install_ros: impl FnMut() -> Result<()>,
+    mut install_components: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(anyhow!(text.non_terminal));
@@ -119,6 +134,7 @@ pub fn run(
         dashboard,
         &text,
         &mut install_ros,
+        &mut install_components,
     );
     disable_raw_mode().ok();
     let stdout = terminal.backend_mut();
@@ -134,6 +150,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     mut dashboard: Option<dashboard::Dashboard>,
     text: &Text,
     install_ros: &mut impl FnMut() -> Result<()>,
+    install_components: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
@@ -226,6 +243,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
                                     bootstrap.perform(&mut io::stdout()).map_err(Into::into)
                                 }
+                                Some(InstallPage::Components) => install_components(),
                                 _ => unreachable!(),
                             };
                             if let Err(error) = result {
@@ -344,7 +362,10 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                     match mouse.kind {
                         MouseEventKind::ScrollDown => scroll = scroll.saturating_add(3),
                         MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(3),
-                        MouseEventKind::Down(MouseButton::Left) if mouse.row == 1 => {
+                        MouseEventKind::Down(MouseButton::Left)
+                        | MouseEventKind::Up(MouseButton::Left)
+                            if mouse.row == 1 =>
+                        {
                             selected = tab_at(mouse.column, size.width);
                             install_page = None;
                             scroll = 0;
@@ -372,6 +393,15 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             ) {
                                 if rows.get(index).is_some_and(|row| row.selectable) {
                                     focused_row = Some(index);
+                                    activate(
+                                        &mut browser,
+                                        &mut install_page,
+                                        &mut focused_row,
+                                        &mut scroll,
+                                        dashboard.as_ref(),
+                                        text,
+                                        selected,
+                                    );
                                 }
                             }
                         }
@@ -446,6 +476,7 @@ fn activate(
     *install_page = match (selected, install_page.as_ref(), index) {
         (1, None, 0) => Some(InstallPage::Ros),
         (1, None, 1) => Some(InstallPage::Conda(ToolInstallation::probe())),
+        (1, None, 2) if dashboard.is_some_and(|d| d.ros_installed) => Some(InstallPage::Components),
         _ => {
             if let Some(dashboard) = dashboard {
                 *browser = Some(logs::Browser::new(&dashboard.root, selected));
