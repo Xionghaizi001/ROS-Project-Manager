@@ -43,7 +43,6 @@ pub struct Text {
     pub item: String,
     pub actual: String,
     pub expected: String,
-    pub not_connected: String,
     pub components: String,
 
     pub tabs: [String; 8],

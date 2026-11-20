@@ -548,7 +548,6 @@ fn execute_cli(
                 item: tr("cli.tui.item"),
                 actual: tr("cli.tui.actual"),
                 expected: tr("cli.tui.expected"),
-                not_connected: tr("cli.tui.not_connected"),
                 components: tr("cli.tui.components"),
 
                 tabs: [

@@ -7,6 +7,7 @@ pub(crate) struct Entry {
     pub status: Option<Status>,
     pub heading: bool,
     pub selectable: bool,
+    pub disabled: bool,
     /// Set only when the executor identifies this exact dependency/package row.
     pub running: bool,
 }
@@ -17,6 +18,7 @@ impl Entry {
             status: None,
             heading: false,
             selectable: false,
+            disabled: false,
             running: false,
         }
     }
@@ -67,6 +69,7 @@ pub(crate) fn rows(
                 status: Some(component.status),
                 heading: false,
                 selectable: false,
+                disabled: false,
                 running: false,
             });
         }
@@ -87,6 +90,14 @@ pub(crate) fn rows(
             conda.cells[2].clone_from(&dashboard.conda);
         }
         rows.push(conda);
+        let mut components = Entry::link(&text.components);
+        if dashboard.is_some_and(|d| d.ros_installed) {
+            components.cells[1].clone_from(&text.status_ok);
+        } else {
+            components.selectable = false;
+            components.disabled = true;
+        }
+        rows.push(components);
     }
     let Some(d) = dashboard else {
         if tab == 0 {
@@ -121,6 +132,7 @@ pub(crate) fn rows(
                     status: Some(item.status),
                     heading: false,
                     selectable: false,
+                    disabled: false,
                     running: false,
                 });
             }
@@ -144,15 +156,6 @@ pub(crate) fn rows(
             rows.push(Entry::link(&text.logs));
         }
         1 => {
-            let ros_installed = dashboard.is_some_and(|d| d.ros_installed);
-            let mut components = Entry::value(&text.components, "");
-            components.cells[1] = if ros_installed {
-                text.status_ok.clone()
-            } else {
-                text.not_connected.clone()
-            };
-            components.selectable = ros_installed;
-            rows.push(components);
             section(&mut rows, &text.deps_result, &d.deps);
             for item in &d.deps_report.items {
                 let status = match item.status {
@@ -167,6 +170,7 @@ pub(crate) fn rows(
                     status: Some(item.status),
                     heading: false,
                     selectable: false,
+                    disabled: false,
                     running: false,
                 });
             }
@@ -280,7 +284,6 @@ mod tests {
         };
         let text = Text {
             components: "components".into(),
-            not_connected: "not connected".into(),
             not_installed: "missing".into(),
             status_missing: "missing".into(),
             status_unknown: "unknown".into(),
@@ -289,10 +292,24 @@ mod tests {
             ..Text::default()
         };
         let parent = rows(Some(&dashboard), &text, 1, None);
+        assert_eq!(parent[2].cells, ["components", "", ""]);
         assert!(!parent[2].selectable);
+        assert!(parent[2].disabled);
+        assert!(rows(None, &text, 1, None)[2].disabled);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|frame| crate::table::draw(frame, frame.area(), parent, &text, &mut 0, None))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!((0..80).any(|x| {
+            let cell = &buffer[(x, 3)];
+            cell.symbol() == "c" && cell.fg == ratatui::style::Color::DarkGray
+        }));
         dashboard.ros_installed = true;
         let parent = rows(Some(&dashboard), &text, 1, None);
         assert!(parent[2].selectable);
+        assert!(!parent[2].disabled);
         let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Components));
         assert_eq!(child[0].cells[0], "deb libfoo-dev");
         assert!(child[0].cells[1].contains("missing"));

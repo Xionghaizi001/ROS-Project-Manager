@@ -72,7 +72,9 @@ pub(crate) fn draw(
                     }
                     cell
                 });
-                Row::new(row).style(if focused == Some(index) {
+                Row::new(row).style(if entry.disabled {
+                    Style::default().fg(Color::DarkGray)
+                } else if focused == Some(index) {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Blue)
@@ -217,6 +219,7 @@ mod tests {
                     status: None,
                     heading: false,
                     selectable: false,
+                    disabled: false,
                     running: false,
                 },
                 Entry {
@@ -224,6 +227,7 @@ mod tests {
                     status: None,
                     heading: false,
                     selectable: false,
+                    disabled: false,
                     running: false,
                 },
             ]
@@ -284,6 +288,7 @@ mod tests {
                         status: Some(Status::Ok),
                         heading: false,
                         selectable: false,
+                        disabled: false,
                         running: true,
                     }],
                     &text,
@@ -318,6 +323,7 @@ mod tests {
                         status: None,
                         heading: false,
                         selectable: true,
+                        disabled: false,
                         running: false,
                     }],
                     &text,
@@ -345,6 +351,7 @@ mod tests {
                 status: None,
                 heading: false,
                 selectable: true,
+                disabled: false,
                 running: false,
             },
             Entry {
@@ -352,6 +359,7 @@ mod tests {
                 status: None,
                 heading: false,
                 selectable: true,
+                disabled: false,
                 running: false,
             },
         ];
@@ -374,6 +382,7 @@ mod tests {
                         status: Some(Status::Ok),
                         heading: false,
                         selectable: false,
+                        disabled: false,
                         running: false,
                     }],
                     &Text::default(),
