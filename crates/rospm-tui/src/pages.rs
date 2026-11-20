@@ -45,6 +45,36 @@ pub(crate) fn rows(
         row.status = Some(status);
         return vec![row];
     }
+    if matches!(install_page, Some(InstallPage::Components)) {
+        let Some(dashboard) = dashboard else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        for component in &dashboard.components {
+            let status = match component.status {
+                Status::Ok => "✓".to_owned(),
+                Status::Missing => format!("× {}", text.not_installed),
+                Status::Mismatch => format!("× {}", text.status_mismatch),
+                Status::Unknown => format!("? {}", text.status_unknown),
+                Status::Info => text.status_info.clone(),
+            };
+            rows.push(Entry {
+                cells: [
+                    format!("{} {}", component.kind, component.name),
+                    status,
+                    component.actual.clone(),
+                ],
+                status: Some(component.status),
+                heading: false,
+                selectable: false,
+                running: false,
+            });
+        }
+        if rows.is_empty() {
+            rows.push(Entry::value(&text.components, "—"));
+        }
+        return rows;
+    }
     let mut rows = Vec::new();
     if tab == 1 && install_page.is_none() {
         rows.push(if dashboard.is_some() {
@@ -114,8 +144,14 @@ pub(crate) fn rows(
             rows.push(Entry::link(&text.logs));
         }
         1 => {
+            let ros_installed = dashboard.is_some_and(|d| d.ros_installed);
             let mut components = Entry::value(&text.components, "");
-            components.cells[1] = text.not_connected.clone();
+            components.cells[1] = if ros_installed {
+                text.status_ok.clone()
+            } else {
+                text.not_connected.clone()
+            };
+            components.selectable = ros_installed;
             rows.push(components);
             section(&mut rows, &text.deps_result, &d.deps);
             for item in &d.deps_report.items {
@@ -185,6 +221,7 @@ mod tests {
             verify: vec![],
             deps: vec![],
             deps_report: Default::default(),
+            components: vec![],
             ros_installed: false,
             diagnostics: vec![],
             compile_packages: vec![],
@@ -214,5 +251,50 @@ mod tests {
         assert!(!parent[0].selectable);
         assert_eq!(parent[1].cells[0], "Conda");
         assert!(parent[1].selectable);
+    }
+
+    #[test]
+    fn component_entry_requires_ros_and_lists_scanned_packages() {
+        let mut dashboard = Dashboard {
+            manifest: "rospm.toml".into(),
+            project: "test".into(),
+            provider: Default::default(),
+            conda: "system".into(),
+            apply_plan: vec![],
+            uninstall_plan: vec![],
+            check: vec![],
+            report: Default::default(),
+            verify: vec![],
+            deps: vec![],
+            deps_report: Default::default(),
+            components: vec![crate::dashboard::Component {
+                kind: "deb",
+                name: "libfoo-dev".into(),
+                actual: "not installed".into(),
+                status: Status::Missing,
+            }],
+            ros_installed: false,
+            diagnostics: vec![],
+            compile_packages: vec![],
+            root: ".".into(),
+        };
+        let text = Text {
+            components: "components".into(),
+            not_connected: "not connected".into(),
+            not_installed: "missing".into(),
+            status_missing: "missing".into(),
+            status_unknown: "unknown".into(),
+            status_mismatch: "mismatch".into(),
+            status_info: "info".into(),
+            ..Text::default()
+        };
+        let parent = rows(Some(&dashboard), &text, 1, None);
+        assert!(!parent[2].selectable);
+        dashboard.ros_installed = true;
+        let parent = rows(Some(&dashboard), &text, 1, None);
+        assert!(parent[2].selectable);
+        let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Components));
+        assert_eq!(child[0].cells[0], "deb libfoo-dev");
+        assert!(child[0].cells[1].contains("missing"));
     }
 }
