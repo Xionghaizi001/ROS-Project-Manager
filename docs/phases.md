@@ -45,7 +45,7 @@
 
 ## Phase 4.4 — Worker 化修改任务与工作区并发协调
 
-状态：**进行中**
+状态：**已完成（2026-11-20）**
 
 目标：将构建、安装、卸载、依赖处理和环境创建等修改任务统一交给 worker 执行，使终端或 TUI 断开后任务仍能继续；同时为 `run`、`check`、`verify` 等只读命令增加共享工作区租约，避免读取正在修改的构建产物，并允许多个节点同时运行。
 
@@ -53,7 +53,7 @@
 - [x] 增加用户范围的共享工作区租约；只读命令等待修改任务完成，多个只读命令之间仍可并行。
 - [x] 将同步 `build`、`apply`、`uninstall`、`deps install`、`venv create/install` 和 `lock` 入口统一提交到 worker，保留现有参数、计划确认、退出码和 JSON 输出语义。（2026-11-16，见 [同步入口 worker 接线与验证](p44-cli-worker.md)；按调用启动单任务 worker，`--dry-run` 保持本地无副作用。）
 - [x] 为 CLI 提供按需启动或连接 worker 的最小流程：提交任务后显示任务 ID，断开后可通过 `status` / `logs` 查询，不自动重复提交副作用任务。同步入口使用项目私有稳定 runtime，先连接现有 worker，连接失败才按需启动；任务 ID 只生成一次并用于重连查询。（2026-11-16，见 [同步入口 worker 接线与验证](p44-cli-worker.md)。）
-- [x] 覆盖 worker 与同步入口、多个只读命令、共享 workspace、取消与异常断开场景；验证构建期间 `run` 不会读取半成品。（2026-11-18，`cargo test -p rospm-cli --no-default-features` 全部通过；`run` 端到端等待半成品构建完成，`deps check` 补齐共享租约，详见 [worker 协调与生命周期](p45-worker-coordination.md#p44-最后一项验收2026-11-18)。）
+- [x] 覆盖 worker 与同步入口、多个只读命令、共享 workspace、取消与异常断开场景；验证构建期间 `run` 不会读取半成品。（2026-11-18，`run` 端到端等待半成品构建完成，`deps check` 补齐共享租约；2026-11-20 完成最终 workspace 回归，详见 [P4.4 验收记录](p44-acceptance-20261120.md)。）
 - **产出**：所有修改工作由 worker 持有统一租约并可断连续跑；只读命令与修改任务安全协调，多个 ROS 节点可并行启动。
 
 ---

@@ -179,11 +179,14 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
             }
         }
         if snapshot.state.is_terminal() {
-            return Ok(if snapshot.result.as_ref().is_some_and(|r| r.success) {
+            let code = if snapshot.result.as_ref().is_some_and(|r| r.success) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
-            });
+            };
+            drop(stream);
+            wait_for_worker_exit(&runtime);
+            return Ok(code);
         }
         if snapshot.state == TaskState::WaitingConfirmation {
             if let Some(request) = review.take() {
@@ -218,6 +221,14 @@ fn is_missing_worker(error: &anyhow::Error) -> bool {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
         )
     })
+}
+
+fn wait_for_worker_exit(runtime: &Path) {
+    let socket = runtime.join("worker.sock");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while socket.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 pub(crate) fn serve(cli: Cli) -> Result<ExitCode> {

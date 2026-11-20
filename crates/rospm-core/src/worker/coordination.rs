@@ -127,7 +127,9 @@ fn mutation_runtime() -> Result<PathBuf, WorkspaceLockError> {
     }
     let metadata = fs::symlink_metadata(&runtime)?;
     if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "unsafe lease directory").into());
+        return Err(
+            io::Error::new(io::ErrorKind::PermissionDenied, "unsafe lease directory").into(),
+        );
     }
     Ok(runtime)
 }
@@ -229,9 +231,13 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let first = WorkspaceLock::acquire_shared(&root).unwrap();
         assert!(WorkspaceLock::try_acquire_shared(&root).unwrap().is_some());
-        assert!(WorkspaceLock::try_acquire_mutation(&root).unwrap().is_none());
+        assert!(WorkspaceLock::try_acquire_mutation(&root)
+            .unwrap()
+            .is_none());
         drop(first);
-        assert!(WorkspaceLock::try_acquire_mutation(&root).unwrap().is_some());
+        assert!(WorkspaceLock::try_acquire_mutation(&root)
+            .unwrap()
+            .is_some());
         let _ = fs::remove_dir_all(root);
     }
 
