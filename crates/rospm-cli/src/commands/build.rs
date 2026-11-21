@@ -67,6 +67,14 @@ pub fn build(
     )
 }
 
+pub fn rebuild(global: &Global) -> Result<()> {
+    let (loaded, _leases) = super::load_mutating(global, false)?;
+    let host = Host::probe();
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
+    rospm_core::confirmation::clean_build_artifacts(&ctx)?;
+    run_build(&loaded, &host, None, false, false, false, global)
+}
+
 /// `--no-env-check`: the user vouches for the Conda environment.
 pub(super) fn skip_env_checks(plan: &mut Plan) {
     for step in &mut plan.steps {

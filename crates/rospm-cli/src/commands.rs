@@ -38,7 +38,7 @@ mod verify;
 pub mod worker;
 
 pub use apply::apply;
-pub use build::build;
+pub use build::{build, rebuild};
 pub use check::check;
 pub use deps::{components_install, deps_check, deps_install};
 pub use doctor::doctor;

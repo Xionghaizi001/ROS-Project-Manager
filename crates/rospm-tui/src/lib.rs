@@ -55,8 +55,31 @@ pub struct Text {
     pub ready: String,
     pub details: String,
     pub manifest_search: String,
-    pub quit: String,
-    pub mouse_help: String,
+    pub footer_select: String,
+    pub footer_open: String,
+    pub footer_tabs: String,
+    pub footer_scroll_up: String,
+    pub footer_scroll_down: String,
+    pub footer_refresh: String,
+    pub footer_install: String,
+    pub footer_back: String,
+    pub footer_quit: String,
+    pub footer_build: String,
+    pub footer_rebuild: String,
+    pub confirm_build: String,
+    pub confirm_rebuild: String,
+    pub confirm_action: String,
+    pub footer_apply: String,
+    pub footer_uninstall: String,
+    pub footer_check: String,
+    pub footer_verify: String,
+    pub footer_deps_check: String,
+    pub footer_deps_install: String,
+    pub footer_create_project: String,
+    pub footer_scan_projects: String,
+    pub footer_rescan_projects: String,
+    pub project_scan_title: String,
+    pub no_projects_found: String,
     pub non_terminal: String,
     pub actions: String,
     pub check: String,
@@ -84,6 +107,23 @@ enum InstallPage {
     Ros,
     Conda(ToolInstallation),
     Components,
+    Detail {
+        title: String,
+        body: String,
+        return_to_ros: bool,
+    },
+    ScannedProjects(Vec<std::path::PathBuf>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Apply,
+    Uninstall,
+    Check,
+    Verify,
+    DepsCheck,
+    DepsInstall,
+    CreateProject,
 }
 
 impl InstallPage {
@@ -97,6 +137,10 @@ impl InstallPage {
     fn refresh(&mut self) {
         if let Self::Conda(tool) = self {
             *tool = ToolInstallation::probe();
+        } else if let Self::ScannedProjects(projects) = self {
+            if let Ok(root) = std::env::current_dir() {
+                *projects = dashboard::Dashboard::scan_projects(&root);
+            }
         }
     }
 }
@@ -114,8 +158,38 @@ pub fn run(
 pub fn run_with_installers(
     manifest_path: Option<&Path>,
     text: Text,
+    install_ros: impl FnMut() -> Result<()>,
+    install_components: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    run_with_build(manifest_path, text, install_ros, install_components, |_| {
+        Err(anyhow!("project builder unavailable"))
+    })
+}
+
+pub fn run_with_build(
+    manifest_path: Option<&Path>,
+    text: Text,
+    install_ros: impl FnMut() -> Result<()>,
+    install_components: impl FnMut() -> Result<()>,
+    build: impl FnMut(bool) -> Result<()>,
+) -> Result<()> {
+    run_with_actions(
+        manifest_path,
+        text,
+        install_ros,
+        install_components,
+        build,
+        |_| Err(anyhow!("project action unavailable")),
+    )
+}
+
+pub fn run_with_actions(
+    manifest_path: Option<&Path>,
+    text: Text,
     mut install_ros: impl FnMut() -> Result<()>,
     mut install_components: impl FnMut() -> Result<()>,
+    mut build: impl FnMut(bool) -> Result<()>,
+    mut action: impl FnMut(Action) -> Result<()>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(anyhow!(text.non_terminal));
@@ -134,6 +208,8 @@ pub fn run_with_installers(
         &text,
         &mut install_ros,
         &mut install_components,
+        &mut build,
+        &mut action,
     );
     disable_raw_mode().ok();
     let stdout = terminal.backend_mut();
@@ -150,7 +226,10 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     text: &Text,
     install_ros: &mut impl FnMut() -> Result<()>,
     install_components: &mut impl FnMut() -> Result<()>,
+    build: &mut impl FnMut(bool) -> Result<()>,
+    action: &mut impl FnMut(Action) -> Result<()>,
 ) -> Result<()> {
+    let mut active_manifest = manifest.map(Path::to_path_buf);
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
     let mut install_page: Option<InstallPage> = None;
@@ -222,60 +301,81 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') if install_page.is_some() => {
-                            install_page = None;
+                            install_page = match install_page.take() {
+                                Some(InstallPage::Detail {
+                                    return_to_ros: true,
+                                    ..
+                                }) => Some(InstallPage::Ros),
+                                _ => None,
+                            };
                             scroll = 0;
-                            focused_row =
-                                first_selectable(dashboard.as_ref(), text, selected, None);
+                            focused_row = first_selectable(
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                install_page.as_ref(),
+                            );
                         }
                         KeyCode::Char('i')
                             if install_page.as_ref().is_some_and(InstallPage::can_install) =>
                         {
-                            disable_raw_mode()?;
-                            execute!(
-                                terminal.backend_mut(),
-                                DisableMouseCapture,
-                                LeaveAlternateScreen
+                            install(
+                                terminal,
+                                active_manifest.as_deref(),
+                                &mut dashboard,
+                                &mut install_page,
+                                &mut scroll,
+                                text,
+                                install_ros,
+                                install_components,
+                                &mut last_runtime_refresh,
                             )?;
-                            terminal.show_cursor()?;
-                            let result = match install_page.as_ref() {
-                                Some(InstallPage::Ros) => install_ros(),
-                                Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
-                                    bootstrap.perform(&mut io::stdout()).map_err(Into::into)
-                                }
-                                Some(InstallPage::Components) => install_components(),
-                                _ => unreachable!(),
-                            };
-                            if let Err(error) = result {
-                                eprintln!("{error:#}");
-                            }
-                            println!("Enter ↩");
-                            let mut input = String::new();
-                            io::stdin().read_line(&mut input)?;
-                            enable_raw_mode()?;
-                            execute!(
-                                terminal.backend_mut(),
-                                EnterAlternateScreen,
-                                EnableMouseCapture
-                            )?;
-                            terminal.hide_cursor()?;
-                            terminal.clear()?;
-                            if let Some(page) = &mut install_page {
-                                page.refresh();
-                            }
-                            dashboard = dashboard::Dashboard::load(manifest, text)?;
-                            scroll = 0;
-                            last_runtime_refresh = Instant::now();
                         }
                         KeyCode::Enter => {
-                            activate(
-                                &mut browser,
-                                &mut install_page,
-                                &mut focused_row,
-                                &mut scroll,
+                            if let Some(InstallPage::ScannedProjects(projects)) = &install_page {
+                                if let Some(path) =
+                                    focused_row.and_then(|index| projects.get(index)).cloned()
+                                {
+                                    active_manifest = Some(path.clone());
+                                    dashboard = dashboard::Dashboard::load(Some(&path), text)?;
+                                    install_page = None;
+                                    scroll = 0;
+                                    focused_row =
+                                        first_selectable(dashboard.as_ref(), text, 0, None);
+                                }
+                            } else {
+                                activate(
+                                    &mut browser,
+                                    &mut install_page,
+                                    &mut focused_row,
+                                    &mut scroll,
+                                    dashboard.as_ref(),
+                                    text,
+                                    selected,
+                                );
+                            }
+                        }
+                        KeyCode::Right if install_page.is_some() => {
+                            let rows = pages::rows(
                                 dashboard.as_ref(),
                                 text,
                                 selected,
+                                install_page.as_ref(),
                             );
+                            if focused_row
+                                .and_then(|index| rows.get(index))
+                                .is_some_and(|row| row.detail.is_some())
+                            {
+                                activate(
+                                    &mut browser,
+                                    &mut install_page,
+                                    &mut focused_row,
+                                    &mut scroll,
+                                    dashboard.as_ref(),
+                                    text,
+                                    selected,
+                                );
+                            }
                         }
                         KeyCode::Char('q') | KeyCode::Esc => break Ok(()),
                         KeyCode::Left | KeyCode::BackTab if install_page.is_none() => {
@@ -285,6 +385,22 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 first_selectable(dashboard.as_ref(), text, selected, None);
                         }
                         KeyCode::Right | KeyCode::Tab if install_page.is_none() => {
+                            let rows = pages::rows(dashboard.as_ref(), text, selected, None);
+                            if focused_row
+                                .and_then(|index| rows.get(index))
+                                .is_some_and(|row| row.detail.is_some())
+                            {
+                                activate(
+                                    &mut browser,
+                                    &mut install_page,
+                                    &mut focused_row,
+                                    &mut scroll,
+                                    dashboard.as_ref(),
+                                    text,
+                                    selected,
+                                );
+                                continue;
+                            }
                             selected = (selected + 1) % 8;
                             scroll = 0;
                             focused_row =
@@ -323,7 +439,8 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             if let Some(page) = &mut install_page {
                                 page.refresh();
                             }
-                            dashboard = dashboard::Dashboard::load(manifest, text)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                             scroll = 0;
                             focused_row = first_selectable(
                                 dashboard.as_ref(),
@@ -332,6 +449,63 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 install_page.as_ref(),
                             );
                             last_runtime_refresh = Instant::now();
+                        }
+                        KeyCode::Char('n') if selected == 0 && dashboard.is_none() => {
+                            run_action(terminal, text, action, Action::CreateProject)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('s') if selected == 0 && dashboard.is_none() => {
+                            install_page = Some(InstallPage::ScannedProjects(
+                                dashboard::Dashboard::scan_projects(&std::env::current_dir()?),
+                            ));
+                            focused_row = first_selectable(
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                install_page.as_ref(),
+                            );
+                            scroll = 0;
+                        }
+                        KeyCode::Char('b') | KeyCode::Char('B') if selected == 2 => {
+                            let rebuild = key.code == KeyCode::Char('B');
+                            compile(terminal, text, build, rebuild)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                            scroll = 0;
+                            focused_row =
+                                first_selectable(dashboard.as_ref(), text, selected, None);
+                            last_runtime_refresh = Instant::now();
+                        }
+                        KeyCode::Char('a') if selected == 1 => {
+                            run_action(terminal, text, action, Action::Apply)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('u') if selected == 1 => {
+                            run_action(terminal, text, action, Action::Uninstall)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('D') if selected == 1 => {
+                            run_action(terminal, text, action, Action::DepsInstall)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('d') if selected == 1 => {
+                            run_action(terminal, text, action, Action::DepsCheck)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('c') if selected == 5 => {
+                            run_action(terminal, text, action, Action::Check)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                        }
+                        KeyCode::Char('v') if selected == 5 => {
+                            run_action(terminal, text, action, Action::Verify)?;
+                            dashboard =
+                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         _ => {}
                     }
@@ -371,6 +545,40 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             focused_row =
                                 first_selectable(dashboard.as_ref(), text, selected, None);
                         }
+                        MouseEventKind::Down(MouseButton::Left)
+                            if mouse.row == size.height.saturating_sub(1) =>
+                        {
+                            let Some(footer_action) = view::footer_action_at(
+                                mouse.column,
+                                size.width,
+                                install_page.as_ref(),
+                                selected,
+                                dashboard.is_some(),
+                                text,
+                            ) else {
+                                continue;
+                            };
+                            let quit = activate_footer(
+                                footer_action,
+                                terminal,
+                                active_manifest.as_deref(),
+                                &mut browser,
+                                &mut dashboard,
+                                &mut install_page,
+                                &mut focused_row,
+                                &mut scroll,
+                                &mut selected,
+                                text,
+                                install_ros,
+                                install_components,
+                                &mut last_runtime_refresh,
+                                build,
+                                action,
+                            )?;
+                            if quit {
+                                break Ok(());
+                            }
+                        }
                         MouseEventKind::Down(MouseButton::Left) => {
                             let rows = pages::rows(
                                 dashboard.as_ref(),
@@ -392,15 +600,29 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             ) {
                                 if rows.get(index).is_some_and(|row| row.selectable) {
                                     focused_row = Some(index);
-                                    activate(
-                                        &mut browser,
-                                        &mut install_page,
-                                        &mut focused_row,
-                                        &mut scroll,
-                                        dashboard.as_ref(),
-                                        text,
-                                        selected,
-                                    );
+                                    if let Some(InstallPage::ScannedProjects(projects)) =
+                                        &install_page
+                                    {
+                                        if let Some(path) = projects.get(index).cloned() {
+                                            active_manifest = Some(path.clone());
+                                            dashboard =
+                                                dashboard::Dashboard::load(Some(&path), text)?;
+                                            install_page = None;
+                                            scroll = 0;
+                                            focused_row =
+                                                first_selectable(dashboard.as_ref(), text, 0, None);
+                                        }
+                                    } else {
+                                        activate(
+                                            &mut browser,
+                                            &mut install_page,
+                                            &mut focused_row,
+                                            &mut scroll,
+                                            dashboard.as_ref(),
+                                            text,
+                                            selected,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -412,6 +634,264 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install<B: ratatui::backend::Backend + Write>(
+    terminal: &mut Terminal<B>,
+    manifest: Option<&Path>,
+    dashboard: &mut Option<dashboard::Dashboard>,
+    install_page: &mut Option<InstallPage>,
+    scroll: &mut usize,
+    text: &Text,
+    install_ros: &mut impl FnMut() -> Result<()>,
+    install_components: &mut impl FnMut() -> Result<()>,
+    last_runtime_refresh: &mut Instant,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+    let result = match install_page.as_ref() {
+        Some(InstallPage::Ros) => install_ros(),
+        Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
+            bootstrap.perform(&mut io::stdout()).map_err(Into::into)
+        }
+        Some(InstallPage::Components) => install_components(),
+        _ => unreachable!(),
+    };
+    if let Err(error) = result {
+        eprintln!("{error:#}");
+    }
+    println!("Enter ↩");
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+    if let Some(page) = install_page {
+        page.refresh();
+    }
+    *dashboard = dashboard::Dashboard::load(manifest, text)?;
+    *scroll = 0;
+    *last_runtime_refresh = Instant::now();
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activate_footer<B: ratatui::backend::Backend + Write>(
+    action: view::FooterAction,
+    terminal: &mut Terminal<B>,
+    manifest: Option<&Path>,
+    browser: &mut Option<logs::Browser>,
+    dashboard: &mut Option<dashboard::Dashboard>,
+    install_page: &mut Option<InstallPage>,
+    focused_row: &mut Option<usize>,
+    scroll: &mut usize,
+    selected: &mut usize,
+    text: &Text,
+    install_ros: &mut impl FnMut() -> Result<()>,
+    install_components: &mut impl FnMut() -> Result<()>,
+    last_runtime_refresh: &mut Instant,
+    build: &mut impl FnMut(bool) -> Result<()>,
+    execute_action: &mut impl FnMut(Action) -> Result<()>,
+) -> Result<bool> {
+    match action {
+        view::FooterAction::Select => {
+            if !move_focus(
+                focused_row,
+                scroll,
+                dashboard.as_ref(),
+                text,
+                *selected,
+                install_page.as_ref(),
+                true,
+            ) {
+                *scroll = scroll.saturating_add(1);
+            }
+        }
+        view::FooterAction::Open => activate(
+            browser,
+            install_page,
+            focused_row,
+            scroll,
+            dashboard.as_ref(),
+            text,
+            *selected,
+        ),
+        view::FooterAction::ChangeTab => {
+            *selected = (*selected + 1) % 8;
+            *install_page = None;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+        }
+        view::FooterAction::ScrollUp => {
+            let page_size = usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
+            *scroll = scroll.saturating_sub(page_size);
+        }
+        view::FooterAction::ScrollDown => {
+            let page_size = usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
+            *scroll = scroll.saturating_add(page_size);
+        }
+        view::FooterAction::Refresh => {
+            if let Some(page) = install_page {
+                page.refresh();
+            }
+            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+            *scroll = 0;
+            *focused_row =
+                first_selectable(dashboard.as_ref(), text, *selected, install_page.as_ref());
+            *last_runtime_refresh = Instant::now();
+        }
+        view::FooterAction::Install => install(
+            terminal,
+            manifest,
+            dashboard,
+            install_page,
+            scroll,
+            text,
+            install_ros,
+            install_components,
+            last_runtime_refresh,
+        )?,
+        view::FooterAction::Build | view::FooterAction::Rebuild => {
+            compile(terminal, text, build, action == view::FooterAction::Rebuild)?;
+            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+            *last_runtime_refresh = Instant::now();
+        }
+        view::FooterAction::Execute(operation) => {
+            run_action(terminal, text, execute_action, operation)?;
+            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+            *last_runtime_refresh = Instant::now();
+        }
+        view::FooterAction::CreateProject => {
+            run_action(terminal, text, execute_action, Action::CreateProject)?;
+            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+            *last_runtime_refresh = Instant::now();
+        }
+        view::FooterAction::ScanProjects => {
+            let root = std::env::current_dir()?;
+            *install_page = Some(InstallPage::ScannedProjects(
+                dashboard::Dashboard::scan_projects(&root),
+            ));
+            *focused_row =
+                first_selectable(dashboard.as_ref(), text, *selected, install_page.as_ref());
+            *scroll = 0;
+        }
+        view::FooterAction::RescanProjects => {
+            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+            *last_runtime_refresh = Instant::now();
+        }
+        view::FooterAction::Back => {
+            *install_page = None;
+            *scroll = 0;
+            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
+        }
+        view::FooterAction::Quit => return Ok(true),
+    }
+    Ok(false)
+}
+
+fn run_action<B: ratatui::backend::Backend + Write>(
+    terminal: &mut Terminal<B>,
+    text: &Text,
+    action: &mut impl FnMut(Action) -> Result<()>,
+    operation: Action,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+    let label = match operation {
+        Action::Apply => &text.footer_apply,
+        Action::Uninstall => &text.footer_uninstall,
+        Action::Check => &text.footer_check,
+        Action::Verify => &text.footer_verify,
+        Action::DepsCheck => &text.footer_deps_check,
+        Action::DepsInstall => &text.footer_deps_install,
+        Action::CreateProject => &text.footer_create_project,
+    };
+    println!("{} {} [y/N]", text.confirm_action, label);
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if matches!(answer.trim(), "y" | "Y" | "yes") {
+        if let Err(error) = action(operation) {
+            eprintln!("{error:#}");
+        }
+        println!("Enter ↩");
+        answer.clear();
+        io::stdin().read_line(&mut answer)?;
+    }
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+    Ok(())
+}
+
+fn compile<B: ratatui::backend::Backend + Write>(
+    terminal: &mut Terminal<B>,
+    text: &Text,
+    build: &mut impl FnMut(bool) -> Result<()>,
+    rebuild: bool,
+) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    terminal.show_cursor()?;
+    println!(
+        "{} [y/N]",
+        if rebuild {
+            &text.confirm_rebuild
+        } else {
+            &text.confirm_build
+        }
+    );
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    if matches!(answer.trim(), "y" | "Y" | "yes") {
+        if let Err(error) = build(rebuild) {
+            eprintln!("{error:#}");
+        }
+        println!("Enter ↩");
+        answer.clear();
+        io::stdin().read_line(&mut answer)?;
+    }
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+    Ok(())
 }
 
 fn first_selectable(
@@ -470,6 +950,16 @@ fn activate(
         return;
     };
     if !rows.get(index).is_some_and(|row| row.selectable) {
+        return;
+    }
+    if let Some(row) = rows.get(index).filter(|row| row.detail.is_some()) {
+        *install_page = Some(InstallPage::Detail {
+            title: row.cells[0].clone(),
+            body: row.detail.clone().unwrap_or_default(),
+            return_to_ros: matches!(install_page.as_ref(), Some(InstallPage::Ros)),
+        });
+        *focused = None;
+        *scroll = 0;
         return;
     }
     *install_page = match (selected, install_page.as_ref(), index) {

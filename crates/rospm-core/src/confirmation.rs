@@ -27,6 +27,55 @@ fn commands(plan: &Plan) -> Vec<Command> {
         .collect()
 }
 
+/// Remove existing colcon build and install bases after the frontend has
+/// confirmed a full rebuild.
+pub fn clean_build_artifacts(ctx: &Context<'_>) -> Result<()> {
+    let mut dirs = Vec::new();
+    for ws in ctx.manifest.workspaces.values() {
+        for (key, default) in [("build-base", "build"), ("install-base", "install")] {
+            if let Some(path) = existing_base(colcon_bases(ctx.root, ws, key, default)) {
+                let path: PathBuf = path.components().collect();
+                let metadata = fs::symlink_metadata(&path).map_err(|e| Error::io(&path, e))?;
+                if metadata.file_type().is_symlink() {
+                    return Err(unsafe_directory(&path));
+                }
+                let path = path.canonicalize().map_err(|e| Error::io(&path, e))?;
+                if dirs.iter().any(|(p, _, _)| p == &path) {
+                    continue;
+                }
+                validate_directory(ctx, &path)?;
+                dirs.push((path, metadata.dev(), metadata.ino()));
+            }
+        }
+    }
+    for (path, device, inode) in &dirs {
+        let metadata = fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
+        if !metadata.is_dir()
+            || metadata.dev() != *device
+            || metadata.ino() != *inode
+            || path.canonicalize().map_err(|e| Error::io(path, e))? != *path
+        {
+            return Err(Error::Host(msg!(
+                "confirmation.directory_changed",
+                path = path.display()
+            )));
+        }
+    }
+    let paths: Vec<PathBuf> = dirs
+        .iter()
+        .filter(|(path, _, _)| {
+            !dirs
+                .iter()
+                .any(|(parent, _, _)| path != parent && path.starts_with(parent))
+        })
+        .map(|(path, _, _)| path.clone())
+        .collect();
+    for path in paths {
+        fs::remove_dir_all(&path).map_err(|e| Error::io(&path, e))?;
+    }
+    Ok(())
+}
+
 /// Only called for an automatically proposed mirror. Explicit --mirror choices
 /// and their reachability checks do not require another confirmation.
 pub fn switch_mirror(

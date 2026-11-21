@@ -221,6 +221,7 @@ mod tests {
                     selectable: false,
                     disabled: false,
                     running: false,
+                    detail: None,
                 },
                 Entry {
                     cells: ["2".into(), String::new(), "tail".into()],
@@ -229,6 +230,7 @@ mod tests {
                     selectable: false,
                     disabled: false,
                     running: false,
+                    detail: None,
                 },
             ]
         };
@@ -290,6 +292,7 @@ mod tests {
                         selectable: false,
                         disabled: false,
                         running: true,
+                        detail: None,
                     }],
                     &text,
                     &mut 0,
@@ -325,6 +328,7 @@ mod tests {
                         selectable: true,
                         disabled: false,
                         running: false,
+                        detail: None,
                     }],
                     &text,
                     &mut 0,
@@ -353,6 +357,7 @@ mod tests {
                 selectable: true,
                 disabled: false,
                 running: false,
+                detail: None,
             },
             Entry {
                 cells: ["second".into(), String::new(), String::new()],
@@ -361,6 +366,7 @@ mod tests {
                 selectable: true,
                 disabled: false,
                 running: false,
+                detail: None,
             },
         ];
         let area = Rect::new(0, 2, 30, 5);
@@ -384,6 +390,7 @@ mod tests {
                         selectable: false,
                         disabled: false,
                         running: false,
+                        detail: None,
                     }],
                     &Text::default(),
                     &mut 0,

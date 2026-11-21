@@ -530,7 +530,7 @@ fn execute_cli(
         ),
         Cmd::Env { shell, venv } => commands::env(&global, shell, venv),
         Cmd::Shell { venv } => commands::shell(&global, venv),
-        Cmd::Tui => rospm_tui::run_with_installers(
+        Cmd::Tui => rospm_tui::run_with_actions(
             global.manifest.as_deref(),
             rospm_tui::Text {
                 no_logs: tr("cli.tui.no_logs"),
@@ -563,8 +563,31 @@ fn execute_cli(
                 ready: tr("cli.tui.ready"),
                 details: tr("cli.tui.details"),
                 manifest_search: tr("cli.tui.manifest_search"),
-                quit: tr("cli.tui.quit"),
-                mouse_help: tr("cli.tui.mouse_help"),
+                footer_select: tr("cli.tui.footer_select"),
+                footer_open: tr("cli.tui.footer_open"),
+                footer_tabs: tr("cli.tui.footer_tabs"),
+                footer_scroll_up: tr("cli.tui.footer_scroll_up"),
+                footer_scroll_down: tr("cli.tui.footer_scroll_down"),
+                footer_refresh: tr("cli.tui.footer_refresh"),
+                footer_install: tr("cli.tui.footer_install"),
+                footer_back: tr("cli.tui.footer_back"),
+                footer_quit: tr("cli.tui.footer_quit"),
+                footer_build: tr("cli.tui.footer_build"),
+                footer_rebuild: tr("cli.tui.footer_rebuild"),
+                confirm_build: tr("cli.tui.confirm_build"),
+                confirm_rebuild: tr("cli.tui.confirm_rebuild"),
+                confirm_action: tr("cli.tui.confirm_action"),
+                footer_apply: tr("cli.tui.footer_apply"),
+                footer_uninstall: tr("cli.tui.footer_uninstall"),
+                footer_check: tr("cli.tui.footer_check"),
+                footer_verify: tr("cli.tui.footer_verify"),
+                footer_deps_check: tr("cli.tui.footer_deps_check"),
+                footer_deps_install: tr("cli.tui.footer_deps_install"),
+                footer_create_project: tr("cli.tui.footer_create_project"),
+                footer_scan_projects: tr("cli.tui.footer_scan_projects"),
+                footer_rescan_projects: tr("cli.tui.footer_rescan_projects"),
+                project_scan_title: tr("cli.tui.project_scan_title"),
+                no_projects_found: tr("cli.tui.no_projects_found"),
                 non_terminal: tr("cli.tui.non_terminal"),
                 actions: tr("cli.tui.actions"),
                 check: tr("cli.tui.check"),
@@ -589,6 +612,39 @@ fn execute_cli(
             },
             || commands::apply(&global, false, false, false, false, false, None, None),
             || commands::components_install(&global, false),
+            |rebuild| {
+                if rebuild {
+                    commands::rebuild(&global)
+                } else {
+                    commands::build(
+                        &global,
+                        None,
+                        commands::VenvArgs::default(),
+                        None,
+                        None,
+                        Vec::new(),
+                        false,
+                        false,
+                    )
+                }
+            },
+            |action| match action {
+                rospm_tui::Action::Apply => {
+                    commands::apply(&global, false, false, false, false, false, None, None)
+                }
+                rospm_tui::Action::Uninstall => commands::uninstall(&global, false, true, false),
+                rospm_tui::Action::Check => {
+                    commands::check(&global, None, false, commands::VenvArgs::default())
+                }
+                rospm_tui::Action::Verify => {
+                    commands::verify(&global, commands::VenvArgs::default())
+                }
+                rospm_tui::Action::DepsCheck => commands::deps_check(&global),
+                rospm_tui::Action::DepsInstall => commands::deps_install(&global, false),
+                rospm_tui::Action::CreateProject => {
+                    commands::init(&global, false, None, None, false)
+                }
+            },
         ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),

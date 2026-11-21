@@ -84,6 +84,15 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn confirmed_full_rebuild_cleans_build_outputs_and_preserves_sources() {
+    let f = Fixture::new();
+    confirmation::clean_build_artifacts(&f.ctx()).unwrap();
+    assert!(!f.root.join("ws/build").exists());
+    assert!(!f.root.join("ws/install").exists());
+    assert!(f.root.join("ws/src/source").is_file());
+}
+
+#[test]
 fn mirror_scope_defaults_and_disconnect_are_explicit() {
     for snapshot in [false, true] {
         let ui = Handler(|r: &Confirmation| {

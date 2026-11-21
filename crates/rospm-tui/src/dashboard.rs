@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rospm_core::{
     lock::Lock,
-    manifest::{Manifest, ProviderKind},
+    manifest::{Manifest, ProviderKind, MANIFEST_FILE},
     mirror,
     plan::Plan,
     platform::Platform,
@@ -42,6 +42,35 @@ pub(crate) struct Component {
 }
 
 impl Dashboard {
+    pub(crate) fn scan_projects(root: &Path) -> Vec<PathBuf> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut projects = Vec::new();
+        while let Some(directory) = pending.pop() {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if !name.starts_with('.')
+                        && !matches!(
+                            name.as_ref(),
+                            "build" | "install" | "log" | "node_modules" | "target" | ".venv"
+                        )
+                    {
+                        pending.push(path);
+                    }
+                } else if path.file_name().is_some_and(|name| name == MANIFEST_FILE) {
+                    projects.push(path);
+                }
+            }
+        }
+        projects.sort();
+        projects
+    }
+
     pub(crate) fn load(path: Option<&Path>, text: &Text) -> Result<Option<Self>> {
         let path = match path {
             Some(path) => path.to_path_buf(),
@@ -268,6 +297,33 @@ fn status_label(status: rospm_core::probe::Status, text: &Text) -> &str {
         rospm_core::probe::Status::Mismatch => &text.status_mismatch,
         rospm_core::probe::Status::Unknown => &text.status_unknown,
         rospm_core::probe::Status::Info => &text.status_info,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_scan_finds_manifests_and_skips_generated_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "rospm-tui-scan-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let expected = root.join("nested/project").join(MANIFEST_FILE);
+        let hidden = root.join(".cache/hidden").join(MANIFEST_FILE);
+        let generated = root.join("target/generated").join(MANIFEST_FILE);
+        for path in [&expected, &hidden, &generated] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let found = Dashboard::scan_projects(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(found, [expected]);
     }
 }
 

@@ -10,6 +10,7 @@ pub(crate) struct Entry {
     pub disabled: bool,
     /// Set only when the executor identifies this exact dependency/package row.
     pub running: bool,
+    pub detail: Option<String>,
 }
 impl Entry {
     fn value(name: impl Into<String>, value: impl Into<String>) -> Self {
@@ -20,6 +21,7 @@ impl Entry {
             selectable: false,
             disabled: false,
             running: false,
+            detail: None,
         }
     }
 
@@ -36,6 +38,26 @@ pub(crate) fn rows(
     tab: usize,
     install_page: Option<&InstallPage>,
 ) -> Vec<Entry> {
+    if let Some(InstallPage::Detail { title, body, .. }) = install_page {
+        return vec![Entry::value(title, body)];
+    }
+    if let Some(InstallPage::ScannedProjects(projects)) = install_page {
+        return if projects.is_empty() {
+            vec![Entry::value(
+                &text.project_scan_title,
+                &text.no_projects_found,
+            )]
+        } else {
+            projects
+                .iter()
+                .map(|path| {
+                    let mut row = Entry::link(path.parent().unwrap_or(path).display().to_string());
+                    row.cells[2] = path.display().to_string();
+                    row
+                })
+                .collect()
+        };
+    }
     if let Some(InstallPage::Conda(tool)) = install_page {
         let mut row = Entry::value(&text.conda, tool.render());
         let (label, status) = if matches!(tool, ToolInstallation::Ready(_)) {
@@ -71,6 +93,7 @@ pub(crate) fn rows(
                 selectable: false,
                 disabled: false,
                 running: false,
+                detail: None,
             });
         }
         if rows.is_empty() {
@@ -134,6 +157,7 @@ pub(crate) fn rows(
                     selectable: false,
                     disabled: false,
                     running: false,
+                    detail: None,
                 });
             }
             for error in &d.check {
@@ -172,6 +196,7 @@ pub(crate) fn rows(
                     selectable: false,
                     disabled: false,
                     running: false,
+                    detail: None,
                 });
             }
             rows.push(Entry::link(&text.logs));
@@ -198,13 +223,19 @@ fn heading(rows: &mut Vec<Entry>, title: &str) {
     rows.push(row);
 }
 fn section(rows: &mut Vec<Entry>, title: &str, values: &[String]) {
-    heading(rows, title);
-    for (i, value) in values.iter().enumerate() {
-        rows.push(Entry::value((i + 1).to_string(), value));
-    }
-    if values.is_empty() {
-        rows.push(Entry::value("", "—"));
-    }
+    let mut row = Entry::link(title);
+    row.heading = true;
+    row.cells[2] = if values.is_empty() {
+        "—".into()
+    } else {
+        format!("{} 项", values.len())
+    };
+    row.detail = Some(if values.is_empty() {
+        "—".into()
+    } else {
+        values.join("\n")
+    });
+    rows.push(row);
 }
 
 #[cfg(test)]
@@ -233,6 +264,8 @@ mod tests {
         };
         let text = Text {
             conda: "Conda".into(),
+            apply_plan: "apply plan".into(),
+            uninstall_plan: "uninstall plan".into(),
             not_installed: "missing".into(),
             status_ok: "ok".into(),
             ..Text::default()
@@ -244,13 +277,20 @@ mod tests {
         let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Ros));
         assert_eq!(child[0].cells[2], "missing");
         assert!(!child[0].selectable);
-        assert!(child.iter().any(|row| row.cells[2] == "install ROS"));
-        assert!(!child.iter().any(|row| row.cells[2] == "remove ROS"));
+        assert!(child.iter().any(|row| row.cells[0] == "apply plan"
+            && row.selectable
+            && row.heading
+            && row.detail.as_deref() == Some("install ROS")));
+        assert!(!child
+            .iter()
+            .any(|row| row.detail.as_deref() == Some("remove ROS")));
         assert!(child.last().is_some_and(|row| row.selectable));
         dashboard.ros_installed = true;
         let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Ros));
         assert_eq!(child[0].cells[2], "ok");
-        assert!(child.iter().any(|row| row.cells[2] == "remove ROS"));
+        assert!(child
+            .iter()
+            .any(|row| row.detail.as_deref() == Some("remove ROS")));
         let parent = rows(None, &text, 1, None);
         assert!(!parent[0].selectable);
         assert_eq!(parent[1].cells[0], "Conda");
