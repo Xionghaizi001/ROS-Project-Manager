@@ -70,6 +70,19 @@ impl WorkspaceLock {
         Self::open(mutation_runtime()?, workspace, true, libc::LOCK_EX)
     }
 
+    pub fn try_acquire_tui(project: impl AsRef<Path>) -> Result<Option<Self>, WorkspaceLockError> {
+        let workspace = resolve_workspace(project.as_ref())?;
+        // Lock the directory inode so every user and every path alias shares the same lease.
+        let file = File::open(&workspace)?;
+        let path = workspace.clone();
+        Self::lock(file, workspace, path, true, libc::LOCK_EX)
+    }
+
+    pub fn run_runtime(project: &Path) -> Result<PathBuf, WorkspaceLockError> {
+        let project = resolve_workspace(project)?;
+        Ok(mutation_runtime()?.join("run").join(project_key(&project)))
+    }
+
     pub fn workspace(&self) -> &Path {
         &self.workspace
     }
@@ -87,9 +100,7 @@ impl WorkspaceLock {
         let locks = runtime_dir.as_ref().join("workspace-locks");
         fs::create_dir_all(&locks)?;
         fs::set_permissions(&locks, fs::Permissions::from_mode(0o700))?;
-        let mut digest = Sha256::new();
-        digest.update(workspace.as_os_str().as_encoded_bytes());
-        let path = locks.join(format!("{:x}.lock", digest.finalize()));
+        let path = locks.join(format!("{}.lock", project_key(&workspace)));
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -97,6 +108,16 @@ impl WorkspaceLock {
             .write(true)
             .mode(0o600)
             .open(&path)?;
+        Self::lock(file, workspace, path, nonblocking, lock_type)
+    }
+
+    fn lock(
+        file: File,
+        workspace: PathBuf,
+        path: PathBuf,
+        nonblocking: bool,
+        lock_type: libc::c_int,
+    ) -> Result<Option<Self>, WorkspaceLockError> {
         let mut flags = lock_type;
         if nonblocking {
             flags |= libc::LOCK_NB;
@@ -115,6 +136,13 @@ impl WorkspaceLock {
             path,
         }))
     }
+}
+
+fn project_key(project: &Path) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(project.as_os_str().as_encoded_bytes())
+    )
 }
 
 fn mutation_runtime() -> Result<PathBuf, WorkspaceLockError> {

@@ -7,11 +7,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::manifest::Manifest;
 use crate::package_xml::{find_package_files, PackageXml};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub mod output;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     Node,
@@ -31,6 +34,62 @@ pub struct WorkspaceRun {
     pub workspace: PathBuf,
     pub built: bool,
     pub targets: Vec<Target>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunRequest {
+    pub manifest: PathBuf,
+    pub kind: TargetKind,
+    pub package: String,
+    pub name: String,
+    pub args: Vec<String>,
+    pub venv: bool,
+    pub venv_path: Option<PathBuf>,
+    pub verbosity: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSignal {
+    Terminate,
+    Kill,
+    Suspend,
+    Resume,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunExit {
+    Code(i32),
+    Signal(i32),
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunStatus {
+    pub id: String,
+    pub target: String,
+    pub background: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shell: bool,
+    pub pid: Option<u32>,
+    pub suspended: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_fd: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<RunExit>,
+}
+
+pub fn scan_project(manifest: &Manifest, root: &Path) -> WorkspaceRun {
+    let mut project = WorkspaceRun {
+        workspace: root.to_path_buf(),
+        ..WorkspaceRun::default()
+    };
+    for workspace in manifest.workspaces.values() {
+        let workspace = scan_workspace(&root.join(&workspace.path));
+        project.built |= workspace.built;
+        project.targets.extend(workspace.targets);
+    }
+    project
 }
 
 /// Return `package/name` choices matching a partially typed target name.

@@ -5,9 +5,9 @@ use anyhow::{bail, Context as _, Result};
 use rospm_core::mirror;
 use rospm_core::probe::Host;
 use rospm_core::provider::{self, Shell};
-use rospm_core::run::{complete_targets, scan_workspace, Target, TargetKind};
+use rospm_core::run::{complete_targets, scan_project, RunRequest, Target, TargetKind};
 
-use super::{context, Global};
+use super::{context, Global, Loaded, VenvArgs};
 
 pub fn run(
     global: &Global,
@@ -21,19 +21,7 @@ pub fn run(
     let mut loaded = super::load(global)?;
     let _read_leases = loaded.workspace_read_leases()?;
     venv.select(&mut loaded)?;
-    let host = Host::probe();
-    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
-    let mut workspaces = Vec::new();
-    for ws in loaded.manifest.workspaces.values() {
-        workspaces.push(scan_workspace(&loaded.root.join(&ws.path)));
-    }
-    if workspaces.iter().all(|w| !w.built) {
-        bail!("{}", rospm_core::msg!("cli.run.not_built"));
-    }
-    let targets: Vec<Target> = workspaces.into_iter().flat_map(|w| w.targets).collect();
-    if targets.is_empty() {
-        bail!("{}", rospm_core::msg!("cli.run.none"));
-    }
+    let targets = targets(&loaded)?;
     if list || (requested.is_none() && !interactive) {
         print_targets(&targets);
         return Ok(());
@@ -55,6 +43,52 @@ pub fn run(
                 ))
             })?
     };
+    let status = command(&loaded, &target, &args, verbosity, false)?
+        .status()
+        .context("failed to start bash")?;
+    check_status(status)
+}
+
+pub(super) fn managed(global: &Global, request: RunRequest) -> Result<()> {
+    let mut loaded = super::load(global)?;
+    let _read_leases = loaded.read_leases(false)?;
+    VenvArgs {
+        venv: request.venv,
+        venv_path: request.venv_path,
+    }
+    .select(&mut loaded)?;
+    let target = targets(&loaded)?
+        .into_iter()
+        .find(|target| {
+            target.kind == request.kind
+                && target.package == request.package
+                && target.name == request.name
+        })
+        .with_context(|| rospm_core::msg!("cli.run.not_found", name = request.name).to_string())?;
+    let command = command(&loaded, &target, &request.args, request.verbosity, true)?;
+    check_status(super::run_process::supervise(command)?)
+}
+
+fn targets(loaded: &Loaded) -> Result<Vec<Target>> {
+    let project = scan_project(&loaded.manifest, &loaded.root);
+    if !project.built {
+        bail!("{}", rospm_core::msg!("cli.run.not_built"));
+    }
+    if project.targets.is_empty() {
+        bail!("{}", rospm_core::msg!("cli.run.none"));
+    }
+    Ok(project.targets)
+}
+
+fn command(
+    loaded: &Loaded,
+    target: &Target,
+    args: &[String],
+    verbosity: u8,
+    managed: bool,
+) -> Result<Command> {
+    let host = Host::probe();
+    let ctx = context(loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let env = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
     let ros2 = match &loaded.venv {
         Some(path) => format!(
@@ -81,7 +115,8 @@ pub fn run(
         ),
     };
     let script = format!(
-        "set -e\n{env}\n{command} {}",
+        "set -e\n{env}\n{}{command} {}",
+        if managed { "exec " } else { "" },
         args.iter()
             .map(|a| shell_quote(a))
             .collect::<Vec<_>>()
@@ -105,11 +140,14 @@ pub fn run(
         );
     }
     io::stdout().flush()?;
-    let status = Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .args(["--noprofile", "--norc", "-c", &script])
-        .current_dir(&loaded.root)
-        .status()
-        .context("failed to start bash")?;
+        .current_dir(&loaded.root);
+    Ok(command)
+}
+
+fn check_status(status: std::process::ExitStatus) -> Result<()> {
     if !status.success() {
         bail!("{}", rospm_core::msg!("cli.run.failed", status = status));
     }

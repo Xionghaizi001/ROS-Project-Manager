@@ -11,3 +11,4 @@ crossterm.workspace = true
 ratatui.workspace = true
 rospm-core = { path = "../rospm-core" }
 serde_json.workspace = true
+shlex = "2"

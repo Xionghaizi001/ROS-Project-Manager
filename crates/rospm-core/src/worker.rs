@@ -23,7 +23,7 @@ mod submission;
 mod task;
 
 pub use coordination::{resolve_workspace, ConfirmationWait, WorkspaceLock, WorkspaceLockError};
-pub use socket::{PeerIdentity, SocketEndpoint};
+pub use socket::{peer_identity, PeerIdentity, SocketEndpoint};
 pub use store::{DispatchStatus, LogPump, RecoveryCause, StoreError, TaskStore};
 pub use submission::SubmissionStatus;
 pub use task::{TaskHandle, TaskRunner};
@@ -89,6 +89,22 @@ pub enum Message {
     },
     Cancel {
         task_id: String,
+    },
+    StartRun {
+        request: crate::run::RunRequest,
+        #[serde(default)]
+        output_fd: Option<i32>,
+    },
+    ListRuns,
+    SignalRun {
+        id: String,
+        signal: crate::run::RunSignal,
+    },
+    Runs {
+        processes: Vec<crate::run::RunStatus>,
+    },
+    RunStarted {
+        process: crate::run::RunStatus,
     },
     Accepted {
         request_id: String,

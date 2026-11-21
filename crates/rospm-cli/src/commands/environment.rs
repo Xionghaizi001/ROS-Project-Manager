@@ -9,7 +9,7 @@ use rospm_core::provider::{self, Shell};
 
 use crate::i18n::tr;
 
-use super::{context, load, Global};
+use super::{context, load, Global, Loaded};
 
 pub fn env(global: &Global, shell: Shell, venv: super::VenvArgs) -> Result<()> {
     let mut loaded = load(global)?;
@@ -24,24 +24,15 @@ pub fn env(global: &Global, shell: Shell, venv: super::VenvArgs) -> Result<()> {
 pub fn shell(global: &Global, venv: super::VenvArgs) -> Result<()> {
     let (mut loaded, leases) = super::load_mutating(global, false)?;
     venv.select(&mut loaded)?;
-    let host = Host::probe();
-    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
-    let script = provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?;
+    let script = shell_environment(&loaded)?;
 
     let env_dir = loaded.root.join(".rospm");
     std::fs::create_dir_all(&env_dir)?;
     let env_file = env_dir.join("env.sh");
     std::fs::write(&env_file, &script)?;
 
-    // Interactive bash that sources our script after the user's rc files.
-    let rc = format!(
-        // PS1 expands $ROSPM_PROJECT at display time without re-parsing its value.
-        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {} || exit $?\nexport ROSPM_PROJECT={}\nPS1='(rospm:$ROSPM_PROJECT) '\"$PS1\"\n",
-        rospm_core::plan::shell_quote(&env_file.to_string_lossy()),
-        rospm_core::plan::shell_quote(&loaded.manifest.project.name),
-    );
     let rc_file = env_dir.join("shellrc");
-    std::fs::write(&rc_file, rc)?;
+    std::fs::write(&rc_file, shell_rc(&loaded, &env_file))?;
 
     // Commands launched inside the shell acquire their own leases.
     drop(leases);
@@ -61,4 +52,19 @@ pub fn shell(global: &Global, venv: super::VenvArgs) -> Result<()> {
         bail!("{}", msg!("cli.shell.exited", status = status));
     }
     Ok(())
+}
+
+pub(super) fn shell_environment(loaded: &Loaded) -> Result<String> {
+    let host = Host::probe();
+    let ctx = context(loaded, &host, false, None, false, mirror::OFFICIAL)?;
+    Ok(provider::for_manifest(&loaded.manifest).env_script(&ctx, Shell::Bash)?)
+}
+
+pub(super) fn shell_rc(loaded: &Loaded, env_file: &std::path::Path) -> String {
+    format!(
+        // PS1 expands $ROSPM_PROJECT at display time without re-parsing its value.
+        "[ -f ~/.bashrc ] && source ~/.bashrc\nsource {} || exit $?\nexport ROSPM_PROJECT={}\nPS1='(rospm:$ROSPM_PROJECT) '\"$PS1\"\n",
+        rospm_core::plan::shell_quote(&env_file.to_string_lossy()),
+        rospm_core::plan::shell_quote(&loaded.manifest.project.name),
+    )
 }

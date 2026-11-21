@@ -1,4 +1,5 @@
 //! Explicit worker lifecycle; clients may disconnect without ending tasks.
+pub mod runs;
 pub mod synchronous;
 use super::{context, load, Global};
 use crate::i18n::tr;

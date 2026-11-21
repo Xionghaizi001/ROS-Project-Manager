@@ -63,10 +63,19 @@ impl SocketEndpoint {
     pub fn serve(
         &self,
         stop: &AtomicBool,
+        dispatch: impl FnMut(PeerIdentity, Message) -> Message,
+    ) -> io::Result<()> {
+        self.serve_while(stop, dispatch, |_| true)
+    }
+
+    pub fn serve_while(
+        &self,
+        stop: &AtomicBool,
         mut dispatch: impl FnMut(PeerIdentity, Message) -> Message,
+        mut keep_running: impl FnMut(bool) -> bool,
     ) -> io::Result<()> {
         self.listener.set_nonblocking(true)?;
-        let result = self.serve_loop(stop, &mut dispatch, &mut |_| true);
+        let result = self.serve_loop(stop, &mut dispatch, &mut keep_running);
         self.listener.set_nonblocking(false)?;
         result
     }
@@ -321,6 +330,8 @@ fn validate_request(message: &Message) -> Result<(), &'static str> {
             }
             task_id
         }
+        Message::StartRun { .. } | Message::ListRuns => return Ok(()),
+        Message::SignalRun { id, .. } => id,
         _ => return Err("expected a client request"),
     };
     if !valid_identifier(task_id) {

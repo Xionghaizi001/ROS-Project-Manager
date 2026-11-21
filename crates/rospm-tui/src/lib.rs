@@ -5,12 +5,13 @@ mod log_view;
 mod logs;
 mod packages;
 mod pages;
+mod runs;
 mod table;
 mod view;
 
 use std::{
     io::{self, IsTerminal, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -24,6 +25,8 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use rospm_core::conda::ToolInstallation;
+use rospm_core::worker::WorkspaceLock;
+pub use runs::RunBackend;
 use std::time::{Duration, Instant};
 
 /// Localized strings supplied by the CLI layer.
@@ -101,6 +104,34 @@ pub struct Text {
     pub status_mismatch: String,
     pub status_unknown: String,
     pub status_info: String,
+    pub run_not_built: String,
+    pub run_empty: String,
+    pub run_node: String,
+    pub run_launch: String,
+    pub run_processes: String,
+    pub run_foreground: String,
+    pub run_background: String,
+    pub run_args: String,
+    pub run_bad_args: String,
+    pub run_venv: String,
+    pub run_venv_help: String,
+    pub run_terminate: String,
+    pub run_kill: String,
+    pub run_suspend: String,
+    pub run_resume: String,
+    pub run_suspended: String,
+    pub shell_detached: String,
+    pub run_starting: String,
+    pub run_idle: String,
+    pub run_current: String,
+    pub run_history: String,
+    pub run_no_history: String,
+    pub run_exited: String,
+    pub run_exit_code: String,
+    pub run_exit_signal: String,
+    pub run_exit_unknown: String,
+    pub run_gone: String,
+    pub tui_already_running: String,
 }
 
 enum InstallPage {
@@ -113,6 +144,8 @@ enum InstallPage {
         return_to_ros: bool,
     },
     ScannedProjects(Vec<std::path::PathBuf>),
+    Run(runs::Page),
+    Shell,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,15 +219,60 @@ pub fn run_with_build(
 pub fn run_with_actions(
     manifest_path: Option<&Path>,
     text: Text,
+    install_ros: impl FnMut() -> Result<()>,
+    install_components: impl FnMut() -> Result<()>,
+    build: impl FnMut(bool) -> Result<()>,
+    action: impl FnMut(Action) -> Result<()>,
+) -> Result<()> {
+    run_dashboard(
+        manifest_path,
+        text,
+        install_ros,
+        install_components,
+        build,
+        action,
+        None,
+    )
+}
+
+pub fn run_with_runs(
+    manifest_path: Option<&Path>,
+    text: Text,
+    install_ros: impl FnMut() -> Result<()>,
+    install_components: impl FnMut() -> Result<()>,
+    build: impl FnMut(bool) -> Result<()>,
+    action: impl FnMut(Action) -> Result<()>,
+    runs: &mut dyn RunBackend,
+    verbosity: u8,
+) -> Result<()> {
+    run_dashboard(
+        manifest_path,
+        text,
+        install_ros,
+        install_components,
+        build,
+        action,
+        Some((runs, verbosity)),
+    )
+}
+
+fn run_dashboard(
+    manifest_path: Option<&Path>,
+    text: Text,
     mut install_ros: impl FnMut() -> Result<()>,
     mut install_components: impl FnMut() -> Result<()>,
     mut build: impl FnMut(bool) -> Result<()>,
     mut action: impl FnMut(Action) -> Result<()>,
+    mut runs: Option<(&mut dyn RunBackend, u8)>,
 ) -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(anyhow!(text.non_terminal));
     }
     let dashboard = dashboard::Dashboard::load(manifest_path, &text)?;
+    let mut project_lock = dashboard
+        .as_ref()
+        .map(|project| lock_project(project, &text))
+        .transpose()?;
     enable_raw_mode().context("failed to enable terminal raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
@@ -210,12 +288,14 @@ pub fn run_with_actions(
         &mut install_components,
         &mut build,
         &mut action,
+        &mut runs,
+        &mut project_lock,
     );
+    if let Some((backend, _)) = runs {
+        backend.close_foreground();
+    }
+    leave_screen(&mut terminal).ok();
     disable_raw_mode().ok();
-    let stdout = terminal.backend_mut();
-    execute!(stdout, DisableMouseCapture, LeaveAlternateScreen).ok();
-    stdout.flush().ok();
-    terminal.show_cursor().ok();
     result
 }
 
@@ -228,6 +308,8 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     install_components: &mut impl FnMut() -> Result<()>,
     build: &mut impl FnMut(bool) -> Result<()>,
     action: &mut impl FnMut(Action) -> Result<()>,
+    runs: &mut Option<(&mut dyn RunBackend, u8)>,
+    project_lock: &mut Option<WorkspaceLock>,
 ) -> Result<()> {
     let mut active_manifest = manifest.map(Path::to_path_buf);
     let mut browser: Option<logs::Browser> = None;
@@ -236,7 +318,72 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut scroll = 0usize;
     let mut focused_row = first_selectable(dashboard.as_ref(), text, selected, None);
     let mut last_runtime_refresh = Instant::now();
+    let mut last_process_refresh = None::<Instant>;
+    let mut processes = Vec::new();
+    let mut active_processes = 0;
+    let mut process_error = None;
+    let mut left_press = None;
     loop {
+        if let Some(project) = dashboard.as_ref() {
+            if project_lock
+                .as_ref()
+                .is_none_or(|lease| lease.workspace() != project.root)
+            {
+                *project_lock = Some(lock_project(project, text)?);
+            }
+            if let Some((backend, verbosity)) = runs {
+                if matches!(install_page, Some(InstallPage::Shell)) {
+                    leave_screen(terminal)?;
+                    let result = backend.shell(&project.root, &project.manifest);
+                    // The main screen may still be at the shell prompt, with raw output enabled.
+                    terminal.backend_mut().write_all(b"\r\n")?;
+                    execute!(
+                        terminal.backend_mut(),
+                        EnterAlternateScreen,
+                        EnableMouseCapture
+                    )?;
+                    terminal.hide_cursor()?;
+                    terminal.clear()?;
+                    install_page = result.err().map(|error| InstallPage::Detail {
+                        title: "Shell".into(),
+                        body: format!("{error:#}"),
+                        return_to_ros: false,
+                    });
+                    focused_row =
+                        first_selectable(Some(project), text, selected, install_page.as_ref());
+                    scroll = 0;
+                    last_process_refresh = None;
+                }
+                if let Some(InstallPage::Run(page)) = &mut install_page {
+                    if page.dispatch(*backend, project, *verbosity, text) {
+                        install_page = None;
+                        focused_row = first_selectable(Some(project), text, selected, None);
+                    }
+                }
+                if last_process_refresh
+                    .is_none_or(|last| last.elapsed() >= Duration::from_millis(400))
+                {
+                    processes = backend.foreground();
+                    match backend.background(&project.root) {
+                        Ok(background) => {
+                            processes.extend(background);
+                            process_error = None;
+                        }
+                        Err(error) => process_error = Some(format!("{error:#}")),
+                    }
+                    let history = backend.history();
+                    let finished: std::collections::HashSet<_> =
+                        history.iter().map(|process| &process.id).collect();
+                    processes.retain(|process| !finished.contains(&process.id));
+                    active_processes = processes.len();
+                    processes.extend(history);
+                    if let Some(InstallPage::Run(page)) = &mut install_page {
+                        page.refresh(&processes, process_error.as_deref(), &mut focused_row, text);
+                    }
+                    last_process_refresh = Some(Instant::now());
+                }
+            }
+        }
         if last_runtime_refresh.elapsed() >= Duration::from_secs(1) {
             if let Some(dashboard) = dashboard.as_mut() {
                 if let Some(browser) = browser.as_mut() {
@@ -246,6 +393,9 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 }
             }
             last_runtime_refresh = Instant::now();
+        }
+        if let Some(log) = browser.as_mut().filter(|log| log.include_processes) {
+            log.add_process_sources(&processes);
         }
         terminal.draw(|frame| {
             if let Some(browser) = &browser {
@@ -260,6 +410,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 install_page.as_ref(),
                 &mut scroll,
                 focused_row,
+                runs.is_some().then_some(active_processes),
             )
         })?;
         if event::poll(Duration::from_millis(250))? {
@@ -297,10 +448,32 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         }
                         continue;
                     }
-                    let page_size =
-                        usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
+                    if let Some(InstallPage::Run(page)) = &mut install_page {
+                        if page.edit_key(key) {
+                            continue;
+                        }
+                    }
+                    if key.code == KeyCode::Char('p') && runs.is_some() {
+                        install_page = Some(InstallPage::Run(runs::Page::processes(
+                            processes.clone(),
+                            process_error.clone(),
+                        )));
+                        focused_row = first_selectable(
+                            dashboard.as_ref(),
+                            text,
+                            selected,
+                            install_page.as_ref(),
+                        );
+                        scroll = 0;
+                        continue;
+                    }
+                    let size = terminal.size()?;
+                    let page_size = usize::from(size.height.saturating_sub(6).clamp(1, 10));
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') if install_page.is_some() => {
+                            if back_run(&mut install_page, &mut focused_row, &mut scroll, text) {
+                                continue;
+                            }
                             install_page = match install_page.take() {
                                 Some(InstallPage::Detail {
                                     return_to_ros: true,
@@ -336,12 +509,16 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 if let Some(path) =
                                     focused_row.and_then(|index| projects.get(index)).cloned()
                                 {
-                                    active_manifest = Some(path.clone());
-                                    dashboard = dashboard::Dashboard::load(Some(&path), text)?;
-                                    install_page = None;
-                                    scroll = 0;
-                                    focused_row =
-                                        first_selectable(dashboard.as_ref(), text, 0, None);
+                                    open_project(
+                                        path,
+                                        text,
+                                        &mut active_manifest,
+                                        &mut dashboard,
+                                        project_lock,
+                                        &mut install_page,
+                                        &mut focused_row,
+                                        &mut scroll,
+                                    )?;
                                 }
                             } else {
                                 activate(
@@ -417,6 +594,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 text,
                                 selected,
                                 install_page.as_ref(),
+                                size,
                                 true,
                             ) {
                                 scroll = scroll.saturating_add(1);
@@ -430,6 +608,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 text,
                                 selected,
                                 install_page.as_ref(),
+                                size,
                                 false,
                             ) {
                                 scroll = scroll.saturating_sub(1);
@@ -513,7 +692,21 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 Event::Mouse(mouse) => {
                     // Shift-drag remains terminal text selection instead of a TUI action.
                     if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                        left_press = None;
                         continue;
+                    }
+                    let cell = (mouse.column, mouse.row);
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            left_press = Some(cell);
+                            continue;
+                        }
+                        MouseEventKind::Up(MouseButton::Left)
+                            if left_press.take() != Some(cell) =>
+                        {
+                            continue;
+                        }
+                        _ => {}
                     }
                     let size = terminal.size()?;
                     if let Some(log) = browser.as_mut() {
@@ -525,7 +718,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             MouseEventKind::ScrollUp => {
                                 log.scroll = log.scroll.saturating_sub(3);
                             }
-                            MouseEventKind::Down(MouseButton::Left) if mouse.row < 2 => {
+                            MouseEventKind::Up(MouseButton::Left) if mouse.row < 2 => {
                                 log.select(mouse.column >= size.width / 2);
                             }
                             _ => {}
@@ -533,19 +726,37 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         continue;
                     }
                     match mouse.kind {
+                        MouseEventKind::Up(MouseButton::Left)
+                            if mouse.row == 0
+                                && runs.is_some()
+                                && view::process_counter_at(
+                                    mouse.column,
+                                    size.width,
+                                    active_processes,
+                                ) =>
+                        {
+                            install_page = Some(InstallPage::Run(runs::Page::processes(
+                                processes.clone(),
+                                process_error.clone(),
+                            )));
+                            focused_row = first_selectable(
+                                dashboard.as_ref(),
+                                text,
+                                selected,
+                                install_page.as_ref(),
+                            );
+                            scroll = 0;
+                        }
                         MouseEventKind::ScrollDown => scroll = scroll.saturating_add(3),
                         MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(3),
-                        MouseEventKind::Down(MouseButton::Left)
-                        | MouseEventKind::Up(MouseButton::Left)
-                            if mouse.row == 1 =>
-                        {
+                        MouseEventKind::Up(MouseButton::Left) if mouse.row == 1 => {
                             selected = tab_at(mouse.column, size.width);
                             install_page = None;
                             scroll = 0;
                             focused_row =
                                 first_selectable(dashboard.as_ref(), text, selected, None);
                         }
-                        MouseEventKind::Down(MouseButton::Left)
+                        MouseEventKind::Up(MouseButton::Left)
                             if mouse.row == size.height.saturating_sub(1) =>
                         {
                             let Some(footer_action) = view::footer_action_at(
@@ -579,7 +790,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 break Ok(());
                             }
                         }
-                        MouseEventKind::Down(MouseButton::Left) => {
+                        MouseEventKind::Up(MouseButton::Left) => {
                             let rows = pages::rows(
                                 dashboard.as_ref(),
                                 text,
@@ -604,13 +815,16 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                         &install_page
                                     {
                                         if let Some(path) = projects.get(index).cloned() {
-                                            active_manifest = Some(path.clone());
-                                            dashboard =
-                                                dashboard::Dashboard::load(Some(&path), text)?;
-                                            install_page = None;
-                                            scroll = 0;
-                                            focused_row =
-                                                first_selectable(dashboard.as_ref(), text, 0, None);
+                                            open_project(
+                                                path,
+                                                text,
+                                                &mut active_manifest,
+                                                &mut dashboard,
+                                                project_lock,
+                                                &mut install_page,
+                                                &mut focused_row,
+                                                &mut scroll,
+                                            )?;
                                         }
                                     } else {
                                         activate(
@@ -636,6 +850,68 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     }
 }
 
+fn leave_screen<B: ratatui::backend::Backend + Write>(terminal: &mut Terminal<B>) -> Result<()> {
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    // Consume input already queued for the TUI before handing the terminal back.
+    while event::poll(Duration::ZERO).unwrap_or(false) && event::read().is_ok() {}
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn lock_project(project: &dashboard::Dashboard, text: &Text) -> Result<WorkspaceLock> {
+    WorkspaceLock::try_acquire_tui(&project.root)?
+        .with_context(|| format!("{} ({})", text.tui_already_running, project.root.display()))
+}
+
+fn open_project(
+    path: PathBuf,
+    text: &Text,
+    active_manifest: &mut Option<PathBuf>,
+    dashboard: &mut Option<dashboard::Dashboard>,
+    project_lock: &mut Option<WorkspaceLock>,
+    install_page: &mut Option<InstallPage>,
+    focused: &mut Option<usize>,
+    scroll: &mut usize,
+) -> Result<()> {
+    if let Some(project) = dashboard::Dashboard::load(Some(&path), text)? {
+        match lock_project(&project, text) {
+            Ok(lease) => {
+                *active_manifest = Some(path);
+                *dashboard = Some(project);
+                *project_lock = Some(lease);
+                *install_page = None;
+            }
+            Err(error) => {
+                *install_page = Some(InstallPage::Detail {
+                    title: text.project_scan_title.clone(),
+                    body: format!("{error:#}"),
+                    return_to_ros: false,
+                });
+            }
+        }
+        *focused = first_selectable(dashboard.as_ref(), text, 0, install_page.as_ref());
+        *scroll = 0;
+    }
+    Ok(())
+}
+
+fn back_run(
+    install_page: &mut Option<InstallPage>,
+    focused: &mut Option<usize>,
+    scroll: &mut usize,
+    text: &Text,
+) -> bool {
+    if let Some(InstallPage::Run(page)) = install_page {
+        if page.back() {
+            *focused = page.rows(text).iter().position(|row| row.selectable);
+            *scroll = 0;
+            return true;
+        }
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn install<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
@@ -648,13 +924,8 @@ fn install<B: ratatui::backend::Backend + Write>(
     install_components: &mut impl FnMut() -> Result<()>,
     last_runtime_refresh: &mut Instant,
 ) -> Result<()> {
+    leave_screen(terminal)?;
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
     let result = match install_page.as_ref() {
         Some(InstallPage::Ros) => install_ros(),
         Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
@@ -713,6 +984,7 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
                 text,
                 *selected,
                 install_page.as_ref(),
+                terminal.size()?,
                 true,
             ) {
                 *scroll = scroll.saturating_add(1);
@@ -799,6 +1071,9 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
             *last_runtime_refresh = Instant::now();
         }
         view::FooterAction::Back => {
+            if back_run(install_page, focused_row, scroll, text) {
+                return Ok(false);
+            }
             *install_page = None;
             *scroll = 0;
             *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
@@ -814,13 +1089,8 @@ fn run_action<B: ratatui::backend::Backend + Write>(
     action: &mut impl FnMut(Action) -> Result<()>,
     operation: Action,
 ) -> Result<()> {
+    leave_screen(terminal)?;
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
     let label = match operation {
         Action::Apply => &text.footer_apply,
         Action::Uninstall => &text.footer_uninstall,
@@ -858,13 +1128,8 @@ fn compile<B: ratatui::backend::Backend + Write>(
     build: &mut impl FnMut(bool) -> Result<()>,
     rebuild: bool,
 ) -> Result<()> {
+    leave_screen(terminal)?;
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal.show_cursor()?;
     println!(
         "{} [y/N]",
         if rebuild {
@@ -912,6 +1177,7 @@ fn move_focus(
     text: &Text,
     tab: usize,
     install_page: Option<&InstallPage>,
+    size: ratatui::layout::Size,
     forward: bool,
 ) -> bool {
     let rows = pages::rows(dashboard, text, tab, install_page);
@@ -920,7 +1186,7 @@ fn move_focus(
         .enumerate()
         .filter_map(|(index, row)| row.selectable.then_some(index))
         .collect();
-    let Some(current) = (*focused).and_then(|index| selectable.iter().position(|&i| i == index))
+    let Some(current) = focused.and_then(|index| selectable.iter().position(|&i| i == index))
     else {
         *focused = selectable.first().copied();
         *scroll = if forward { 0 } else { usize::MAX };
@@ -931,8 +1197,17 @@ fn move_focus(
     } else {
         (current + selectable.len() - 1) % selectable.len()
     };
-    *focused = Some(selectable[next]);
-    *scroll = if next == 0 { 0 } else { usize::MAX };
+    let index = selectable[next];
+    *focused = Some(index);
+    if (tab == 3 && install_page.is_none()
+        || matches!(install_page, Some(InstallPage::Run(page)) if page.is_processes()))
+        && next != 0
+    {
+        let area = view::table_area(ratatui::layout::Rect::new(0, 0, size.width, size.height));
+        table::reveal_row(area, &rows, text, scroll, index);
+    } else {
+        *scroll = if next == 0 { 0 } else { usize::MAX };
+    }
     true
 }
 
@@ -949,13 +1224,34 @@ fn activate(
     let Some(index) = *focused else {
         return;
     };
-    if !rows.get(index).is_some_and(|row| row.selectable) {
+    let Some(row) = rows.get(index).filter(|row| row.selectable) else {
+        return;
+    };
+    if let Some(InstallPage::Run(page)) = install_page {
+        if let Some(log) = page.log_at(index).and_then(logs::Browser::for_process) {
+            *browser = Some(log);
+            return;
+        }
+        *focused = page.activate(index);
+        *scroll = 0;
         return;
     }
-    if let Some(row) = rows.get(index).filter(|row| row.detail.is_some()) {
+    if selected == 3 && install_page.is_none() && index == 0 {
+        *install_page = Some(InstallPage::Shell);
+        return;
+    }
+    if let (Some(index), Some(dashboard)) = (row.run_target, dashboard) {
+        *install_page = Some(InstallPage::Run(runs::Page::form(
+            dashboard.run.targets[index].clone(),
+        )));
+        *focused = Some(0);
+        *scroll = 0;
+        return;
+    }
+    if let Some(body) = &row.detail {
         *install_page = Some(InstallPage::Detail {
             title: row.cells[0].clone(),
-            body: row.detail.clone().unwrap_or_default(),
+            body: body.clone(),
             return_to_ros: matches!(install_page.as_ref(), Some(InstallPage::Ros)),
         });
         *focused = None;

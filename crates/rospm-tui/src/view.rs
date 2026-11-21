@@ -184,6 +184,7 @@ pub(crate) fn draw(
     install_page: Option<&InstallPage>,
     scroll: &mut usize,
     focused: Option<usize>,
+    process_count: Option<usize>,
 ) {
     let areas = Layout::vertical([
         Constraint::Length(1),
@@ -192,14 +193,22 @@ pub(crate) fn draw(
         Constraint::Length(1),
     ])
     .split(frame.area());
+    let counter = process_count.map(process_counter);
     let header = Layout::horizontal([
-        Constraint::Length(10),
+        Constraint::Length(counter.as_ref().map_or(10, |label| 8 + label.len() as u16)),
         Constraint::Min(1),
         Constraint::Length(10),
     ])
     .split(areas[0]);
     frame.render_widget(
-        Paragraph::new("◆ rospm").style(Style::default().fg(Color::Cyan)),
+        Paragraph::new(Line::from(vec![
+            Span::styled("◆ rospm", Style::default().fg(Color::Cyan)),
+            Span::raw(" "),
+            Span::styled(
+                counter.unwrap_or_default(),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ),
+        ])),
         header[0],
     );
     frame.render_widget(
@@ -238,6 +247,8 @@ pub(crate) fn draw(
             Some(InstallPage::ScannedProjects(_)) => {
                 format!("{} / {}", text.tabs[0], text.project_scan_title)
             }
+            Some(InstallPage::Run(page)) => page.title(text),
+            Some(InstallPage::Shell) => "Shell".into(),
             None => text.tabs[selected].clone(),
         });
     let inner = block.inner(content);
@@ -281,6 +292,14 @@ pub(crate) fn draw(
             .style(Style::default().bg(Color::Rgb(32, 35, 39))),
         areas[3],
     );
+}
+
+fn process_counter(count: usize) -> String {
+    format!("[{count}]")
+}
+
+pub(crate) fn process_counter_at(column: u16, width: u16, count: usize) -> bool {
+    (8..width.min(8 + process_counter(count).len() as u16)).contains(&column)
 }
 
 pub(crate) fn table_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -373,7 +392,7 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
         terminal
-            .draw(|frame| draw(frame, None, &text, 2, None, &mut 0, None))
+            .draw(|frame| draw(frame, None, &text, 2, None, &mut 0, None, None))
             .unwrap();
         assert_eq!(
             terminal.backend().buffer()[((100 - build_width) as u16, 9)].bg,

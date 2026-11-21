@@ -1,6 +1,6 @@
 //! Page data stays independent of terminal drawing and column widths.
 use crate::{dashboard::Dashboard, InstallPage, Text};
-use rospm_core::{conda::ToolInstallation, probe::Status};
+use rospm_core::{conda::ToolInstallation, probe::Status, run::TargetKind};
 
 pub(crate) struct Entry {
     pub cells: [String; 3],
@@ -11,9 +11,10 @@ pub(crate) struct Entry {
     /// Set only when the executor identifies this exact dependency/package row.
     pub running: bool,
     pub detail: Option<String>,
+    pub run_target: Option<usize>,
 }
 impl Entry {
-    fn value(name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub(crate) fn value(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             cells: [name.into(), String::new(), value.into()],
             status: None,
@@ -22,10 +23,11 @@ impl Entry {
             disabled: false,
             running: false,
             detail: None,
+            run_target: None,
         }
     }
 
-    fn link(name: impl Into<String>) -> Self {
+    pub(crate) fn link(name: impl Into<String>) -> Self {
         let mut entry = Self::value(name, "");
         entry.selectable = true;
         entry
@@ -40,6 +42,9 @@ pub(crate) fn rows(
 ) -> Vec<Entry> {
     if let Some(InstallPage::Detail { title, body, .. }) = install_page {
         return vec![Entry::value(title, body)];
+    }
+    if let Some(InstallPage::Run(page)) = install_page {
+        return page.rows(text);
     }
     if let Some(InstallPage::ScannedProjects(projects)) = install_page {
         return if projects.is_empty() {
@@ -94,6 +99,7 @@ pub(crate) fn rows(
                 disabled: false,
                 running: false,
                 detail: None,
+                run_target: None,
             });
         }
         if rows.is_empty() {
@@ -158,6 +164,7 @@ pub(crate) fn rows(
                     disabled: false,
                     running: false,
                     detail: None,
+                    run_target: None,
                 });
             }
             for error in &d.check {
@@ -197,6 +204,7 @@ pub(crate) fn rows(
                     disabled: false,
                     running: false,
                     detail: None,
+                    run_target: None,
                 });
             }
             rows.push(Entry::link(&text.logs));
@@ -205,6 +213,42 @@ pub(crate) fn rows(
             heading(&mut rows, &text.build_order);
             for package in &d.compile_packages {
                 rows.push(Entry::value(&package.name, &package.detail));
+            }
+            rows.push(Entry::link(&text.logs));
+        }
+        3 => {
+            rows.push(Entry::link("Shell"));
+            if !d.run.built || d.run.targets.is_empty() {
+                rows.push(Entry::value(
+                    &text.tabs[3],
+                    if d.run.built {
+                        &text.run_empty
+                    } else {
+                        &text.run_not_built
+                    },
+                ));
+            } else {
+                for (kind, label) in [
+                    (TargetKind::Node, &text.run_node),
+                    (TargetKind::Launch, &text.run_launch),
+                ] {
+                    let mut targets = d
+                        .run
+                        .targets
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, target)| target.kind == kind)
+                        .peekable();
+                    if targets.peek().is_none() {
+                        continue;
+                    }
+                    heading(&mut rows, label);
+                    for (index, target) in targets {
+                        let mut row = Entry::link(format!("{}/{}", target.package, target.name));
+                        row.run_target = Some(index);
+                        rows.push(row);
+                    }
+                }
             }
             rows.push(Entry::link(&text.logs));
         }
@@ -261,6 +305,7 @@ mod tests {
             diagnostics: vec![],
             compile_packages: vec![],
             root: ".".into(),
+            run: Default::default(),
         };
         let text = Text {
             conda: "Conda".into(),
@@ -321,6 +366,7 @@ mod tests {
             diagnostics: vec![],
             compile_packages: vec![],
             root: ".".into(),
+            run: Default::default(),
         };
         let text = Text {
             components: "components".into(),

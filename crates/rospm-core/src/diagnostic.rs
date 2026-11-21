@@ -19,7 +19,7 @@ pub use dependencies::{
 };
 
 mod cpp;
-pub use cpp::parse_cpp;
+pub use cpp::{parse_cpp, strip_ansi};
 mod python;
 pub use python::parse_python;
 

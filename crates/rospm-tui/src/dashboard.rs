@@ -32,6 +32,7 @@ pub(crate) struct Dashboard {
     pub(crate) diagnostics: Vec<String>,
     pub(crate) compile_packages: Vec<crate::packages::BuildPackage>,
     pub(crate) root: PathBuf,
+    pub(crate) run: rospm_core::run::WorkspaceRun,
 }
 
 pub(crate) struct Component {
@@ -107,6 +108,7 @@ impl Dashboard {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         let compile_packages = crate::packages::load(&manifest, root);
+        let run = rospm_core::run::scan_project(&manifest, root);
         let mut check = Vec::new();
         let mut report = rospm_core::probe::EnvReport::default();
         let mut verify = Vec::new();
@@ -209,6 +211,7 @@ impl Dashboard {
             ros_installed,
             diagnostics,
             compile_packages,
+            run,
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         }))
     }

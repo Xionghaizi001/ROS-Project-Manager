@@ -110,6 +110,23 @@ pub(crate) fn draw(
     );
 }
 
+pub(crate) fn reveal_row(
+    area: Rect,
+    entries: &[Entry],
+    text: &Text,
+    scroll: &mut usize,
+    index: usize,
+) {
+    let widths = column_widths(entries, text, area.width);
+    let start: usize = entries[..index]
+        .iter()
+        .map(|entry| entry_height(entry, &widths))
+        .sum();
+    let visible = usize::from(area.height.saturating_sub(1)).max(1);
+    let height = entry_height(&entries[index], &widths).min(visible);
+    *scroll = (*scroll).clamp((start + height).saturating_sub(visible), start);
+}
+
 pub(crate) fn row_at(
     area: Rect,
     entries: &[Entry],
@@ -222,6 +239,7 @@ mod tests {
                     disabled: false,
                     running: false,
                     detail: None,
+                    run_target: None,
                 },
                 Entry {
                     cells: ["2".into(), String::new(), "tail".into()],
@@ -231,6 +249,7 @@ mod tests {
                     disabled: false,
                     running: false,
                     detail: None,
+                    run_target: None,
                 },
             ]
         };
@@ -293,6 +312,7 @@ mod tests {
                         disabled: false,
                         running: true,
                         detail: None,
+                        run_target: None,
                     }],
                     &text,
                     &mut 0,
@@ -329,6 +349,7 @@ mod tests {
                         disabled: false,
                         running: false,
                         detail: None,
+                        run_target: None,
                     }],
                     &text,
                     &mut 0,
@@ -358,6 +379,7 @@ mod tests {
                 disabled: false,
                 running: false,
                 detail: None,
+                run_target: None,
             },
             Entry {
                 cells: ["second".into(), String::new(), String::new()],
@@ -367,6 +389,7 @@ mod tests {
                 disabled: false,
                 running: false,
                 detail: None,
+                run_target: None,
             },
         ];
         let area = Rect::new(0, 2, 30, 5);
@@ -391,6 +414,7 @@ mod tests {
                         disabled: false,
                         running: false,
                         detail: None,
+                        run_target: None,
                     }],
                     &Text::default(),
                     &mut 0,

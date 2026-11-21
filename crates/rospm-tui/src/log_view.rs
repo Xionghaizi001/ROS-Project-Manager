@@ -25,7 +25,11 @@ pub(crate) fn draw(frame: &mut Frame<'_>, browser: &Browser, text: &Text) {
                 browser.selected + 1,
                 browser.sources.len(),
                 s.label,
-                s.path.display()
+                if s.process {
+                    String::new()
+                } else {
+                    s.path.display().to_string()
+                }
             )
         })
         .unwrap_or_else(|| text.no_logs.clone());

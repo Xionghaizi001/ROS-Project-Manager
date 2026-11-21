@@ -1,8 +1,12 @@
 //! Bounded, read-only log browsing. Each source remains separate.
-use rospm_core::worker::{LogEntry, LogStream};
+use rospm_core::{
+    run::{output, RunStatus},
+    worker::{LogEntry, LogStream},
+};
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
 };
 
@@ -12,6 +16,7 @@ pub(crate) struct Source {
     pub path: PathBuf,
     pub label: String,
     json: bool,
+    pub process: bool,
 }
 
 pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
@@ -36,8 +41,29 @@ pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
             path: root.join(".rospm/log").join(name),
             label: name.to_string(),
             json: false,
+            process: false,
         })
         .collect();
+    if matches!(tab, 3 | 6) {
+        if let Ok(entries) = fs::read_dir(root.join(".rospm/log/run")) {
+            let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+            paths.sort_unstable_by(|a, b| b.cmp(a));
+            let runs = paths.into_iter().filter_map(|path| {
+                let name = path.file_name()?.to_str()?;
+                let id = name.strip_suffix(".log")?;
+                if !rospm_core::worker::valid_identifier(id) {
+                    return None;
+                }
+                Some(Source {
+                    label: format!("run/{id}"),
+                    path,
+                    json: false,
+                    process: false,
+                })
+            });
+            result.splice(0..0, runs);
+        }
+    }
     // Task snapshots currently have no operation field: never infer a workflow
     // from the task id or merge unrelated task output into a build log.
     if let Ok(entries) = fs::read_dir(root.join(".rospm/tasks")) {
@@ -47,6 +73,7 @@ pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
             label: format!("task/{}", e.file_name().to_string_lossy()),
             path: e.path().join("logs.jsonl"),
             json: true,
+            process: false,
         }));
     }
     result
@@ -63,11 +90,22 @@ pub(crate) struct Browser {
     next: u64,
     previous: Vec<u64>,
     pub more: bool,
+    pub include_processes: bool,
 }
 impl Browser {
     pub fn new(root: &Path, tab: usize) -> Self {
+        let mut browser = Self::from_sources(sources(root, tab));
+        browser.include_processes = tab == 3;
+        browser
+    }
+
+    pub fn for_process(process: &RunStatus) -> Option<Self> {
+        Some(Self::from_sources(vec![process_source(process)?]))
+    }
+
+    fn from_sources(sources: Vec<Source>) -> Self {
         let mut browser = Self {
-            sources: sources(root, tab),
+            sources,
             selected: 0,
             lines: Vec::new(),
             error: None,
@@ -77,9 +115,17 @@ impl Browser {
             next: 0,
             previous: Vec::new(),
             more: false,
+            include_processes: false,
         };
         browser.reload();
         browser
+    }
+
+    pub fn add_process_sources(&mut self, processes: &[RunStatus]) {
+        self.include_processes = false;
+        self.sources
+            .splice(0..0, processes.iter().filter_map(process_source));
+        self.reload();
     }
     pub fn select(&mut self, forward: bool) {
         if self.sources.is_empty() {
@@ -125,18 +171,39 @@ impl Browser {
     }
 }
 
+pub(crate) fn process_source(process: &RunStatus) -> Option<Source> {
+    let fd = process.output_fd?;
+    Some(Source {
+        path: PathBuf::from(format!("/proc/self/fd/{fd}")),
+        label: process.target.clone(),
+        json: false,
+        process: true,
+    })
+}
+
 fn read_page(source: &Source, offset: u64) -> std::io::Result<(Vec<String>, u64, bool)> {
     let mut file = File::open(&source.path)?;
-    let length = file.metadata()?.len();
-    if offset > length {
-        return Err(std::io::Error::other(
-            "log was truncated; reopen the source",
-        ));
-    }
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    file.take(PAGE_BYTES as u64).read_to_end(&mut bytes)?;
-    let more = offset + (bytes.len() as u64) < length;
+    let (mut bytes, offset, more) = if source.process && output::is_transcript(file.as_raw_fd()) {
+        output::page(&file, offset, PAGE_BYTES)?
+    } else {
+        let end = file.metadata()?.len();
+        let start = if source.process {
+            end.saturating_sub(output::LIMIT as u64)
+        } else {
+            0
+        };
+        let length = end - start;
+        if offset > length {
+            return Err(std::io::Error::other(
+                "log was truncated; reopen the source",
+            ));
+        }
+        file.seek(SeekFrom::Start(start + offset))?;
+        let mut bytes = Vec::new();
+        file.take(PAGE_BYTES as u64).read_to_end(&mut bytes)?;
+        let more = offset + (bytes.len() as u64) < length;
+        (bytes, offset, more)
+    };
     // Keep record boundaries for normal JSONL records. Very large records are
     // shown as explicit parse errors, never silently skipped.
     if more {
@@ -162,6 +229,8 @@ fn read_page(source: &Source, offset: u64) -> std::io::Result<(Vec<String>, u64,
                 }
                 Err(error) => lines.push(format!("! JSONL: {error}: {}", clean(line))),
             }
+        } else if source.process {
+            lines.push(clean(&rospm_core::diagnostic::strip_ansi(line)));
         } else {
             lines.push(clean(line));
         }
@@ -180,6 +249,7 @@ pub(crate) fn diagnostics(root: &Path) -> Vec<String> {
         path: root.join(".rospm/log/build.log"),
         label: "build.log".into(),
         json: false,
+        process: false,
     };
     let Ok((lines, _, _)) = read_page(&source, 0) else {
         return Vec::new();
@@ -204,6 +274,7 @@ mod tests {
             path: dir.join("log"),
             label: "test".into(),
             json: false,
+            process: false,
         };
         let text = "hello\n".repeat(PAGE_BYTES);
         fs::write(&source.path, &text).unwrap();

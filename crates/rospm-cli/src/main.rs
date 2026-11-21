@@ -74,7 +74,13 @@ enum Cmd {
         runtime: PathBuf,
         #[arg(long, value_name = "SECONDS", default_value_t = commands::worker::DEFAULT_AUTO_EXIT_TIMEOUT_SECS, value_parser = clap::value_parser!(u64).range(1..), help = tr("worker_cli.auto_exit_timeout"))]
         auto_exit_timeout: u64,
+        #[arg(long, hide = true)]
+        run_project: Option<PathBuf>,
     },
+    #[command(hide = true)]
+    RunChild { request: String },
+    #[command(hide = true)]
+    ShellWorker,
     #[command(about = tr("worker_cli.task"))]
     Task {
         #[arg(long, help = tr("worker_cli.runtime"))]
@@ -443,11 +449,16 @@ fn execute_cli(
         Cmd::Worker {
             runtime,
             auto_exit_timeout,
-        } => commands::worker::serve(
-            &global,
-            &runtime,
-            std::time::Duration::from_secs(auto_exit_timeout),
-        ),
+            run_project,
+        } => {
+            let timeout = std::time::Duration::from_secs(auto_exit_timeout);
+            match run_project {
+                Some(root) => commands::worker::runs::serve(root, &runtime, timeout),
+                None => commands::worker::serve(&global, &runtime, timeout),
+            }
+        }
+        Cmd::RunChild { request } => commands::run_process::child(&request),
+        Cmd::ShellWorker => commands::shell_worker(&global),
         Cmd::Task { runtime, command } => commands::worker::client(&global, &runtime, command),
         Cmd::Init {
             from_env,
@@ -530,7 +541,7 @@ fn execute_cli(
         ),
         Cmd::Env { shell, venv } => commands::env(&global, shell, venv),
         Cmd::Shell { venv } => commands::shell(&global, venv),
-        Cmd::Tui => rospm_tui::run_with_actions(
+        Cmd::Tui => rospm_tui::run_with_runs(
             global.manifest.as_deref(),
             rospm_tui::Text {
                 no_logs: tr("cli.tui.no_logs"),
@@ -609,6 +620,34 @@ fn execute_cli(
                 status_mismatch: tr("cli.status.mismatch"),
                 status_unknown: tr("cli.status.unknown"),
                 status_info: tr("cli.status.info"),
+                run_not_built: tr("cli.run.not_built"),
+                run_empty: tr("cli.run.none"),
+                run_node: tr("cli.run.nodes"),
+                run_launch: tr("cli.run.launch_files"),
+                run_processes: tr("cli.tui.run_processes"),
+                run_foreground: tr("cli.tui.run_foreground"),
+                run_background: tr("cli.tui.run_background"),
+                run_args: tr("cli.tui.run_args"),
+                run_bad_args: tr("cli.tui.run_bad_args"),
+                run_venv: tr("cli.tui.run_venv"),
+                run_venv_help: tr("cli.tui.run_venv_help"),
+                run_terminate: tr("cli.tui.run_terminate"),
+                run_kill: tr("cli.tui.run_kill"),
+                run_suspend: tr("cli.tui.run_suspend"),
+                run_resume: tr("cli.tui.run_resume"),
+                run_suspended: tr("cli.tui.run_suspended"),
+                shell_detached: tr("cli.tui.shell_detached"),
+                run_starting: tr("cli.tui.run_starting"),
+                run_current: tr("cli.tui.run_current"),
+                run_history: tr("cli.tui.run_history"),
+                run_no_history: tr("cli.tui.run_no_history"),
+                run_exited: tr("cli.tui.run_exited"),
+                run_exit_code: tr("cli.tui.run_exit_code"),
+                run_exit_signal: tr("cli.tui.run_exit_signal"),
+                run_exit_unknown: tr("cli.tui.run_exit_unknown"),
+                run_idle: tr("cli.tui.run_idle"),
+                run_gone: tr("cli.tui.run_gone"),
+                tui_already_running: tr("cli.tui.tui_already_running"),
             },
             || commands::apply(&global, false, false, false, false, false, None, None),
             || commands::components_install(&global, false),
@@ -645,6 +684,8 @@ fn execute_cli(
                     commands::init(&global, false, None, None, false)
                 }
             },
+            &mut commands::worker::runs::Runs::default(),
+            cli.verbose,
         ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),

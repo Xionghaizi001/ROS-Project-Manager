@@ -75,7 +75,7 @@ pub struct PeerIdentity {
     pub gid: u32,
 }
 
-fn peer_identity(stream: &UnixStream) -> io::Result<PeerIdentity> {
+pub fn peer_identity(stream: &UnixStream) -> io::Result<PeerIdentity> {
     let mut cred = libc::ucred {
         pid: 0,
         uid: 0,

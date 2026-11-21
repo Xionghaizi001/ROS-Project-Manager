@@ -915,6 +915,7 @@ dependencies = [
  "ratatui",
  "rospm-core",
  "serde_json",
+ "shlex",
 ]
 
 [[package]]

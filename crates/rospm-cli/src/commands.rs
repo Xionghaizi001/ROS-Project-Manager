@@ -32,6 +32,7 @@ mod lock;
 mod logging;
 mod report;
 mod run;
+mod shell_session;
 mod uninstall;
 pub mod venv;
 mod verify;
@@ -46,6 +47,8 @@ pub use environment::{env, shell};
 pub use init::init;
 pub use lock::lock;
 pub use run::run;
+pub use shell_session::serve as shell_worker;
+pub mod run_process;
 pub use uninstall::uninstall;
 pub use verify::verify;
 
@@ -162,6 +165,11 @@ impl Loaded {
     /// Shared leases let read-only commands run together while waiting for
     /// worker-owned mutations to finish.
     fn workspace_read_leases(&self) -> Result<Vec<rospm_core::worker::WorkspaceLock>> {
+        self.read_leases(true)
+    }
+
+    fn read_leases(&self, wait: bool) -> Result<Vec<rospm_core::worker::WorkspaceLock>> {
+        use rospm_core::worker::WorkspaceLock;
         let root = rospm_core::worker::resolve_workspace(&self.root)?;
         let paths = self
             .manifest
@@ -169,15 +177,18 @@ impl Loaded {
             .values()
             .map(|ws| rospm_core::worker::resolve_workspace(&self.root.join(&ws.path)))
             .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
-        let mut leases = vec![rospm_core::worker::WorkspaceLock::acquire_shared(&root)?];
-        leases.extend(
-            paths
-                .into_iter()
-                .filter(|path| path != &root)
-                .map(rospm_core::worker::WorkspaceLock::acquire_shared)
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-        );
-        Ok(leases)
+        std::iter::once(root.clone())
+            .chain(paths.into_iter().filter(|path| path != &root))
+            .map(|path| {
+                if wait {
+                    Ok(WorkspaceLock::acquire_shared(path)?)
+                } else {
+                    WorkspaceLock::try_acquire_shared(&path)?.with_context(|| {
+                        msg!("cli.err.workspace_busy", path = path.display()).to_string()
+                    })
+                }
+            })
+            .collect()
     }
 }
 
