@@ -31,6 +31,7 @@ pub use runs::TaskOutcome;
 use std::time::{Duration, Instant};
 
 const PROCESS_KEY: char = 'p';
+const HELP_TAB: usize = 6;
 
 /// Localized strings supplied by the CLI layer.
 #[derive(Default)]
@@ -62,6 +63,9 @@ pub struct Text {
     pub installing: String,
     pub details: String,
     pub manifest_search: String,
+    pub tui_usage: String,
+    pub cli_help: String,
+    pub cli_usage: String,
     pub footer_select: String,
     pub footer_open: String,
     pub footer_tabs: String,
@@ -150,6 +154,7 @@ enum InstallPage {
     ScannedProjects(Vec<std::path::PathBuf>),
     Run(runs::Page),
     Shell,
+    CliHelp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1395,6 +1400,7 @@ fn activate(
         (1, None, 0) => Some(InstallPage::Ros),
         (1, None, 1) => Some(InstallPage::Conda(ToolInstallation::probe())),
         (1, None, 2) if dashboard.is_some_and(|d| d.ros_installed) => Some(InstallPage::Components),
+        (HELP_TAB, None, 0) => Some(InstallPage::CliHelp),
         _ => {
             if let Some(dashboard) = dashboard {
                 *browser = Some(logs::Browser::new(&dashboard.root, selected));
@@ -1417,6 +1423,41 @@ fn tab_at(column: u16, width: u16) -> usize {
 mod tests {
     use super::{tab_at, task_operation, Action};
     use rospm_core::worker::Operation;
+
+    #[test]
+    fn help_opens_cli_guide_without_a_project() {
+        use super::{activate, first_selectable, pages, InstallPage, Text, HELP_TAB};
+
+        let text = Text {
+            tui_usage: "Launch with rospm tui".into(),
+            cli_help: "CLI usage".into(),
+            cli_usage: "List commands with rospm --help".into(),
+            ..Text::default()
+        };
+        let main = pages::rows(None, &text, HELP_TAB, None);
+        assert_eq!(main[0].cells[0], text.cli_help);
+        assert_eq!(main[1].cells[2], text.tui_usage);
+
+        let mut focus = first_selectable(None, &text, HELP_TAB, None);
+        let mut page = None;
+        let mut browser = None;
+        let mut scroll = 5;
+        activate(
+            &mut browser,
+            &mut page,
+            &mut focus,
+            &mut scroll,
+            None,
+            &text,
+            HELP_TAB,
+        );
+        assert!(matches!(&page, Some(InstallPage::CliHelp)));
+        assert!(browser.is_none());
+        assert_eq!(focus, None);
+        assert_eq!(scroll, 0);
+        let guide = pages::rows(None, &text, HELP_TAB, page.as_ref());
+        assert_eq!(guide[0].cells[2], text.cli_usage);
+    }
 
     #[test]
     fn mouse_tab_hit_testing_handles_narrow_and_wide_windows() {

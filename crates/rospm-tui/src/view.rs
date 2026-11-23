@@ -1,5 +1,5 @@
 //! Three horizontal regions: project title, workflow tabs, and page content.
-use crate::{dashboard::Dashboard, pages, Action, InstallPage, Text, PROCESS_KEY};
+use crate::{dashboard::Dashboard, pages, Action, InstallPage, Text, HELP_TAB, PROCESS_KEY};
 use ratatui::{
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
@@ -31,6 +31,13 @@ pub(crate) fn footer_items(
     selected: usize,
     text: &Text,
 ) -> Vec<(String, FooterAction)> {
+    if matches!(install_page, Some(InstallPage::CliHelp)) {
+        return vec![
+            (text.footer_scroll_up.clone(), FooterAction::ScrollUp),
+            (text.footer_scroll_down.clone(), FooterAction::ScrollDown),
+            (text.footer_back.clone(), FooterAction::Back),
+        ];
+    }
     let mut items = vec![
         (text.footer_select.clone(), FooterAction::Select),
         (text.footer_open.clone(), FooterAction::Open),
@@ -42,7 +49,7 @@ pub(crate) fn footer_items(
             (text.footer_scroll_down.clone(), FooterAction::ScrollDown),
         ]);
     }
-    if selected != 0 || install_page.is_some() {
+    if !matches!(selected, 0 | HELP_TAB) || install_page.is_some() {
         items.push((text.footer_refresh.clone(), FooterAction::Refresh));
     }
     if let Some(page) = install_page {
@@ -252,6 +259,7 @@ pub(crate) fn draw(
             }
             Some(InstallPage::Run(page)) => page.title(text),
             Some(InstallPage::Shell) => "Shell".into(),
+            Some(InstallPage::CliHelp) => format!("{} / {}", text.tabs[HELP_TAB], text.cli_help),
             None => text.tabs[selected].clone(),
         });
     let inner = block.inner(content);

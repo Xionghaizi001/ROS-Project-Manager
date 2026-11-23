@@ -1,5 +1,5 @@
 //! Page data stays independent of terminal drawing and column widths.
-use crate::{dashboard::Dashboard, InstallPage, Text};
+use crate::{dashboard::Dashboard, InstallPage, Text, HELP_TAB};
 use rospm_core::{conda::ToolInstallation, probe::Status, run::TargetKind};
 
 pub(crate) struct Entry {
@@ -40,6 +40,15 @@ pub(crate) fn rows(
     tab: usize,
     install_page: Option<&InstallPage>,
 ) -> Vec<Entry> {
+    if matches!(install_page, Some(InstallPage::CliHelp)) {
+        return vec![Entry::value("CLI", &text.cli_usage)];
+    }
+    if tab == HELP_TAB && install_page.is_none() {
+        return vec![
+            Entry::link(&text.cli_help),
+            Entry::value("TUI", &text.tui_usage),
+        ];
+    }
     if let Some(InstallPage::Detail { title, body, .. }) = install_page {
         return vec![Entry::value(title, body)];
     }

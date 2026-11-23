@@ -232,6 +232,58 @@ cli:
     installing: "Installing"
     details: "Project details"
     manifest_search: "manifest: search from the current directory"
+    tui_usage: |-
+      Open the TUI
+      Run rospm tui in a terminal. It searches the current directory and its parents for rospm.toml.
+      You can also select a manifest with rospm --manifest PATH tui.
+
+      Navigate
+      Use Left/Right, Tab/Shift+Tab, or click a top tab to switch main pages.
+      Use Up/Down to select a row and Enter to open it, or click the row.
+      Use PgUp/PgDn or the mouse wheel to scroll. Esc or q goes back, or quits from a main page.
+
+      Project workflow
+      On Start, press n to create a project or s to scan for and open existing projects. These actions are available when no project is open.
+      On Install, open ROS, Conda, or Project base components and follow the footer. Press d to check dependencies, D to install them, or a to prepare the environment.
+      On Build, press b to build or B to clean build artifacts and rebuild, then confirm.
+      On Run, pick a built node or launch file, enter arguments, and choose foreground or background. You can also open a project shell.
+      On Diagnose, press c to check the environment or v to verify it against the lockfile. Open Logs to see output.
+      Press p or click the process count at the top to see process status and logs.
+    cli_help: "CLI usage"
+    cli_usage: |-
+      Command help
+      rospm --help                  List subcommands and global options
+      rospm build --help            Show options for a subcommand
+      rospm --manifest PATH check   Select a project manifest explicitly
+
+      Initialize and install
+      rospm init --distro jazzy --base ros-base
+        Create rospm.toml. Use humble on Ubuntu 22.04 or jazzy on 24.04.
+      rospm init --from-env         Draft a manifest from the existing environment
+      rospm check                   Check the project environment
+      rospm apply --dry-run         Preview installation and project changes
+      rospm apply                  Prepare the environment and import source
+      rospm deps check              Check dependencies declared in package.xml
+      rospm deps install --dry-run   Preview dependency installation. Drop --dry-run to install.
+
+      Build and run
+      rospm build                   Build the workspace
+      rospm build -- --packages-select my_pkg
+        Pass package selection through to colcon.
+      rospm run --list               List runnable nodes and launch files
+      rospm run my_pkg/my_node       Run a target
+      rospm shell                   Open a shell with the project environment
+      source <(rospm env)            Load the project environment into the current Bash shell
+
+      Lock, diagnose, and uninstall
+      rospm lock                    Write or update lock records for this platform
+      rospm verify                  Verify the environment against the lockfile
+      rospm apply --locked --build   Prepare and build using the lockfile
+      rospm doctor                  Check host tools, package sources, and network
+      rospm uninstall --dry-run      Preview what uninstall would remove
+
+      Global options
+      Use --lang zh or --lang en to select a language, --json for structured results, and -v or -vv for more detail.
     footer_select: "↑↓ Select"
     footer_open: "Enter Open"
     footer_tabs: "←→ Tabs"
