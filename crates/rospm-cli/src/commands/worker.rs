@@ -380,10 +380,10 @@ fn execute(
     let provider = provider::for_manifest(&loaded.manifest);
     let plan = match operation {
         Operation::CondaInstall => unreachable!(),
-        Operation::DepsInstall
-        | Operation::VenvCreate
-        | Operation::VenvInstall
-        | Operation::Lock => bail!("operation requires the synchronous CLI entry"),
+        Operation::VenvCreate | Operation::VenvInstall | Operation::Lock => {
+            bail!("operation requires the synchronous CLI entry")
+        }
+        Operation::DepsInstall => provider.plan_deps_install(&ctx)?,
         Operation::Apply | Operation::ApplyLocked => provider.plan_apply(&ctx)?,
         Operation::ComponentsInstall => provider.plan_components_install(&ctx)?,
         Operation::Build => provider.plan_build(&ctx, None, false)?,

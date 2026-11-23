@@ -137,6 +137,14 @@ pub(crate) fn rows(
     match tab {
         0 => {
             heading(&mut rows, &text.details);
+            rows.push(Entry::value(
+                &text.status,
+                if d.installing {
+                    &text.installing
+                } else {
+                    &text.ready
+                },
+            ));
             rows.extend([
                 Entry::value(&text.project, &d.project),
                 Entry::value(&text.manifest_label, d.manifest.display().to_string()),
@@ -306,6 +314,7 @@ mod tests {
             compile_packages: vec![],
             root: ".".into(),
             run: Default::default(),
+            installing: false,
         };
         let text = Text {
             conda: "Conda".into(),
@@ -367,6 +376,7 @@ mod tests {
             compile_packages: vec![],
             root: ".".into(),
             run: Default::default(),
+            installing: false,
         };
         let text = Text {
             components: "components".into(),

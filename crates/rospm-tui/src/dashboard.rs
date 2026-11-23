@@ -33,6 +33,7 @@ pub(crate) struct Dashboard {
     pub(crate) compile_packages: Vec<crate::packages::BuildPackage>,
     pub(crate) root: PathBuf,
     pub(crate) run: rospm_core::run::WorkspaceRun,
+    pub(crate) installing: bool,
 }
 
 pub(crate) struct Component {
@@ -212,6 +213,7 @@ impl Dashboard {
             diagnostics,
             compile_packages,
             run,
+            installing: false,
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
         }))
     }

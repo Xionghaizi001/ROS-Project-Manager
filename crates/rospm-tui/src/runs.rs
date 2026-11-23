@@ -25,9 +25,15 @@ pub trait RunBackend {
         _root: &Path,
         _manifest: Option<&Path>,
         _operation: Operation,
-    ) -> Result<()> {
+    ) -> Result<TaskOutcome> {
         anyhow::bail!("task worker unavailable")
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskOutcome {
+    Completed,
+    Detached,
 }
 
 pub(crate) enum Page {
@@ -370,14 +376,16 @@ fn controllable(process: &RunStatus) -> bool {
 
 fn process_row(process: &RunStatus, text: &Text) -> Entry {
     let mut row = Entry::link(&process.target);
-    row.cells[1] = if process.exit.is_some() {
-        &text.run_exited
+    row.cells[1] = if process.task && process.exit.is_none() {
+        text.installing.clone()
+    } else if process.exit.is_some() {
+        text.run_exited.clone()
     } else if process.shell {
-        &text.shell_detached
+        text.shell_detached.clone()
     } else if process.background {
-        &text.run_background
+        text.run_background.clone()
     } else {
-        &text.run_foreground
+        text.run_foreground.clone()
     }
     .clone();
     row.cells[2] = match (process.exit, process.pid) {

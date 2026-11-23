@@ -27,6 +27,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use rospm_core::conda::ToolInstallation;
 use rospm_core::worker::{Operation, WorkspaceLock};
 pub use runs::RunBackend;
+pub use runs::TaskOutcome;
 use std::time::{Duration, Instant};
 
 /// Localized strings supplied by the CLI layer.
@@ -56,6 +57,7 @@ pub struct Text {
     pub workspace: String,
     pub status: String,
     pub ready: String,
+    pub installing: String,
     pub details: String,
     pub manifest_search: String,
     pub footer_select: String,
@@ -346,7 +348,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut process_error = None;
     let mut left_press = None;
     loop {
-        if let Some(project) = dashboard.as_ref() {
+        if let Some(project) = dashboard.as_mut() {
             if project_lock
                 .as_ref()
                 .is_none_or(|lease| lease.workspace() != project.root)
@@ -398,6 +400,9 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         history.iter().map(|process| &process.id).collect();
                     processes.retain(|process| !finished.contains(&process.id));
                     active_processes = processes.len();
+                    project.installing = processes
+                        .iter()
+                        .any(|process| process.task && process.exit.is_none());
                     processes.extend(history);
                     if let Some(InstallPage::Run(page)) = &mut install_page {
                         page.refresh(&processes, process_error.as_deref(), &mut focused_row, text);
@@ -1007,15 +1012,18 @@ fn install<B: ratatui::backend::Backend + Write>(
     let result = match install_page.as_ref() {
         Some(InstallPage::Ros) => match backend {
             Some(backend) => backend.task(root, manifest, Operation::Apply),
-            None => install_ros(),
+            None => install_ros().map(|_| TaskOutcome::Completed),
         },
         Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => match backend {
             Some(backend) => backend.task(root, manifest, Operation::CondaInstall),
-            None => bootstrap.perform(&mut io::stdout()).map_err(Into::into),
+            None => bootstrap
+                .perform(&mut io::stdout())
+                .map(|_| TaskOutcome::Completed)
+                .map_err(Into::into),
         },
         Some(InstallPage::Components) => match backend {
             Some(backend) => backend.task(root, manifest, Operation::ComponentsInstall),
-            None => install_components(),
+            None => install_components().map(|_| TaskOutcome::Completed),
         },
         _ => unreachable!(),
     };
@@ -1198,6 +1206,7 @@ fn run_action<B: ratatui::backend::Backend + Write>(
     };
     println!("{} {} [y/N]", text.confirm_action, label);
     let mut answer = String::new();
+    let mut detached = false;
     io::stdin().read_line(&mut answer)?;
     if matches!(answer.trim(), "y" | "Y" | "yes") {
         let result = if let (Some(backend), Some(operation)) = (backend, task_operation(operation))
@@ -1205,16 +1214,26 @@ fn run_action<B: ratatui::backend::Backend + Write>(
             let root = manifest
                 .and_then(Path::parent)
                 .unwrap_or_else(|| Path::new("."));
-            backend.task(root, manifest, operation)
+            backend
+                .task(root, manifest, operation)
+                .map(|outcome| matches!(outcome, TaskOutcome::Detached))
         } else {
-            action(operation)
+            action(operation).map(|_| false)
         };
-        if let Err(error) = result {
-            eprintln!("{error:#}");
+        match result {
+            Ok(true) => detached = true,
+            Ok(false) => {
+                println!("Enter ↩");
+                answer.clear();
+                io::stdin().read_line(&mut answer)?;
+            }
+            Err(error) => {
+                eprintln!("{error:#}");
+                println!("Enter ↩");
+                answer.clear();
+                io::stdin().read_line(&mut answer)?;
+            }
         }
-        println!("Enter ↩");
-        answer.clear();
-        io::stdin().read_line(&mut answer)?;
     }
     enable_raw_mode()?;
     execute!(
@@ -1223,7 +1242,13 @@ fn run_action<B: ratatui::backend::Backend + Write>(
         EnableMouseCapture
     )?;
     terminal.hide_cursor()?;
-    terminal.clear()?;
+    if detached {
+        // EnterAlternateScreen already blanked the screen. Reset both Ratatui buffers.
+        terminal.swap_buffers();
+        terminal.swap_buffers();
+    } else {
+        terminal.clear()?;
+    }
     Ok(())
 }
 

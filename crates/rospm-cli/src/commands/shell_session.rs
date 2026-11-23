@@ -92,6 +92,7 @@ impl Session {
                 id: format!("shell-{}", super::interaction::task_id()),
                 target: "Shell".into(),
                 background: false,
+                task: false,
                 shell: true,
                 pid: None,
                 suspended: false,

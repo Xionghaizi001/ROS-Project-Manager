@@ -66,7 +66,7 @@ pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
     }
     // Task snapshots currently have no operation field: never infer a workflow
     // from the task id or merge unrelated task output into a build log.
-    if let Ok(entries) = fs::read_dir(root.join(".rospm/tasks")) {
+    if let Ok(entries) = fs::read_dir(root.join(".rospm/worker/tasks")) {
         let mut tasks: Vec<_> = entries.flatten().filter(|e| e.path().is_dir()).collect();
         tasks.sort_by_key(|e| e.file_name());
         result.extend(tasks.into_iter().map(|e| Source {
@@ -176,8 +176,8 @@ pub(crate) fn process_source(process: &RunStatus) -> Option<Source> {
     Some(Source {
         path: PathBuf::from(format!("/proc/self/fd/{fd}")),
         label: process.target.clone(),
-        json: false,
-        process: true,
+        json: process.task,
+        process: !process.task,
     })
 }
 

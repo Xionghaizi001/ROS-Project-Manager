@@ -26,7 +26,7 @@ fn checks_update_a_missing_rosdep_cache_and_reuse_it() {
 set -eu
 case "$1" in
     update)
-        test "$2" = --rosdistro && test "$3" = jazzy
+        test "$2" = --rosdistro && test "$3" = jazzy && test "$4" = -q
         echo update >> "$ROS_HOME/updates"
         test ! -e "$ROS_HOME/fail" || { echo 'simulated update failure' >&2; exit 1; }
         mkdir -p "$ROS_HOME/rosdep/sources.cache"

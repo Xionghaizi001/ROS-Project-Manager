@@ -70,6 +70,8 @@ pub struct RunStatus {
     pub target: String,
     pub background: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub task: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
     pub pid: Option<u32>,
     pub suspended: bool,

@@ -572,6 +572,7 @@ fn execute_cli(
                 workspace: tr("cli.tui.workspace"),
                 status: tr("cli.tui.status"),
                 ready: tr("cli.tui.ready"),
+                installing: tr("cli.tui.installing"),
                 details: tr("cli.tui.details"),
                 manifest_search: tr("cli.tui.manifest_search"),
                 footer_select: tr("cli.tui.footer_select"),

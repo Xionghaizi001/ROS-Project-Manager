@@ -2,7 +2,7 @@ use super::*;
 use crate::commands::run_process::ManagedRun;
 use crate::commands::shell_session::Session;
 use rospm_core::run::{output, RunExit, RunRequest, RunSignal, RunStatus};
-use rospm_core::worker::{LogStream, TaskState};
+use rospm_core::worker::{LogStream, TaskSnapshot, TaskState};
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufReader, Write},
@@ -22,6 +22,8 @@ pub struct Runs {
     worker: Option<Child>,
     shell: Option<Session>,
     logs: Vec<RecordedRun>,
+    task_runs: Vec<RunStatus>,
+    task_logs: Vec<File>,
 }
 
 struct RecordedRun {
@@ -118,6 +120,24 @@ impl rospm_tui::RunBackend for Runs {
             Err(error) => return Err(error),
         };
         self.update_running(&mut running);
+        for process in &mut self.task_runs {
+            let path = root
+                .join(".rospm/worker/tasks")
+                .join(&process.id)
+                .join("snapshot.json");
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(snapshot) = serde_json::from_slice::<TaskSnapshot>(&bytes) {
+                    if snapshot.state.is_terminal() {
+                        process.exit = Some(if snapshot.result.is_some_and(|r| r.success) {
+                            RunExit::Code(0)
+                        } else {
+                            RunExit::Code(1)
+                        });
+                    }
+                }
+            }
+        }
+        running.extend(self.task_runs.iter().cloned());
         for record in &mut self.logs {
             if record.process.background
                 && record.process.exit.is_none()
@@ -180,7 +200,13 @@ impl rospm_tui::RunBackend for Runs {
         result.map(|_| ())
     }
 
-    fn task(&mut self, root: &Path, manifest: Option<&Path>, operation: Operation) -> Result<()> {
+    fn task(
+        &mut self,
+        root: &Path,
+        manifest: Option<&Path>,
+        operation: Operation,
+    ) -> Result<rospm_tui::TaskOutcome> {
+        let detach = operation == Operation::DepsInstall;
         let runtime = root.join(".rospm/worker/runtime");
         let stream = self.ensure_task_worker(root, &runtime, manifest)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -215,7 +241,29 @@ impl rospm_tui::RunBackend for Runs {
             ),
             "worker did not accept the TUI task"
         );
-        follow_task(&mut stream, &id)
+        if detach {
+            let log = File::open(
+                root.join(".rospm/worker/tasks")
+                    .join(&id)
+                    .join("logs.jsonl"),
+            )?;
+            self.task_logs.push(log);
+            self.task_runs.push(RunStatus {
+                id,
+                target: "deps install".into(),
+                background: true,
+                task: true,
+                shell: false,
+                pid: None,
+                suspended: false,
+                output_fd: self.task_logs.last().map(|file| file.as_raw_fd()),
+                exit: None,
+            });
+            Ok(rospm_tui::TaskOutcome::Detached)
+        } else {
+            follow_task(&mut stream, &id)?;
+            Ok(rospm_tui::TaskOutcome::Completed)
+        }
     }
 }
 

@@ -229,6 +229,7 @@ cli:
     workspace: "Project"
     status: "Status"
     ready: "Ready"
+    installing: "Installing"
     details: "Project details"
     manifest_search: "manifest: search from the current directory"
     footer_select: "↑↓ Select"

@@ -224,6 +224,7 @@ cli:
     workspace: "工作区"
     status: "状态"
     ready: "就绪"
+    installing: "安装中"
     details: "项目详情"
     manifest_search: "清单：从当前目录开始查找"
     footer_select: "↑↓ 选择"
