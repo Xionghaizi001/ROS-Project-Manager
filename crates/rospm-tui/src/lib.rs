@@ -30,6 +30,8 @@ pub use runs::RunBackend;
 pub use runs::TaskOutcome;
 use std::time::{Duration, Instant};
 
+const PROCESS_KEY: char = 'p';
+
 /// Localized strings supplied by the CLI layer.
 #[derive(Default)]
 pub struct Text {
@@ -480,7 +482,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             continue;
                         }
                     }
-                    if key.code == KeyCode::Char('p') && runs.is_some() {
+                    if key.code == KeyCode::Char(PROCESS_KEY) && runs.is_some() {
                         install_page = Some(InstallPage::Run(runs::Page::processes(
                             processes.clone(),
                             process_error.clone(),
@@ -810,6 +812,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     mouse.column,
                                     size.width,
                                     active_processes,
+                                    text,
                                 ) =>
                         {
                             install_page = Some(InstallPage::Run(runs::Page::processes(

@@ -1,5 +1,5 @@
 //! Three horizontal regions: project title, workflow tabs, and page content.
-use crate::{dashboard::Dashboard, pages, Action, InstallPage, Text};
+use crate::{dashboard::Dashboard, pages, Action, InstallPage, Text, PROCESS_KEY};
 use ratatui::{
     layout::{Alignment, Constraint, Layout},
     style::{Color, Modifier, Style},
@@ -193,9 +193,13 @@ pub(crate) fn draw(
         Constraint::Length(1),
     ])
     .split(frame.area());
-    let counter = process_count.map(process_counter);
+    let counter = process_count.map(|count| process_counter(count, text));
     let header = Layout::horizontal([
-        Constraint::Length(counter.as_ref().map_or(10, |label| 8 + label.len() as u16)),
+        Constraint::Length(
+            counter
+                .as_ref()
+                .map_or(10, |label| 8 + label.width() as u16),
+        ),
         Constraint::Min(1),
         Constraint::Length(10),
     ])
@@ -204,10 +208,9 @@ pub(crate) fn draw(
         Paragraph::new(Line::from(vec![
             Span::styled("◆ rospm", Style::default().fg(Color::Cyan)),
             Span::raw(" "),
-            Span::styled(
-                counter.unwrap_or_default(),
-                Style::default().fg(Color::Black).bg(Color::Cyan),
-            ),
+            counter
+                .unwrap_or_default()
+                .style(Style::default().fg(Color::Black).bg(Color::Cyan)),
         ])),
         header[0],
     );
@@ -294,12 +297,12 @@ pub(crate) fn draw(
     );
 }
 
-fn process_counter(count: usize) -> String {
-    format!("[{count}]")
+fn process_counter(count: usize, text: &Text) -> Span<'static> {
+    Span::raw(format!("[{count}] {PROCESS_KEY} {}", text.run_processes))
 }
 
-pub(crate) fn process_counter_at(column: u16, width: u16, count: usize) -> bool {
-    (8..width.min(8 + process_counter(count).len() as u16)).contains(&column)
+pub(crate) fn process_counter_at(column: u16, width: u16, count: usize, text: &Text) -> bool {
+    (8..width.min(8 + process_counter(count, text).width() as u16)).contains(&column)
 }
 
 pub(crate) fn table_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
@@ -316,6 +319,24 @@ pub(crate) fn table_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_counter_advertises_shortcut_and_matches_click_area() {
+        let text = Text {
+            run_processes: "进程管理".into(),
+            ..Text::default()
+        };
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, None, &text, 0, None, &mut 0, None, Some(0)))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(12, 0)].symbol(), "p");
+        assert_eq!(buffer[(20, 0)].symbol(), "理");
+        assert!(process_counter_at(21, 80, 0, &text));
+        assert!(!process_counter_at(22, 80, 0, &text));
+    }
 
     #[test]
     fn footer_hit_testing_uses_rendered_width_for_chinese_labels() {
