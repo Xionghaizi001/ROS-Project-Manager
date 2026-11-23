@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rospm_core::run::{RunExit, RunRequest, RunSignal, RunStatus, Target};
+use rospm_core::worker::Operation;
 
 use crate::{dashboard::Dashboard, pages::Entry, Text};
 
@@ -14,6 +15,19 @@ pub trait RunBackend {
     fn signal(&mut self, root: &Path, process: &RunStatus, signal: RunSignal) -> Result<()>;
     fn close_foreground(&mut self);
     fn shell(&mut self, root: &Path, manifest: &Path) -> Result<()>;
+
+    fn has_task_worker(&self) -> bool {
+        false
+    }
+
+    fn task(
+        &mut self,
+        _root: &Path,
+        _manifest: Option<&Path>,
+        _operation: Operation,
+    ) -> Result<()> {
+        anyhow::bail!("task worker unavailable")
+    }
 }
 
 pub(crate) enum Page {

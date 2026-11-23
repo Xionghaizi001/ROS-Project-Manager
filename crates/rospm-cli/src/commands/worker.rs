@@ -30,7 +30,7 @@ use std::{
 pub enum TaskCommand {
     #[command(about = tr("worker_cli.submit"))]
     Submit {
-        #[arg(value_parser = ["apply", "apply_locked", "build", "uninstall", "check", "verify", "deps"])]
+        #[arg(value_parser = ["apply", "apply_locked", "build", "uninstall", "check", "verify", "deps", "deps_check", "deps_install", "components_install", "conda_install"])]
         operation: String,
         #[arg(long, help = tr("worker_cli.id"))]
         id: String,
@@ -183,17 +183,23 @@ extern "C" fn stop(_: libc::c_int) {
 pub const DEFAULT_AUTO_EXIT_TIMEOUT_SECS: u64 = 60;
 
 pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Result<()> {
-    let loaded = load(global)?;
-    anyhow::ensure!(
-        loaded.path.canonicalize()? == loaded.root.join(MANIFEST_FILE),
-        "{}",
-        tr("worker_cli.standard_manifest")
-    );
+    let loaded = global.manifest.as_ref().map(|_| load(global)).transpose()?;
+    if let Some(loaded) = &loaded {
+        anyhow::ensure!(
+            loaded.path.canonicalize()? == loaded.root.join(MANIFEST_FILE),
+            "{}",
+            tr("worker_cli.standard_manifest")
+        );
+    }
+    let root = loaded
+        .as_ref()
+        .map(|loaded| loaded.root.clone())
+        .unwrap_or(std::env::current_dir()?);
     // The project lock prevents two endpoints from recovering the same task store.
-    let data = loaded.root.join(".rospm/worker");
+    let data = root.join(".rospm/worker");
     let store = TaskStore::open(data.join("tasks"))?;
-    let _owner = WorkspaceLock::try_acquire(&data, &loaded.root)?
-        .context(tr("worker_cli.already_running"))?;
+    let _owner =
+        WorkspaceLock::try_acquire(&data, &root)?.context(tr("worker_cli.already_running"))?;
     TaskStore::open(runtime)?;
     let runtime = runtime.canonicalize()?;
     let _endpoint_owner =
@@ -236,13 +242,13 @@ pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Re
                     operation,
                     ..
                 } => {
-                    if Path::new(&workspace) != loaded.root {
+                    if Path::new(&workspace) != root {
                         return Err("workspace does not match worker".into());
                     }
                     if tasks.len() >= 32 {
                         return Err("worker task capacity reached".into());
                     }
-                    let root = loaded.root.clone();
+                    let root = root.clone();
                     let id = task_id.clone();
                     let handle = runner
                         .start_with(&task_id, &workspace, move |interaction| {
@@ -321,6 +327,26 @@ fn execute(
     operation: Operation,
     interaction: &dyn Interaction,
 ) -> Result<()> {
+    if operation == Operation::CondaInstall {
+        match rospm_core::conda::ToolInstallation::probe() {
+            rospm_core::conda::ToolInstallation::Needed(bootstrap) => {
+                let mut output = Vec::new();
+                let result = bootstrap.perform(&mut output);
+                interaction.event(Event::Log {
+                    task: id,
+                    step: 0,
+                    stream: Stream::Stdout,
+                    bytes: &output,
+                });
+                result?;
+            }
+            rospm_core::conda::ToolInstallation::Ready(_) => {}
+            rospm_core::conda::ToolInstallation::Unavailable => {
+                bail!("no compatible Conda installer is available")
+            }
+        }
+        return Ok(());
+    }
     let loaded = load(&Global {
         verbose: false,
         manifest: Some(root.join(MANIFEST_FILE)),
@@ -347,11 +373,13 @@ fn execute(
     )?;
     let provider = provider::for_manifest(&loaded.manifest);
     let plan = match operation {
+        Operation::CondaInstall => unreachable!(),
         Operation::DepsInstall
         | Operation::VenvCreate
         | Operation::VenvInstall
         | Operation::Lock => bail!("operation requires the synchronous CLI entry"),
         Operation::Apply | Operation::ApplyLocked => provider.plan_apply(&ctx)?,
+        Operation::ComponentsInstall => provider.plan_components_install(&ctx)?,
         Operation::Build => provider.plan_build(&ctx, None, false)?,
         Operation::Uninstall => {
             let plan = provider.plan_uninstall(&ctx, false)?;
@@ -360,7 +388,7 @@ fn execute(
             })?;
             return Ok(());
         }
-        Operation::Check | Operation::Verify | Operation::Deps => {
+        Operation::Check | Operation::Verify | Operation::Deps | Operation::DepsCheck => {
             let report = match operation {
                 Operation::Check => provider.probe_env(&ctx)?,
                 Operation::Verify => provider.verify(&ctx, lock.as_ref().unwrap())?,
@@ -373,7 +401,9 @@ fn execute(
                 stream: Stream::Stdout,
                 bytes: &bytes,
             });
-            anyhow::ensure!(report.ready(), "{}", tr("worker_cli.check_failed"));
+            if !matches!(operation, Operation::DepsCheck) {
+                anyhow::ensure!(report.ready(), "{}", tr("worker_cli.check_failed"));
+            }
             return Ok(());
         }
     };

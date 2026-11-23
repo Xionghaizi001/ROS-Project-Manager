@@ -2,15 +2,18 @@ use super::*;
 use crate::commands::run_process::ManagedRun;
 use crate::commands::shell_session::Session;
 use rospm_core::run::{output, RunExit, RunRequest, RunSignal, RunStatus};
+use rospm_core::worker::{LogStream, TaskState};
 use std::{
     fs::{File, OpenOptions},
-    io,
+    io::{self, BufReader, Write},
     os::fd::AsRawFd,
     os::unix::fs::OpenOptionsExt,
     os::unix::process::CommandExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Default)]
@@ -38,6 +41,10 @@ impl RecordedRun {
 }
 
 impl rospm_tui::RunBackend for Runs {
+    fn has_task_worker(&self) -> bool {
+        true
+    }
+
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()> {
         let log = output::create()?;
         if !background {
@@ -172,6 +179,44 @@ impl rospm_tui::RunBackend for Runs {
         }
         result.map(|_| ())
     }
+
+    fn task(&mut self, root: &Path, manifest: Option<&Path>, operation: Operation) -> Result<()> {
+        let runtime = root.join(".rospm/worker/runtime");
+        let stream = self.ensure_task_worker(root, &runtime, manifest)?;
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+        let id = task_id();
+        let workspace = root.canonicalize()?.to_string_lossy().into_owned();
+        let mut stream = BufReader::new(stream);
+        anyhow::ensure!(
+            matches!(
+                exchange(
+                    &mut stream,
+                    Message::Hello {
+                        client: "rospm-tui".into()
+                    }
+                )?,
+                Message::Hello { .. }
+            ),
+            "worker did not accept the TUI connection"
+        );
+        anyhow::ensure!(
+            matches!(
+                exchange(
+                    &mut stream,
+                    Message::Submit {
+                        request_id: id.clone(),
+                        task_id: id.clone(),
+                        workspace,
+                        operation,
+                    }
+                )?,
+                Message::Accepted { task_id, .. } if task_id == id
+            ),
+            "worker did not accept the TUI task"
+        );
+        follow_task(&mut stream, &id)
+    }
 }
 
 impl Runs {
@@ -250,6 +295,53 @@ impl Runs {
         self.worker = Some(worker);
         result
     }
+
+    fn ensure_task_worker(
+        &mut self,
+        root: &Path,
+        runtime: &Path,
+        manifest: Option<&Path>,
+    ) -> Result<UnixStream> {
+        match connect(runtime) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if missing(&error) => {}
+            Err(error) => return Err(error),
+        }
+        let mut command = Command::new(std::env::current_exe()?);
+        command.arg("worker").arg("--runtime").arg(runtime);
+        if let Some(manifest) = manifest {
+            command.arg("--manifest").arg(manifest.canonicalize()?);
+        }
+        command
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut worker = command.spawn()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let result = loop {
+            match connect(runtime) {
+                Ok(stream) => break Ok(stream),
+                Err(error) if missing(&error) => {
+                    if worker.try_wait()?.is_some() || Instant::now() >= deadline {
+                        break Err(error).context("task worker did not start");
+                    }
+                }
+                Err(error) => break Err(error),
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        let _ = worker.try_wait();
+        result
+    }
 }
 
 fn missing(error: &anyhow::Error) -> bool {
@@ -259,6 +351,100 @@ fn missing(error: &anyhow::Error) -> bool {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
         )
     })
+}
+
+fn task_id() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tick = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!(
+        "tui-{}-{tick}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
+    let mut cursor = 0;
+    let mut review = None;
+    loop {
+        let Message::State { snapshot } =
+            exchange(stream, Message::Snapshot { task_id: id.into() })?
+        else {
+            anyhow::bail!("unexpected task snapshot response")
+        };
+        loop {
+            let Message::LogChunk {
+                next_cursor,
+                complete,
+                entries,
+                ..
+            } = exchange(
+                stream,
+                Message::Logs {
+                    task_id: id.into(),
+                    cursor,
+                    limit: 100,
+                },
+            )?
+            else {
+                anyhow::bail!("unexpected task log response")
+            };
+            for entry in entries {
+                match entry.stream {
+                    LogStream::Stdout => io::stdout().write_all(entry.text.as_bytes())?,
+                    LogStream::Stderr => io::stderr().write_all(entry.text.as_bytes())?,
+                    LogStream::Worker => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&entry.text) {
+                            if value["task"] == id && value["operation"].is_object() {
+                                review = Some(value);
+                            }
+                        }
+                    }
+                }
+            }
+            io::stdout().flush()?;
+            io::stderr().flush()?;
+            cursor = next_cursor;
+            if complete || cursor >= snapshot.log_cursor {
+                break;
+            }
+        }
+        if snapshot.state.is_terminal() {
+            return match snapshot.result.as_ref().filter(|result| result.success) {
+                Some(_) => Ok(()),
+                None => anyhow::bail!(
+                    "{}",
+                    snapshot
+                        .result
+                        .and_then(|result| result.error)
+                        .unwrap_or_else(|| "worker task failed".into())
+                ),
+            };
+        }
+        if snapshot.state == TaskState::WaitingConfirmation {
+            if review.take().is_some() {
+                let mut answer = String::new();
+                let read = io::stdin().read_line(&mut answer)?;
+                let approved = read > 0 && matches!(answer.trim(), "y" | "Y" | "yes");
+                exchange(
+                    stream,
+                    Message::Confirm {
+                        task_id: id.into(),
+                        step: snapshot.step,
+                        response: if approved {
+                            rospm_core::worker::ConfirmationResponse::Approve
+                        } else {
+                            rospm_core::worker::ConfirmationResponse::Reject
+                        },
+                    },
+                )?;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn writer(file: &File) -> std::io::Result<File> {

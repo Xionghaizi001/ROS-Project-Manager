@@ -25,7 +25,7 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use rospm_core::conda::ToolInstallation;
-use rospm_core::worker::WorkspaceLock;
+use rospm_core::worker::{Operation, WorkspaceLock};
 pub use runs::RunBackend;
 use std::time::{Duration, Instant};
 
@@ -157,6 +157,28 @@ pub enum Action {
     DepsCheck,
     DepsInstall,
     CreateProject,
+}
+
+fn task_operation(action: Action) -> Option<Operation> {
+    Some(match action {
+        Action::Apply => Operation::Apply,
+        Action::Uninstall => Operation::Uninstall,
+        Action::Check => Operation::Check,
+        Action::Verify => Operation::Verify,
+        Action::DepsCheck => Operation::DepsCheck,
+        Action::DepsInstall => Operation::DepsInstall,
+        Action::CreateProject => return None,
+    })
+}
+
+fn task_backend<'a>(
+    runs: &'a mut Option<(&mut dyn RunBackend, u8)>,
+) -> Option<&'a mut dyn RunBackend> {
+    match runs {
+        Some((backend, _)) if backend.has_task_worker() => Some(&mut **backend),
+        None => None,
+        Some(_) => None,
+    }
 }
 
 impl InstallPage {
@@ -501,6 +523,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 text,
                                 install_ros,
                                 install_components,
+                                task_backend(runs),
                                 &mut last_runtime_refresh,
                             )?;
                         }
@@ -630,7 +653,14 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             last_runtime_refresh = Instant::now();
                         }
                         KeyCode::Char('n') if selected == 0 && dashboard.is_none() => {
-                            run_action(terminal, text, action, Action::CreateProject)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::CreateProject,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
@@ -657,32 +687,74 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             last_runtime_refresh = Instant::now();
                         }
                         KeyCode::Char('a') if selected == 1 => {
-                            run_action(terminal, text, action, Action::Apply)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::Apply,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         KeyCode::Char('u') if selected == 1 => {
-                            run_action(terminal, text, action, Action::Uninstall)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::Uninstall,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         KeyCode::Char('D') if selected == 1 => {
-                            run_action(terminal, text, action, Action::DepsInstall)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::DepsInstall,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         KeyCode::Char('d') if selected == 1 => {
-                            run_action(terminal, text, action, Action::DepsCheck)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::DepsCheck,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         KeyCode::Char('c') if selected == 5 => {
-                            run_action(terminal, text, action, Action::Check)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::Check,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
                         KeyCode::Char('v') if selected == 5 => {
-                            run_action(terminal, text, action, Action::Verify)?;
+                            run_action(
+                                terminal,
+                                active_manifest.as_deref(),
+                                text,
+                                action,
+                                Action::Verify,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                         }
@@ -785,6 +857,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 &mut last_runtime_refresh,
                                 build,
                                 action,
+                                task_backend(runs),
                             )?;
                             if quit {
                                 break Ok(());
@@ -922,16 +995,28 @@ fn install<B: ratatui::backend::Backend + Write>(
     text: &Text,
     install_ros: &mut impl FnMut() -> Result<()>,
     install_components: &mut impl FnMut() -> Result<()>,
+    backend: Option<&mut dyn RunBackend>,
     last_runtime_refresh: &mut Instant,
 ) -> Result<()> {
     leave_screen(terminal)?;
     disable_raw_mode()?;
+    let root = dashboard
+        .as_ref()
+        .map(|project| project.root.as_path())
+        .unwrap_or_else(|| Path::new("."));
     let result = match install_page.as_ref() {
-        Some(InstallPage::Ros) => install_ros(),
-        Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => {
-            bootstrap.perform(&mut io::stdout()).map_err(Into::into)
-        }
-        Some(InstallPage::Components) => install_components(),
+        Some(InstallPage::Ros) => match backend {
+            Some(backend) => backend.task(root, manifest, Operation::Apply),
+            None => install_ros(),
+        },
+        Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => match backend {
+            Some(backend) => backend.task(root, manifest, Operation::CondaInstall),
+            None => bootstrap.perform(&mut io::stdout()).map_err(Into::into),
+        },
+        Some(InstallPage::Components) => match backend {
+            Some(backend) => backend.task(root, manifest, Operation::ComponentsInstall),
+            None => install_components(),
+        },
         _ => unreachable!(),
     };
     if let Err(error) = result {
@@ -974,6 +1059,7 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
     last_runtime_refresh: &mut Instant,
     build: &mut impl FnMut(bool) -> Result<()>,
     execute_action: &mut impl FnMut(Action) -> Result<()>,
+    backend: Option<&mut dyn RunBackend>,
 ) -> Result<bool> {
     match action {
         view::FooterAction::Select => {
@@ -1032,6 +1118,7 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
             text,
             install_ros,
             install_components,
+            backend,
             last_runtime_refresh,
         )?,
         view::FooterAction::Build | view::FooterAction::Rebuild => {
@@ -1042,14 +1129,21 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
             *last_runtime_refresh = Instant::now();
         }
         view::FooterAction::Execute(operation) => {
-            run_action(terminal, text, execute_action, operation)?;
+            run_action(terminal, manifest, text, execute_action, operation, backend)?;
             *dashboard = dashboard::Dashboard::load(manifest, text)?;
             *scroll = 0;
             *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
             *last_runtime_refresh = Instant::now();
         }
         view::FooterAction::CreateProject => {
-            run_action(terminal, text, execute_action, Action::CreateProject)?;
+            run_action(
+                terminal,
+                manifest,
+                text,
+                execute_action,
+                Action::CreateProject,
+                backend,
+            )?;
             *dashboard = dashboard::Dashboard::load(manifest, text)?;
             *scroll = 0;
             *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
@@ -1085,9 +1179,11 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
 
 fn run_action<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
+    manifest: Option<&Path>,
     text: &Text,
     action: &mut impl FnMut(Action) -> Result<()>,
     operation: Action,
+    backend: Option<&mut dyn RunBackend>,
 ) -> Result<()> {
     leave_screen(terminal)?;
     disable_raw_mode()?;
@@ -1104,7 +1200,16 @@ fn run_action<B: ratatui::backend::Backend + Write>(
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     if matches!(answer.trim(), "y" | "Y" | "yes") {
-        if let Err(error) = action(operation) {
+        let result = if let (Some(backend), Some(operation)) = (backend, task_operation(operation))
+        {
+            let root = manifest
+                .and_then(Path::parent)
+                .unwrap_or_else(|| Path::new("."));
+            backend.task(root, manifest, operation)
+        } else {
+            action(operation)
+        };
+        if let Err(error) = result {
             eprintln!("{error:#}");
         }
         println!("Enter ↩");
@@ -1282,7 +1387,8 @@ fn tab_at(column: u16, width: u16) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::tab_at;
+    use super::{tab_at, task_operation, Action};
+    use rospm_core::worker::Operation;
 
     #[test]
     fn mouse_tab_hit_testing_handles_narrow_and_wide_windows() {
@@ -1291,5 +1397,15 @@ mod tests {
         assert_eq!(tab_at(79, 80), 7);
         assert_eq!(tab_at(2, 3), 5);
         assert_eq!(tab_at(0, 0), 0);
+    }
+
+    #[test]
+    fn install_actions_use_task_operations_except_project_creation() {
+        assert_eq!(task_operation(Action::Apply), Some(Operation::Apply));
+        assert_eq!(
+            task_operation(Action::DepsCheck),
+            Some(Operation::DepsCheck)
+        );
+        assert_eq!(task_operation(Action::CreateProject), None);
     }
 }
