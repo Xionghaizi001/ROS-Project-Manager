@@ -1,14 +1,21 @@
 //! Three horizontal regions: project title, workflow tabs, and page content.
-use crate::{dashboard::Dashboard, pages, Action, InstallPage, Text, HELP_TAB, PROCESS_KEY};
+use crate::{
+    dashboard::Dashboard, pages, Action, InstallPage, Text, HELP_TAB, LOG_KEY, PROCESS_KEY,
+};
 use ratatui::{
-    layout::{Alignment, Constraint, Layout},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
+pub(crate) fn brand() -> Span<'static> {
+    Span::styled("◆ rospm", Style::default().fg(Color::Cyan))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FooterAction {
+    Logs,
     Select,
     Open,
     ChangeTab,
@@ -115,7 +122,12 @@ fn action_items(selected: usize, has_project: bool, text: &Text) -> Vec<(String,
     }
 }
 
-fn footer_spans(label: &str, key_bg: Color, label_bg: Color) -> Vec<Span<'static>> {
+fn footer_spans(label: &str, accent: bool) -> Vec<Span<'static>> {
+    let (key_bg, label_bg) = if accent {
+        (Color::Rgb(220, 240, 242), Color::Cyan)
+    } else {
+        (Color::Rgb(225, 230, 234), Color::Rgb(175, 175, 175))
+    };
     let style = |bg| Style::default().fg(Color::Black).bg(bg);
     let Some((key, label)) = label.split_once(' ') else {
         return vec![Span::styled(format!(" {label} "), style(label_bg))];
@@ -126,6 +138,10 @@ fn footer_spans(label: &str, key_bg: Color, label_bg: Color) -> Vec<Span<'static
     ]
 }
 
+fn log_button(text: &Text) -> Line<'static> {
+    Line::from(footer_spans(&format!("{LOG_KEY} {}", text.logs), false))
+}
+
 pub(crate) fn footer_action_at(
     column: u16,
     width: u16,
@@ -134,6 +150,15 @@ pub(crate) fn footer_action_at(
     has_project: bool,
     text: &Text,
 ) -> Option<FooterAction> {
+    if column >= width {
+        return None;
+    }
+    let log_width = log_button(text).width() as u16;
+    if column < log_width {
+        return Some(FooterAction::Logs);
+    }
+    let column = column - log_width;
+    let width = width - log_width;
     let items = footer_items(install_page, selected, text);
     let measure = |label: &str| Span::raw(label).width() + 2;
     if install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5) {
@@ -144,8 +169,9 @@ pub(crate) fn footer_action_at(
             .map(|(label, _)| measure(label))
             .sum::<usize>();
         let column = usize::from(column);
-        if (usize::from(width).saturating_sub(right_width)..usize::from(width)).contains(&column) {
-            let mut offset = usize::from(width).saturating_sub(right_width);
+        let right_start = usize::from(width).saturating_sub(right_width);
+        if column >= right_start {
+            let mut offset = right_start;
             for (label, action) in right_items {
                 let end = offset + measure(&label);
                 if (offset..end).contains(&column) {
@@ -167,7 +193,7 @@ pub(crate) fn footer_action_at(
         return None;
     }
     let total = items.iter().map(|(label, _)| measure(label)).sum::<usize>();
-    let start = usize::from(width).saturating_sub(total) / 2;
+    let start = (usize::from(width) / 2).saturating_sub(total / 2);
     let column = usize::from(column);
     if column < start {
         return None;
@@ -213,7 +239,7 @@ pub(crate) fn draw(
     .split(areas[0]);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("◆ rospm", Style::default().fg(Color::Cyan)),
+            brand(),
             Span::raw(" "),
             counter
                 .unwrap_or_default()
@@ -268,40 +294,50 @@ pub(crate) fn draw(
     if !rows.is_empty() {
         crate::table::draw(frame, inner, rows, text, scroll, focused);
     }
-    let footer_items = footer_items(install_page, selected, text);
-    let footer = if install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5) {
-        let nav_width = footer_items
-            .iter()
-            .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
-            .sum::<usize>();
-        let action_items = action_items(selected, dashboard.is_some(), text);
-        let action_width = action_items
-            .iter()
-            .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
-            .sum::<usize>();
-        footer_items
-            .into_iter()
-            .flat_map(|(label, _)| {
-                footer_spans(&label, Color::Rgb(225, 230, 234), Color::Rgb(175, 175, 175))
-            })
-            .chain(std::iter::once(Span::raw(" ".repeat(
-                usize::from(areas[3].width).saturating_sub(nav_width + action_width),
-            ))))
-            .chain(action_items.into_iter().flat_map(|(label, _)| {
-                footer_spans(&label, Color::Rgb(220, 240, 242), Color::Cyan)
-            }))
-            .collect::<Vec<_>>()
+    let log_button = log_button(text);
+    let footer_areas = Layout::horizontal([
+        Constraint::Length(log_button.width() as u16),
+        Constraint::Min(0),
+    ])
+    .split(areas[3]);
+    frame.render_widget(Paragraph::new(log_button), footer_areas[0]);
+    let navigation = footer_items(install_page, selected, text);
+    let actions = (install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5))
+        .then(|| action_items(selected, dashboard.is_some(), text));
+    draw_footer(
+        frame,
+        footer_areas[1],
+        navigation.iter().map(|(label, _)| label.as_str()),
+        actions
+            .as_ref()
+            .map(|items| items.iter().map(|(label, _)| label.as_str())),
+    );
+}
+
+pub(crate) fn draw_footer<'a>(
+    frame: &mut ratatui::Frame<'_>,
+    mut area: Rect,
+    navigation: impl Iterator<Item = &'a str>,
+    actions: Option<impl Iterator<Item = &'a str>>,
+) {
+    let style = Style::default().bg(Color::Rgb(32, 35, 39));
+    let split = actions.is_some();
+    if let Some(actions) = actions {
+        let actions = Line::from_iter(actions.flat_map(|label| footer_spans(label, true)));
+        let action_width = area.width.min(actions.width() as u16);
+        area.width -= action_width;
+        let action_area = Rect::new(area.right(), area.y, action_width, area.height);
+        frame.render_widget(Paragraph::new(actions).style(style), action_area);
+    }
+    let navigation = Line::from_iter(navigation.flat_map(|label| footer_spans(label, !split)));
+    let alignment = if split || navigation.width() > usize::from(area.width) {
+        Alignment::Left
     } else {
-        footer_items
-            .into_iter()
-            .flat_map(|(label, _)| footer_spans(&label, Color::Rgb(220, 240, 242), Color::Cyan))
-            .collect::<Vec<_>>()
+        Alignment::Center
     };
     frame.render_widget(
-        Paragraph::new(Line::from(footer))
-            .alignment(Alignment::Center)
-            .style(Style::default().bg(Color::Rgb(32, 35, 39))),
-        areas[3],
+        Paragraph::new(navigation).alignment(alignment).style(style),
+        area,
     );
 }
 
@@ -349,6 +385,7 @@ mod tests {
     #[test]
     fn footer_hit_testing_uses_rendered_width_for_chinese_labels() {
         let text = Text {
+            logs: "日志".into(),
             footer_select: "↑↓ 选择".into(),
             footer_open: "Enter 打开".into(),
             footer_tabs: "←→ 切页".into(),
@@ -374,7 +411,8 @@ mod tests {
             .iter()
             .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
             .sum::<usize>();
-        let start = (100 - total) / 2;
+        let log_width = 8;
+        let start = log_width + (100 - log_width) / 2 - total / 2;
         assert_eq!(
             footer_action_at(start as u16 + 1, 100, None, 3, false, &text),
             Some(FooterAction::Select)
@@ -415,7 +453,7 @@ mod tests {
             [FooterAction::RescanProjects]
         );
         assert_eq!(
-            footer_action_at(1, 100, None, 2, false, &text),
+            footer_action_at(log_width as u16 + 1, 100, None, 2, false, &text),
             Some(FooterAction::Select)
         );
         let mut terminal =
@@ -431,5 +469,44 @@ mod tests {
             terminal.backend().buffer()[((100 - build_width + 3) as u16, 9)].bg,
             Color::Cyan
         );
+        let cli_help = InstallPage::CliHelp;
+        for (width, tab, page) in [
+            (100, 0, None),
+            (100, 1, None),
+            (50, 1, None),
+            (100, 3, None),
+            (100, HELP_TAB, Some(&cli_help)),
+        ] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 10)).unwrap();
+            terminal
+                .draw(|frame| draw(frame, None, &text, tab, page, &mut 0, None, None))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert_eq!(buffer[(1, 9)].symbol(), "l");
+            assert_eq!(buffer[(3, 9)].symbol(), "日");
+            assert_eq!(buffer[(5, 9)].symbol(), "志");
+            assert_eq!(buffer[(width - 4, 0)].symbol(), " ");
+            if tab == 1 {
+                let action_start = width
+                    .saturating_sub(install_width as u16)
+                    .max(log_width as u16);
+                assert_eq!(buffer[(action_start + 1, 9)].symbol(), "a");
+                assert_eq!(
+                    footer_action_at(action_start + 1, width, page, tab, false, &text),
+                    Some(FooterAction::Execute(Action::Apply))
+                );
+            }
+            for column in 0..log_width as u16 {
+                assert_eq!(
+                    footer_action_at(column, width, page, tab, false, &text),
+                    Some(FooterAction::Logs)
+                );
+            }
+            assert_ne!(
+                footer_action_at(log_width as u16, width, page, tab, false, &text),
+                Some(FooterAction::Logs)
+            );
+        }
     }
 }

@@ -31,6 +31,7 @@ pub use runs::TaskOutcome;
 use std::time::{Duration, Instant};
 
 const PROCESS_KEY: char = 'p';
+const LOG_KEY: char = 'l';
 const HELP_TAB: usize = 6;
 
 /// Localized strings supplied by the CLI layer.
@@ -419,17 +420,12 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
             }
         }
         if last_runtime_refresh.elapsed() >= Duration::from_secs(1) {
-            if let Some(dashboard) = dashboard.as_mut() {
-                if let Some(browser) = browser.as_mut() {
-                    browser.reload();
-                } else {
-                    dashboard.refresh_runtime();
-                }
+            if let Some(browser) = browser.as_mut() {
+                browser.reload();
+            } else if let Some(dashboard) = dashboard.as_mut() {
+                dashboard.refresh_runtime();
             }
             last_runtime_refresh = Instant::now();
-        }
-        if let Some(log) = browser.as_mut().filter(|log| log.include_processes) {
-            log.add_process_sources(&processes);
         }
         terminal.draw(|frame| {
             if let Some(browser) = &browser {
@@ -486,6 +482,15 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         if page.edit_key(key) {
                             continue;
                         }
+                    }
+                    if key.code == KeyCode::Char(LOG_KEY) && key.modifiers.is_empty() {
+                        browser = Some(open_logs(
+                            dashboard.as_ref(),
+                            install_page.as_ref(),
+                            focused_row,
+                            &processes,
+                        ));
+                        continue;
                     }
                     if key.code == KeyCode::Char(PROCESS_KEY) && runs.is_some() {
                         install_page = Some(InstallPage::Run(runs::Page::processes(
@@ -557,7 +562,6 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 }
                             } else {
                                 activate(
-                                    &mut browser,
                                     &mut install_page,
                                     &mut focused_row,
                                     &mut scroll,
@@ -579,7 +583,6 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 .is_some_and(|row| row.detail.is_some())
                             {
                                 activate(
-                                    &mut browser,
                                     &mut install_page,
                                     &mut focused_row,
                                     &mut scroll,
@@ -603,7 +606,6 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 .is_some_and(|row| row.detail.is_some())
                             {
                                 activate(
-                                    &mut browser,
                                     &mut install_page,
                                     &mut focused_row,
                                     &mut scroll,
@@ -802,8 +804,14 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                             MouseEventKind::ScrollUp => {
                                 log.scroll = log.scroll.saturating_sub(3);
                             }
-                            MouseEventKind::Up(MouseButton::Left) if mouse.row < 2 => {
-                                log.select(mouse.column >= size.width / 2);
+                            MouseEventKind::Up(MouseButton::Left)
+                                if mouse.row == log_view::SOURCE_ROW =>
+                            {
+                                if let Some(forward) =
+                                    log_view::source_direction_at(mouse.column, size.width)
+                                {
+                                    log.select(forward);
+                                }
                             }
                             _ => {}
                         }
@@ -859,6 +867,7 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 terminal,
                                 active_manifest.as_deref(),
                                 &mut browser,
+                                &processes,
                                 &mut dashboard,
                                 &mut install_page,
                                 &mut focused_row,
@@ -914,7 +923,6 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                                         }
                                     } else {
                                         activate(
-                                            &mut browser,
                                             &mut install_page,
                                             &mut focused_row,
                                             &mut scroll,
@@ -1058,12 +1066,32 @@ fn install<B: ratatui::backend::Backend + Write>(
     Ok(())
 }
 
+fn open_logs(
+    dashboard: Option<&dashboard::Dashboard>,
+    install_page: Option<&InstallPage>,
+    focused_row: Option<usize>,
+    processes: &[rospm_core::run::RunStatus],
+) -> logs::Browser {
+    let preferred = match install_page {
+        Some(InstallPage::Run(page)) => page
+            .focused_process(focused_row)
+            .map(|process| process.id.as_str()),
+        _ => None,
+    };
+    logs::Browser::new(
+        dashboard.map(|project| project.root.as_path()),
+        processes,
+        preferred,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn activate_footer<B: ratatui::backend::Backend + Write>(
     action: view::FooterAction,
     terminal: &mut Terminal<B>,
     manifest: Option<&Path>,
     browser: &mut Option<logs::Browser>,
+    processes: &[rospm_core::run::RunStatus],
     dashboard: &mut Option<dashboard::Dashboard>,
     install_page: &mut Option<InstallPage>,
     focused_row: &mut Option<usize>,
@@ -1078,6 +1106,14 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
     backend: Option<&mut dyn RunBackend>,
 ) -> Result<bool> {
     match action {
+        view::FooterAction::Logs => {
+            *browser = Some(open_logs(
+                dashboard.as_ref(),
+                install_page.as_ref(),
+                *focused_row,
+                processes,
+            ));
+        }
         view::FooterAction::Select => {
             if !move_focus(
                 focused_row,
@@ -1093,7 +1129,6 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
             }
         }
         view::FooterAction::Open => activate(
-            browser,
             install_page,
             focused_row,
             scroll,
@@ -1350,7 +1385,6 @@ fn move_focus(
 }
 
 fn activate(
-    browser: &mut Option<logs::Browser>,
     install_page: &mut Option<InstallPage>,
     focused: &mut Option<usize>,
     scroll: &mut usize,
@@ -1366,10 +1400,6 @@ fn activate(
         return;
     };
     if let Some(InstallPage::Run(page)) = install_page {
-        if let Some(log) = page.log_at(index).and_then(logs::Browser::for_process) {
-            *browser = Some(log);
-            return;
-        }
         *focused = page.activate(index);
         *scroll = 0;
         return;
@@ -1401,12 +1431,7 @@ fn activate(
         (1, None, 1) => Some(InstallPage::Conda(ToolInstallation::probe())),
         (1, None, 2) if dashboard.is_some_and(|d| d.ros_installed) => Some(InstallPage::Components),
         (HELP_TAB, None, 0) => Some(InstallPage::CliHelp),
-        _ => {
-            if let Some(dashboard) = dashboard {
-                *browser = Some(logs::Browser::new(&dashboard.root, selected));
-            }
-            return;
-        }
+        _ => return,
     };
     *focused = first_selectable(dashboard, text, selected, install_page.as_ref());
     *scroll = 0;
@@ -1440,19 +1465,9 @@ mod tests {
 
         let mut focus = first_selectable(None, &text, HELP_TAB, None);
         let mut page = None;
-        let mut browser = None;
         let mut scroll = 5;
-        activate(
-            &mut browser,
-            &mut page,
-            &mut focus,
-            &mut scroll,
-            None,
-            &text,
-            HELP_TAB,
-        );
+        activate(&mut page, &mut focus, &mut scroll, None, &text, HELP_TAB);
         assert!(matches!(&page, Some(InstallPage::CliHelp)));
-        assert!(browser.is_none());
         assert_eq!(focus, None);
         assert_eq!(scroll, 0);
         let guide = pages::rows(None, &text, HELP_TAB, page.as_ref());

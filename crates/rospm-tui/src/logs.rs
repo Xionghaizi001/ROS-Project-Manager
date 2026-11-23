@@ -19,22 +19,16 @@ pub(crate) struct Source {
     pub process: bool,
 }
 
-pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
-    let names: &[&str] = match tab {
-        1 => &["apply.log", "uninstall.log", "deps.log", "conda.log"],
-        2 => &["build.log"],
-        3 => &["run.log"],
-        4 => &["debug.log"],
-        _ => &[
-            "build.log",
-            "apply.log",
-            "uninstall.log",
-            "deps.log",
-            "conda.log",
-            "run.log",
-            "debug.log",
-        ],
-    };
+fn sources(root: &Path) -> Vec<Source> {
+    let names = [
+        "build.log",
+        "apply.log",
+        "uninstall.log",
+        "deps.log",
+        "conda.log",
+        "run.log",
+        "debug.log",
+    ];
     let mut result: Vec<_> = names
         .iter()
         .map(|name| Source {
@@ -44,25 +38,22 @@ pub(crate) fn sources(root: &Path, tab: usize) -> Vec<Source> {
             process: false,
         })
         .collect();
-    if matches!(tab, 3 | 6) {
-        if let Ok(entries) = fs::read_dir(root.join(".rospm/log/run")) {
-            let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
-            paths.sort_unstable_by(|a, b| b.cmp(a));
-            let runs = paths.into_iter().filter_map(|path| {
-                let name = path.file_name()?.to_str()?;
-                let id = name.strip_suffix(".log")?;
-                if !rospm_core::worker::valid_identifier(id) {
-                    return None;
-                }
-                Some(Source {
-                    label: format!("run/{id}"),
-                    path,
-                    json: false,
-                    process: false,
-                })
-            });
-            result.splice(0..0, runs);
-        }
+    if let Ok(entries) = fs::read_dir(root.join(".rospm/log/run")) {
+        let mut paths: Vec<_> = entries.flatten().map(|entry| entry.path()).collect();
+        paths.sort_unstable_by(|a, b| b.cmp(a));
+        result.extend(paths.into_iter().filter_map(|path| {
+            let name = path.file_name()?.to_str()?;
+            let id = name.strip_suffix(".log")?;
+            if !rospm_core::worker::valid_identifier(id) {
+                return None;
+            }
+            Some(Source {
+                label: format!("run/{id}"),
+                path,
+                json: false,
+                process: false,
+            })
+        }));
     }
     // Task snapshots currently have no operation field: never infer a workflow
     // from the task id or merge unrelated task output into a build log.
@@ -90,23 +81,22 @@ pub(crate) struct Browser {
     next: u64,
     previous: Vec<u64>,
     pub more: bool,
-    pub include_processes: bool,
 }
 impl Browser {
-    pub fn new(root: &Path, tab: usize) -> Self {
-        let mut browser = Self::from_sources(sources(root, tab));
-        browser.include_processes = tab == 3;
-        browser
-    }
-
-    pub fn for_process(process: &RunStatus) -> Option<Self> {
-        Some(Self::from_sources(vec![process_source(process)?]))
-    }
-
-    fn from_sources(sources: Vec<Source>) -> Self {
+    pub fn new(root: Option<&Path>, processes: &[RunStatus], preferred: Option<&str>) -> Self {
+        let mut sources = root.map(sources).unwrap_or_default();
+        let mut selected = 0;
+        for process in processes {
+            if let Some(source) = process_source(process) {
+                if preferred == Some(process.id.as_str()) {
+                    selected = sources.len();
+                }
+                sources.push(source);
+            }
+        }
         let mut browser = Self {
             sources,
-            selected: 0,
+            selected,
             lines: Vec::new(),
             error: None,
             scroll: 0,
@@ -115,18 +105,11 @@ impl Browser {
             next: 0,
             previous: Vec::new(),
             more: false,
-            include_processes: false,
         };
         browser.reload();
         browser
     }
 
-    pub fn add_process_sources(&mut self, processes: &[RunStatus]) {
-        self.include_processes = false;
-        self.sources
-            .splice(0..0, processes.iter().filter_map(process_source));
-        self.reload();
-    }
     pub fn select(&mut self, forward: bool) {
         if self.sources.is_empty() {
             return;
@@ -171,7 +154,7 @@ impl Browser {
     }
 }
 
-pub(crate) fn process_source(process: &RunStatus) -> Option<Source> {
+fn process_source(process: &RunStatus) -> Option<Source> {
     let fd = process.output_fd?;
     Some(Source {
         path: PathBuf::from(format!("/proc/self/fd/{fd}")),
@@ -266,6 +249,35 @@ pub(crate) fn diagnostics(root: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_browser_opens_the_focused_process_without_hiding_workflow_logs() {
+        let transcript = File::open("/dev/null").unwrap();
+        let process = RunStatus {
+            id: "run-test".into(),
+            target: "pkg/node".into(),
+            background: false,
+            task: false,
+            shell: false,
+            pid: None,
+            suspended: false,
+            output_fd: Some(transcript.as_raw_fd()),
+            exit: None,
+        };
+        let mut browser = Browser::new(
+            Some(Path::new(".")),
+            std::slice::from_ref(&process),
+            Some(&process.id),
+        );
+        assert_eq!(browser.sources[browser.selected].label, "pkg/node");
+        browser.select(true);
+        assert_eq!(browser.sources[browser.selected].label, "build.log");
+        assert!(browser
+            .sources
+            .iter()
+            .any(|source| source.label == "deps.log"));
+    }
+
     #[test]
     fn pages_preserve_order_and_json_streams() {
         let dir = std::env::temp_dir().join(format!("rospm-log-view-{}", std::process::id()));

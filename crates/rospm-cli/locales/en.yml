@@ -200,7 +200,13 @@ cli:
     tui_already_running: "A rospm TUI instance is already open for this project"
     no_logs: "No log output yet"
     log_error: "Log unavailable"
-    log_help: "Esc/q: back  Tab/Shift-Tab or click title: source  Up/Down/PgUp/PgDn or wheel: scroll  Left/Right: horizontal\n n/p: next/previous block  Home/End: block start/end  r: refresh (automatic every second)"
+    log_help: |-
+      Esc/q Back
+      Tab/Shift+Tab/‹› Source
+      ↑↓/PgUp/PgDn/Wheel Scroll
+      ←→ Horizontal
+      n/p Block
+      Home/End Block start/end
     build_order: "Packages / build order"
     running: "Running"
     not_installed: "Not installed"
@@ -241,14 +247,15 @@ cli:
       Use Left/Right, Tab/Shift+Tab, or click a top tab to switch main pages.
       Use Up/Down to select a row and Enter to open it, or click the row.
       Use PgUp/PgDn or the mouse wheel to scroll. Esc or q goes back, or quits from a main page.
+      Press l or click Logs at the bottom left to open the log viewer.
 
       Project workflow
       On Start, press n to create a project or s to scan for and open existing projects. These actions are available when no project is open.
       On Install, open ROS, Conda, or Project base components and follow the footer. Press d to check dependencies, D to install them, or a to prepare the environment.
       On Build, press b to build or B to clean build artifacts and rebuild, then confirm.
       On Run, pick a built node or launch file, enter arguments, and choose foreground or background. You can also open a project shell.
-      On Diagnose, press c to check the environment or v to verify it against the lockfile. Open Logs to see output.
-      Press p or click the process count at the top to see process status and logs.
+      On Diagnose, press c to check the environment or v to verify it against the lockfile.
+      Press p or click the process count to manage processes. Focus a process and press l to open its log.
     cli_help: "CLI usage"
     cli_usage: |-
       Command help

@@ -201,7 +201,6 @@ pub(crate) fn rows(
             if d.ros_installed {
                 section(&mut rows, &text.uninstall_plan, &d.uninstall_plan);
             }
-            rows.push(Entry::link(&text.logs));
         }
         1 => {
             section(&mut rows, &text.deps_result, &d.deps);
@@ -224,14 +223,12 @@ pub(crate) fn rows(
                     run_target: None,
                 });
             }
-            rows.push(Entry::link(&text.logs));
         }
         2 => {
             heading(&mut rows, &text.build_order);
             for package in &d.compile_packages {
                 rows.push(Entry::value(&package.name, &package.detail));
             }
-            rows.push(Entry::link(&text.logs));
         }
         3 => {
             rows.push(Entry::link("Shell"));
@@ -267,12 +264,10 @@ pub(crate) fn rows(
                     }
                 }
             }
-            rows.push(Entry::link(&text.logs));
         }
         5 => {
             section(&mut rows, &text.verify_result, &d.verify);
             section(&mut rows, &text.diagnostics, &d.diagnostics);
-            rows.push(Entry::link(&text.logs));
         }
         _ => {}
     }
@@ -329,6 +324,7 @@ mod tests {
             conda: "Conda".into(),
             apply_plan: "apply plan".into(),
             uninstall_plan: "uninstall plan".into(),
+            logs: "logs".into(),
             not_installed: "missing".into(),
             status_ok: "ok".into(),
             ..Text::default()
@@ -347,7 +343,7 @@ mod tests {
         assert!(!child
             .iter()
             .any(|row| row.detail.as_deref() == Some("remove ROS")));
-        assert!(child.last().is_some_and(|row| row.selectable));
+        assert!(!child.iter().any(|row| row.cells[0] == text.logs));
         dashboard.ros_installed = true;
         let child = rows(Some(&dashboard), &text, 1, Some(&InstallPage::Ros));
         assert_eq!(child[0].cells[2], "ok");

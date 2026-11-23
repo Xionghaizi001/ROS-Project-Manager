@@ -131,9 +131,6 @@ impl Page {
                             }),
                         ]);
                     }
-                    if process.output_fd.is_some() {
-                        rows.push(Entry::link(&text.logs));
-                    }
                 } else {
                     let (active, history) = list.split_at(active_count(list));
                     for (title, entries, empty) in [
@@ -189,27 +186,24 @@ impl Page {
                     };
                     *selected = Some(process.clone());
                     *error = None;
-                    return (controllable(process) || process.output_fd.is_some()).then_some(1);
+                    return controllable(process).then_some(1);
                 }
             }
         }
         Some(index)
     }
 
-    pub fn log_at(&self, index: usize) -> Option<&RunStatus> {
-        let Self::Processes { list, selected, .. } = self else {
-            return None;
-        };
-        let process = match selected {
-            Some(process) if index == if controllable(process) { 4 } else { 1 } => process,
-            None => process_at(list, index).filter(|process| process.exit.is_some())?,
-            _ => return None,
-        };
-        process.output_fd.map(|_| process)
-    }
-
     pub fn is_processes(&self) -> bool {
         matches!(self, Self::Processes { .. })
+    }
+
+    pub fn focused_process(&self, focused: Option<usize>) -> Option<&RunStatus> {
+        match self {
+            Self::Processes { list, selected, .. } => selected
+                .as_ref()
+                .or_else(|| focused.and_then(|index| process_at(list, index))),
+            Self::Form { .. } => None,
+        }
     }
 
     pub fn edit_key(&mut self, key: KeyEvent) -> bool {
@@ -330,7 +324,7 @@ impl Page {
         if let Some(process) = selected {
             if let Some(updated) = list.iter().find(|item| item.id == process.id) {
                 if controllable(process) != controllable(updated) {
-                    *focus = Some(1);
+                    *focus = controllable(updated).then_some(1);
                 }
                 *process = updated.clone();
             } else if query_error.is_none() || !process.background {
