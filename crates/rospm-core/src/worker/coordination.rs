@@ -70,6 +70,10 @@ impl WorkspaceLock {
         Self::open(mutation_runtime()?, workspace, true, libc::LOCK_EX)
     }
 
+    pub fn acquire_mutation(workspace: impl AsRef<Path>) -> Result<Self, WorkspaceLockError> {
+        Self::acquire(mutation_runtime()?, workspace)
+    }
+
     pub fn try_acquire_tui(project: impl AsRef<Path>) -> Result<Option<Self>, WorkspaceLockError> {
         let workspace = resolve_workspace(project.as_ref())?;
         // Lock the directory inode so every user and every path alias shares the same lease.

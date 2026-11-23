@@ -5,10 +5,15 @@ use std::io::Write;
 use anyhow::Result;
 use serde::Serialize;
 
+use rospm_core::execution::{Event, Interaction, Stream};
+use rospm_core::manifest::{Manifest, ProviderKind};
 use rospm_core::mirror;
 use rospm_core::msg;
-use rospm_core::probe::{EnvReport, Host};
+use rospm_core::plan::Plan;
+use rospm_core::probe::{EnvReport, Host, RosdepState};
 use rospm_core::provider;
+use rospm_core::worker::WorkspaceLock;
+use rospm_core::Error;
 
 use crate::i18n::tr;
 
@@ -49,11 +54,68 @@ fn print_deps_environment(r: &EnvReport) {
     );
 }
 
+struct CheckProgress;
+
+impl Interaction for CheckProgress {
+    fn event(&self, event: Event<'_>) {
+        if let Event::Log { bytes, .. } = event {
+            let _ = std::io::stderr().write_all(bytes);
+        }
+    }
+}
+
+pub(super) fn refresh_rosdep(
+    manifest: &Manifest,
+    host: &mut Host,
+    worker: Option<(&str, &dyn Interaction)>,
+) -> Result<()> {
+    if manifest.environment.provider != ProviderKind::Native
+        || !manifest.dependencies.rosdep.enabled
+        || !host.has_tool("rosdep")
+        || host.rosdep.updated
+        || std::env::var_os("ROSPM_NO_NETWORK").is_some_and(|v| !v.is_empty() && v != "0")
+    {
+        return Ok(());
+    }
+
+    let _cache_lease = WorkspaceLock::acquire_mutation(host.rosdep.cache_dir.join("index"))?;
+    host.rosdep = RosdepState::probe(&host.ros_home);
+    if host.rosdep.updated {
+        return Ok(());
+    }
+
+    let distro = manifest.project.ros_distro.as_str();
+    let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
+    let mut plan = Plan::new(msg!("cli.deps.updating_rosdep", distro = distro));
+    plan.run(provider::native::rosdep_update(distro, &mirror).arg("-q"));
+
+    let (task, interaction) = worker.unwrap_or(("rosdep-update", &CheckProgress));
+    let log = |message: String| {
+        interaction.event(Event::Log {
+            task,
+            step: 0,
+            stream: Stream::Stderr,
+            bytes: format!("{message}\n").as_bytes(),
+        });
+    };
+    if interaction.cancel_requested(task) {
+        return Err(Error::Cancelled.into());
+    }
+    log(plan.title.to_string());
+    match plan.perform_observed(task, interaction, false, &mut std::io::sink()) {
+        Ok(()) => host.rosdep = RosdepState::probe(&host.ros_home),
+        Err(Error::Cancelled) => return Err(Error::Cancelled.into()),
+        Err(error) => log(msg!("cli.deps.rosdep_update_failed", error = error).to_string()),
+    }
+    Ok(())
+}
+
 /// `rospm deps check`: rosdep keys of every workspace versus the installed set.
 pub fn deps_check(global: &Global) -> Result<()> {
     let loaded = load(global)?;
     let _read_leases = loaded.workspace_read_leases()?;
-    let host = Host::probe();
+    let mut host = Host::probe();
+    refresh_rosdep(&loaded.manifest, &mut host, None)?;
     let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let report = provider::for_manifest(&loaded.manifest).probe_deps(&ctx)?;
 

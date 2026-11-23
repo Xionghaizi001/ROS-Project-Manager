@@ -4,12 +4,8 @@
 //!
 //! `probe` shells out to `rosdep check` / `rosdep resolve` directly (unlike
 //! the other native commands it does not build a [`Plan`]: it only reads).
-//! Its parsing of rosdep's stdout/stderr is split into pure functions so it
-//! can be unit-tested with canned text: this host has `rosdep` installed but
-//! no ROS distro registered, so real invocations of `resolve`/`check` for ROS
-//! keys fail for lack of a `rosdep update` cache. That must surface as
-//! `Status::Unknown`, never as a panic or a hard error — `deps check` always
-//! exits 0.
+//! Both an unavailable rosdep cache and unresolved keys are reported as
+//! `Status::Unknown`.
 
 use std::collections::BTreeSet;
 use std::process::{Command as OsCommand, Output};
@@ -194,6 +190,16 @@ pub fn probe(ctx: &Context) -> Result<DepsReport> {
             );
         }
         r
+    } else if !external.is_empty() && !ctx.host.rosdep.updated {
+        let mut r = EnvReport::default();
+        r.push(
+            "deps",
+            Message::text("rosdep"),
+            msg!("deps.report.rosdep_required"),
+            msg!("deps.report.cache_missing", distro = m.project.ros_distro),
+            Status::Unknown,
+        );
+        r
     } else {
         probe_rosdep(ctx, &order, &external, &skip)
     };
@@ -233,6 +239,9 @@ fn probe_rosdep(
     skip: &BTreeSet<String>,
 ) -> EnvReport {
     let mut r = EnvReport::default();
+    if external.is_empty() {
+        return r;
+    }
     let distro = ctx.manifest.project.ros_distro.as_str();
     // Through the probed Host, like every other tool (tests substitute one).
     let rosdep = ctx

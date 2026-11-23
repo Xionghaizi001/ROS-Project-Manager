@@ -1,16 +1,92 @@
 //! End-to-end checks of `rospm deps check` / `rospm deps install` (spec §4,
 //! roadmap P2).
 //!
-//! These only touch a temporary directory and never modify the system:
-//! `deps check` is read-only and `deps install` is only ever run with
-//! `--dry-run`. Whether this host's `rosdep` can actually resolve `rclcpp`
-//! (it has no `rosdep update` cache for any ROS distro) is host-dependent,
-//! so assertions on the environment rows accept any of ok/unknown/missing
-//! rather than pinning one outcome.
+//! Cache updates use a fake rosdep and a temporary ROS_HOME. Install tests
+//! only preview the plan.
 
 mod common;
 
 use common::*;
+use std::{fs, os::unix::fs::PermissionsExt};
+
+#[test]
+fn checks_update_a_missing_rosdep_cache_and_reuse_it() {
+    let dir = fixture("check-rosdep-update");
+    fs::write(
+        dir.join("rospm.toml"),
+        include_str!("../../rospm-core/tests/fixtures/minimal.toml"),
+    )
+    .unwrap();
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let rosdep = bin.join("rosdep");
+    fs::write(
+        &rosdep,
+        r#"#!/bin/sh
+set -eu
+case "$1" in
+    update)
+        test "$2" = --rosdistro && test "$3" = jazzy
+        echo update >> "$ROS_HOME/updates"
+        test ! -e "$ROS_HOME/fail" || { echo 'simulated update failure' >&2; exit 1; }
+        mkdir -p "$ROS_HOME/rosdep/sources.cache"
+        touch "$ROS_HOME/rosdep/sources.cache/index"
+        ;;
+    check) test -f "$ROS_HOME/rosdep/sources.cache/index" ;;
+    resolve)
+        test -f "$ROS_HOME/rosdep/sources.cache/index"
+        printf '#apt\nrospm-test-rclcpp\n'
+        ;;
+    *) exit 99 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&rosdep, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+
+    for (subcommand, subject, expected) in [
+        (&["check"][..], "rosdep update", "sources.cache"),
+        (&["deps", "check"][..], "rclcpp", "rospm-test-rclcpp"),
+    ] {
+        let ros_home = dir.join(subject);
+        fs::create_dir(&ros_home).unwrap();
+        let check = |offline| {
+            rospm()
+                .current_dir(&dir)
+                .args(subcommand)
+                .arg("--json")
+                .env("ROS_HOME", &ros_home)
+                .env("ROSPM_NO_NETWORK", if offline { "1" } else { "0" })
+                .env("PATH", &path)
+                .output()
+                .unwrap()
+        };
+        assert!(check(true).status.success());
+        let updates = ros_home.join("updates");
+        assert!(!updates.exists());
+        fs::write(ros_home.join("fail"), "").unwrap();
+        let failed = check(false);
+        assert!(failed.status.success());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("simulated update failure"));
+        assert_eq!(json(&failed)["environment"]["ready"], false);
+        fs::remove_file(ros_home.join("fail")).unwrap();
+
+        let out = check(false);
+        assert!(out.status.success(), "{:?}", out);
+        let report = json(&out);
+        let items = report["environment"]["items"].as_array().unwrap();
+        let row = items.iter().find(|row| row["subject"] == subject).unwrap();
+        assert!(row["expected"].as_str().unwrap().contains(expected));
+        assert_eq!(
+            row["status"],
+            if subject == "rclcpp" { "missing" } else { "ok" }
+        );
+        assert!(check(false).status.success());
+        assert_eq!(fs::read_to_string(updates).unwrap(), "update\nupdate\n");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
 
 /// `fixture()` + `init --from-env --json` gives us a manifest whose only
 /// workspace has one package (`my_pkg`) depending on the external rosdep key

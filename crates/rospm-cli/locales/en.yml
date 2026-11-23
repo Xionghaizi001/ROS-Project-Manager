@@ -57,7 +57,7 @@ cli:
     detected: "detected    %{text}"
     todo: "TODO        %{text}"
   check:
-    about: "Validate the manifest and compare it with this host (read-only)"
+    about: "Validate the manifest and compare it with this host, updating a missing rosdep cache"
     target: "Evaluate platform overrides for this target instead of the host"
     strict: "Exit non-zero when the host does not match the manifest"
     platform_not_listed: "platform %{platform} is not listed in project.platforms"
@@ -275,6 +275,8 @@ cli:
   deps:
     about: "Inspect or complete dependencies from package.xml files"
     check: "Report missing dependencies without installing"
+    updating_rosdep: "Updating the rosdep cache for %{distro}"
+    rosdep_update_failed: "Could not update the rosdep cache: %{error}"
     install: "Install missing dependencies through rosdep [modifies system]"
     workspace_line: "workspace   %{name}    packages=%{packages}  keys=%{keys}"
     internal_line: "internal    %{keys}"
@@ -679,6 +681,7 @@ deps:
     rosdep_required: "resolved via rosdep"
     rosdep_disabled: "disabled (dependencies.rosdep.enabled = false)"
     rosdep_not_found: "rosdep is not installed"
+    cache_missing: "rosdep cache index is missing. Run `rosdep update --rosdistro %{distro}`"
     rosdep_key: "rosdep key"
     not_probed: "not probed: rosdep is not installed"
     unresolved: "rosdep could not resolve this key"

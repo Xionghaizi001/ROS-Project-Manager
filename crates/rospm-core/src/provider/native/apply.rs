@@ -93,7 +93,7 @@ pub(crate) fn plan_rosdep_mirror_list(
 
 /// `rosdep update` for `distro`, against the mirror's rosdistro index when
 /// it has one.
-pub(crate) fn rosdep_update(distro: &str, mirror: &crate::mirror::Mirror) -> Command {
+pub fn rosdep_update(distro: &str, mirror: &crate::mirror::Mirror) -> Command {
     let update = Command::new("rosdep").args(["update", "--rosdistro", distro]);
     if mirror.mirrors_rosdistro() {
         update.env("ROSDISTRO_INDEX_URL", mirror.rosdistro_index_url())

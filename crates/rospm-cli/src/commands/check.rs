@@ -56,7 +56,7 @@ pub fn check(
     let _read_leases = loaded.workspace_read_leases()?;
     venv.select_report(&mut loaded)?;
     let m = &loaded.manifest;
-    let host = Host::probe();
+    let mut host = Host::probe();
     let platform = match target {
         Some(t) => t,
         None => host_platform()?,
@@ -114,6 +114,7 @@ pub fn check(
             None
         }
     } else {
+        super::deps::refresh_rosdep(m, &mut host, None)?;
         let ctx = Context {
             venv: loaded.venv.as_deref(),
             manifest: m,

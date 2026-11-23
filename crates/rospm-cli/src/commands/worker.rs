@@ -362,7 +362,13 @@ fn execute(
     } else {
         None
     };
-    let host = Host::probe();
+    let mut host = Host::probe();
+    if matches!(
+        operation,
+        Operation::Check | Operation::Deps | Operation::DepsCheck
+    ) {
+        super::deps::refresh_rosdep(&loaded.manifest, &mut host, Some((id, interaction)))?;
+    }
     let ctx = context(
         &loaded,
         &host,

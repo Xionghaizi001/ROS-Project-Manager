@@ -13,7 +13,7 @@ pub fn rospm() -> Command {
     for k in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "ROSPM_LANG"] {
         c.env_remove(k);
     }
-    c.env("LANG", "C");
+    c.env("LANG", "C").env("ROSPM_NO_NETWORK", "1");
     c
 }
 

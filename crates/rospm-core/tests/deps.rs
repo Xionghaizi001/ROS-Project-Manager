@@ -1,12 +1,7 @@
 //! `rospm deps check` / `rospm deps install` (spec §4, roadmap P2).
 //!
-//! `probe()` shells out to the real `rosdep` binary for the external-key
-//! environment rows; this host has `rosdep` installed but no ROS distro
-//! registered (no `rosdep update` cache), so those rows may legitimately come
-//! back `ok`, `MISSING` or `unknown` depending on the host. The classification
-//! into internal/external/skipped is pure manifest + `package.xml` logic and
-//! is asserted exactly; `plan_install` never runs anything, so its rendering
-//! is asserted exactly too.
+//! The checks use a synthetic host to exercise dependency classification and
+//! install plan rendering independently of the local ROS installation.
 
 use std::fs;
 use std::path::Path;
@@ -14,7 +9,7 @@ use std::path::Path;
 use rospm_core::manifest::Manifest;
 use rospm_core::mirror;
 use rospm_core::platform::Platform;
-use rospm_core::probe::{parse_dpkg_query, Host, PackageDb};
+use rospm_core::probe::{parse_dpkg_query, Host, PackageDb, Status};
 use rospm_core::provider::{self, Context};
 
 const FULL: &str = include_str!("fixtures/full.toml");
@@ -157,6 +152,28 @@ fn deps_check_reports_rosdep_disabled_without_shelling_out() {
     assert_eq!(
         report.environment.items[0].actual.to_string(),
         "deps.report.rosdep_disabled"
+    );
+}
+
+#[test]
+fn deps_check_reports_missing_rosdep_cache_once() {
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let proj = project();
+    let mut host = Host::empty();
+    host.tools.insert("rosdep".into(), Some("rosdep".into()));
+    host.rosdep.initialized = true;
+    let report = provider::for_manifest(&m)
+        .probe_deps(&ctx(&m, &proj.root, &host))
+        .unwrap();
+
+    assert!(report.external.contains("rclcpp"));
+    let [item] = report.environment.items.as_slice() else {
+        panic!("expected one cache diagnostic: {:?}", report.environment);
+    };
+    assert_eq!(item.status, Status::Unknown);
+    assert_eq!(
+        item.actual.to_string(),
+        "deps.report.cache_missing(distro=jazzy)"
     );
 }
 

@@ -5,7 +5,7 @@
 | # | 议题 | 决策 | 备注 / 派生约束 |
 |---|---|---|---|
 | 1 | 清单格式 | TOML，结构参照 `pixi.toml` / `Cargo.toml`；文件名 `rospm.toml`；顶层 `schema_version` | schema 见 `spec.md` §2 |
-| 2 | 命令语义分级 | **只读幂等**：`check` `verify` `deps check` `env` `doctor`。**写项目文件、幂等**：`init` `lock` `editor`。**修改系统或产出产物**：`apply` `build` `export` `import` `deps install` | 第三类必须支持 `--dry-run`，并在执行前打印计划 |
+| 2 | 命令语义分级 | **检查**：`verify` `env` `doctor` 只读，`check` 和 `deps check` 可在索引缺失时更新当前用户的 rosdep 缓存。**写项目文件、幂等**：`init` `lock` `editor`。**修改系统或产出产物**：`apply` `build` `export` `import` `deps install` | 第三类必须支持 `--dry-run`，并在执行前打印计划 |
 | 3 | 描述方向 | 双向。MVP 只做"清单 → 环境"；"环境 → 清单"（`init --from-env`）为 best-effort，只填能可靠探测的字段 | 探测不到的字段留空并在输出中标注 `# TODO` |
 | 4 | 锁文件分层 | **自带锁机制的提供者（pixi）**：清单只引用其清单文件（`pixi.toml`），其锁文件（`pixi.lock`）与项目一同提交，`rospm.lock` 仅记录其 sha256 用于校验。**松散管理的对象（apt / git / docker 镜像）**：由 `rospm.lock` 直接锁定 | 不把 pixi 的解析结果复制进 `rospm.toml`，避免双份真相 |
 | 5 | 发行版矩阵 | Humble(22.04) + Jazzy(24.04) 正式支持；Rolling 仅 CI 冒烟 | **发行版 EOL 不触发支持降级**：EOL 后仍有大量在用部署，Humble 在可预见的相当长时间内保持正式支持；快照仓库对 EOL 发行版反而更重要（决策 2026-09-15 补充） |

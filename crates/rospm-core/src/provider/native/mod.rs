@@ -20,7 +20,8 @@ mod provider_impl;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use apply::{plan_rosdep_mirror_list, rosdep_install, rosdep_update};
+pub use apply::rosdep_update;
+pub(crate) use apply::{plan_rosdep_mirror_list, rosdep_install};
 
 /// Tooling `apply` installs next to the base metapackage. `lock` records it
 /// so `apply --locked` replays it; `repository check` looks it up.

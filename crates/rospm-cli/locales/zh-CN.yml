@@ -52,7 +52,7 @@ cli:
     detected: "已探测      %{text}"
     todo: "TODO        %{text}"
   check:
-    about: "校验清单并与本机比对（只读）"
+    about: "校验清单并与本机比对，缺少 rosdep 缓存时自动更新"
     target: "按此目标平台而非本机评估平台覆盖"
     strict: "本机与清单不符时以非零退出码退出"
     platform_not_listed: "平台 %{platform} 未列在 project.platforms 中"
@@ -270,6 +270,8 @@ cli:
   deps:
     about: "根据 package.xml 检查或补全依赖"
     check: "只报告缺失的依赖，不安装"
+    updating_rosdep: "正在更新 %{distro} 的 rosdep 缓存"
+    rosdep_update_failed: "rosdep 缓存更新失败：%{error}"
     install: "通过 rosdep 安装缺失的依赖 [修改系统]"
     workspace_line: "workspace   %{name}    包=%{packages}  键=%{keys}"
     internal_line: "内部        %{keys}"
@@ -674,6 +676,7 @@ deps:
     rosdep_required: "由 rosdep 解析"
     rosdep_disabled: "已禁用（dependencies.rosdep.enabled = false）"
     rosdep_not_found: "未安装 rosdep"
+    cache_missing: "rosdep 缓存索引缺失，请运行 `rosdep update --rosdistro %{distro}`"
     rosdep_key: "rosdep 键"
     not_probed: "未探测：未安装 rosdep"
     unresolved: "rosdep 无法解析该键"
