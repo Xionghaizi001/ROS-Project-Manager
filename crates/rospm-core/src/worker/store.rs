@@ -339,6 +339,7 @@ impl TaskStore {
                 TaskState::Pending
                     | TaskState::Running
                     | TaskState::WaitingConfirmation
+                    | TaskState::WaitingAuthorization
                     | TaskState::CancelRequested
             ) {
                 continue;

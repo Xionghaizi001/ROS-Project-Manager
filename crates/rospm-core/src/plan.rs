@@ -26,7 +26,7 @@ pub use execution::{fingerprints, is_ascii_armored, is_only_key, shell_quote, wr
 
 /// One external command. `preamble` lines (typically `source …`) are run in
 /// the same `bash -c` before the command so ROS overlays are visible to it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Command {
     pub program: String,
     pub args: Vec<String>,
@@ -34,6 +34,9 @@ pub struct Command {
     pub env: Vec<(String, String)>,
     pub preamble: Vec<String>,
     pub sudo: bool,
+    /// rosdep installs call sudo for their own system package steps.
+    #[serde(skip)]
+    pub(crate) terminal: bool,
     /// Header lines (`key: value`) for the plan's build log. When both this
     /// and [`Plan::log`] are set, output is forwarded and also saved there.
     pub log: Option<String>,
@@ -51,6 +54,7 @@ impl Command {
             env: Vec::new(),
             preamble: Vec::new(),
             sudo: false,
+            terminal: false,
             log: None,
             interruptible: false,
         }
@@ -92,6 +96,11 @@ impl Command {
 
     pub fn sudo(mut self) -> Self {
         self.sudo = true;
+        self
+    }
+
+    pub(crate) fn needs_terminal(mut self) -> Self {
+        self.terminal = true;
         self
     }
 

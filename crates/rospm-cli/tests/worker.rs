@@ -724,3 +724,73 @@ fn synchronous_confirmation_survives_disconnect_and_can_be_cancelled() {
         .iter()
         .any(|entry| entry.text.contains("unexpected-sudo")));
 }
+
+#[test]
+fn interactive_system_step_waits_and_attaches_to_a_foreground_terminal() {
+    use std::os::{fd::FromRawFd, unix::process::CommandExt};
+
+    let worker = Worker::new("worker-authorization");
+    fs::write(
+        worker.root.join("bin/sudo"),
+        "#!/bin/sh\n[ \"$1\" = -- ] && [ \"$2\" = apt-get ] || exit 97\n         printf 'mock-authorization\\n' >/dev/tty || exit 98\n         printf 'system stdout\\n'; printf 'system stderr\\n' >&2\n",
+    )
+    .unwrap();
+    worker.ok(&["submit", "uninstall", "--interactive", "--id", "auth"]);
+    let step = worker.wait("auth", "waiting_confirmation")["step"].to_string();
+    worker.ok(&["confirm", "auth", "--step", &step, "approve"]);
+    worker.wait("auth", "waiting_authorization");
+    assert!(!worker.request(&["attach", "auth"]).status.success());
+    worker.wait("auth", "waiting_authorization");
+    assert!(!worker
+        .request(&["submit", "uninstall", "--id", "auth"])
+        .status
+        .success());
+
+    let (mut master, mut slave) = (-1, -1);
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        },
+        0
+    );
+    let master_fd = master;
+    let master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let mut command = worker.command(&[
+        "task",
+        "--runtime",
+        worker.runtime.to_str().unwrap(),
+        "attach",
+        "auth",
+    ]);
+    command.stdin(Stdio::from(slave));
+    unsafe {
+        command.pre_exec(move || {
+            libc::close(master_fd);
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    worker.wait("auth", "succeeded");
+    let mut tty = BufReader::new(master);
+    let mut prompt = String::new();
+    tty.read_line(&mut prompt).unwrap();
+    assert_eq!(prompt.trim(), "mock-authorization");
+    let logs = worker.ok(&["logs", "auth"]).to_string();
+    assert!(logs.contains("system stdout") && logs.contains("system stderr"));
+    assert!(!logs.contains("mock-authorization"));
+}

@@ -1,4 +1,5 @@
 //! Explicit worker lifecycle; clients may disconnect without ending tasks.
+mod authorization;
 pub mod runs;
 pub mod synchronous;
 use super::{context, load, Global};
@@ -34,7 +35,11 @@ pub enum TaskCommand {
         operation: String,
         #[arg(long, help = tr("worker_cli.id"))]
         id: String,
+        #[arg(long, help = tr("worker_cli.interactive"))]
+        interactive: bool,
     },
+    #[command(about = tr("worker_cli.attach"))]
+    Attach { id: String },
     #[command(about = tr("worker_cli.status"))]
     Status { id: String },
     #[command(about = tr("worker_cli.logs"))]
@@ -78,7 +83,11 @@ fn exchange(stream: &mut BufReader<UnixStream>, message: Message) -> Result<Mess
 
 pub fn client(global: &Global, runtime: &Path, command: TaskCommand) -> Result<()> {
     let request = match command {
-        TaskCommand::Submit { operation, id } => {
+        TaskCommand::Submit {
+            operation,
+            id,
+            interactive,
+        } => {
             let loaded = load(global)?;
             anyhow::ensure!(
                 loaded.path.canonicalize()? == loaded.root.join(MANIFEST_FILE),
@@ -90,8 +99,10 @@ pub fn client(global: &Global, runtime: &Path, command: TaskCommand) -> Result<(
                 task_id: id,
                 workspace: loaded.root.to_str().context(tr("worker_cli.utf8"))?.into(),
                 operation: serde_json::from_value(serde_json::Value::String(operation))?,
+                interactive,
             }
         }
+        TaskCommand::Attach { id } => return runs::attach(runtime, &id),
         TaskCommand::Status { id } => Message::Snapshot { task_id: id },
         TaskCommand::Logs { id, cursor, limit } => Message::Logs {
             task_id: id,
@@ -240,6 +251,7 @@ pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Re
                     task_id,
                     workspace,
                     operation,
+                    interactive,
                     ..
                 } => {
                     if Path::new(&workspace) != root {
@@ -252,6 +264,8 @@ pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Re
                     let id = task_id.clone();
                     let handle = runner
                         .start_with(&task_id, &workspace, move |interaction| {
+                            let terminal = authorization::TerminalInteraction(interaction);
+                            let interaction = if interactive { &terminal } else { interaction };
                             execute(&root, &id, operation, interaction).map_err(|e| {
                                 let description = super::describe(&e);
                                 e.downcast::<rospm_core::Error>().unwrap_or_else(|_| {

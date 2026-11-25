@@ -105,6 +105,7 @@ pub fn rosdep_update(distro: &str, mirror: &crate::mirror::Mirror) -> Command {
 /// `rosdep install` for one workspace, honouring the manifest's skip keys.
 pub(crate) fn rosdep_install(m: &Manifest, ws_path: &Path) -> Command {
     let mut cmd = Command::new("rosdep")
+        .needs_terminal()
         .args(["install", "--from-paths", ".", "--ignore-src", "-y"])
         .arg("--rosdistro")
         .arg(m.project.ros_distro.as_str())

@@ -35,8 +35,8 @@ impl Plan {
 
     /// Execute with structured events and captured child output, without writing
     /// to the frontend terminal. The caller owns task identity and renders the plan.
-    /// Child stdin is closed; interactive sudo/shell authorization is a separate
-    /// frontend responsibility. Cancellation is cooperative at whole-step
+    /// Child stdin is closed unless a worker delegates a system step to an
+    /// attached terminal. Cancellation is cooperative at whole-step
     /// boundaries by default. Worker adapters also isolate subprocess groups and
     /// may signal explicitly interruptible commands; completed changes are not
     /// rolled back. Ordinary command failures take precedence over cancellation.
@@ -161,12 +161,7 @@ impl Plan {
                                 run_logged(c, header, file, execution.as_ref())
                                     .map_err(|e| Error::io(path, e))?
                             }
-                            _ => run_process(
-                                c.to_process(execution.is_some()),
-                                execution.as_ref(),
-                                None,
-                            )
-                            .map_err(|e| Error::io(&c.program, e))?,
+                            _ => run_command(c, execution.as_ref())?,
                         };
                         if process_cancelled.load(Ordering::Acquire)
                             && (status.success()
@@ -584,8 +579,7 @@ fn fetch_key_observed(
         .arg(to_install.to_string_lossy())
         .arg(dest.to_string_lossy())
         .sudo();
-    let status = run_process(install.to_process(execution.is_some()), execution, None)
-        .map_err(|e| Error::io("sudo", e))?;
+    let status = run_command(&install, execution)?;
     if !status.success() {
         return Err(Error::CommandFailed {
             command: install.render(),
@@ -672,28 +666,77 @@ fn write_file_sudo(path: &Path, contents: &str, execution: Option<&Execution<'_>
         command: format!("sudo {program} {}", path.display()),
         status: status.to_string(),
     };
-    let sudo = |args: &[&std::ffi::OsStr]| {
+    let sudo = |program: &str, args: &[&std::ffi::OsStr]| {
+        if let Some(args) = args
+            .iter()
+            .map(|arg| arg.to_str())
+            .collect::<Option<Vec<_>>>()
+        {
+            if let Some(result) =
+                terminal_command(&Command::new(program).args(args).sudo(), execution, None)
+            {
+                return result;
+            }
+        }
         let mut command = process::Command::new("sudo");
         if execution.is_some() {
             command.arg("-n");
         }
-        command.args(args);
+        command.arg(program).args(args);
         run_process(command, execution, None).map_err(|e| Error::io("sudo", e))
     };
     if let Some(parent) = path.parent() {
-        let status = sudo(&["mkdir".as_ref(), "-p".as_ref(), parent.as_ref()])?;
+        let status = sudo("mkdir", &["-p".as_ref(), parent.as_os_str()])?;
         if !status.success() {
             return Err(failed("mkdir -p", status));
         }
     }
     let tmp = tmp_sibling(path);
+    let terminal_tee = tmp.to_str().and_then(|tmp| {
+        terminal_command(
+            &Command::new("tee").arg(tmp).sudo(),
+            execution,
+            Some(contents),
+        )
+    });
+    let written = match terminal_tee {
+        Some(result) => result.and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(failed("tee", status))
+            }
+        }),
+        None => write_through_tee(&tmp, contents, execution, &failed),
+    };
+    let result = written.and_then(|()| {
+        let status = sudo("mv", &["-f".as_ref(), tmp.as_os_str(), path.as_os_str()])?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(failed("mv -f", status))
+        }
+    });
+    if matches!(&result, Err(error) if !matches!(error, Error::Cancelled | Error::TerminalOutcomeUnknown))
+    {
+        let _ = sudo("rm", &["-f".as_ref(), tmp.as_os_str()]);
+    }
+    result
+}
+
+fn write_through_tee(
+    tmp: &Path,
+    contents: &str,
+    execution: Option<&Execution<'_>>,
+    failed: &impl Fn(&str, process::ExitStatus) -> Error,
+) -> Result<()> {
     let mut command = process::Command::new("sudo");
     if execution.is_some() {
         command.arg("-n");
     }
     command
         .arg("tee")
-        .arg(&tmp)
+        .arg(tmp)
         .stdin(Stdio::piped())
         .stdout(Stdio::null());
     let mut child = command
@@ -710,17 +753,36 @@ fn write_file_sudo(path: &Path, contents: &str, execution: Option<&Execution<'_>
         (written, drain.join().expect("output reader panicked"))
     });
     let status = child.wait().map_err(|e| Error::io("sudo", e))?;
-    let written = written.and(drained);
-    let result = match written {
-        Err(e) => Err(Error::io(&tmp, e)),
-        Ok(()) if !status.success() => Err(failed("tee", status)),
-        Ok(()) => match sudo(&["mv".as_ref(), "-f".as_ref(), tmp.as_ref(), path.as_ref()])? {
-            s if s.success() => return Ok(()),
-            s => Err(failed("mv -f", s)),
-        },
-    };
-    let _ = sudo(&["rm".as_ref(), "-f".as_ref(), tmp.as_ref()]);
-    result
+    written.and(drained).map_err(|e| Error::io(tmp, e))?;
+    if !status.success() {
+        return Err(failed("tee", status));
+    }
+    Ok(())
+}
+
+fn terminal_command(
+    command: &Command,
+    execution: Option<&Execution<'_>>,
+    input: Option<&str>,
+) -> Option<Result<process::ExitStatus>> {
+    let execution = execution?;
+    if command.sudo || command.terminal {
+        execution
+            .interaction
+            .terminal_command(execution.task, execution.step, command, input)
+    } else {
+        None
+    }
+}
+
+fn run_command(
+    command: &Command,
+    execution: Option<&Execution<'_>>,
+) -> Result<process::ExitStatus> {
+    terminal_command(command, execution, None).unwrap_or_else(|| {
+        run_process(command.to_process(execution.is_some()), execution, None)
+            .map_err(|e| Error::io(&command.program, e))
+    })
 }
 
 /// Minimal POSIX single-quote escaping.

@@ -8,6 +8,8 @@ use crate::msg;
 pub enum Error {
     /// Cooperative stop at a safe boundary; completed effects are retained.
     Cancelled,
+    /// The frontend disconnected after receiving a system command.
+    TerminalOutcomeUnknown,
     Io {
         path: PathBuf,
         source: std::io::Error,
@@ -77,6 +79,7 @@ impl Error {
     pub fn message(&self) -> Message {
         match self {
             Error::Cancelled => msg!("error.cancelled"),
+            Error::TerminalOutcomeUnknown => msg!("error.terminal_outcome_unknown"),
             Error::Io { path, source } => {
                 msg!("error.io", path = path.display(), source = source)
             }

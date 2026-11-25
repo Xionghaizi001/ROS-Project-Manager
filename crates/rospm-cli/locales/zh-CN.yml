@@ -401,6 +401,7 @@ template:
 
 error:
   cancelled: "任务已在安全边界取消；已完成的更改未回滚。"
+  terminal_outcome_unknown: "系统步骤交给前台终端后连接中断。重试前请检查系统状态和任务日志。"
   io: "%{path} 读写出错：%{source}"
   manifest_parse: "无法解析清单 %{path}：%{source}"
   lock_parse: "无法解析锁文件 %{path}：%{source}"
@@ -879,12 +880,15 @@ confirmation:
   directory_changed: "已审阅的目录发生变化，请重新审阅后再清理：%{path}"
 
 worker_cli:
-  follow: "任务 %{id}；查询：rospm task --runtime %{runtime} status/logs %{id}"
+  follow: "任务 %{id}。使用 rospm task --runtime %{runtime} attach %{id} 重新连接"
   auto_exit_timeout: "无客户端时空闲 worker 自动退出的秒数；活动任务先运行至结束"
   worker: "前台启动工作区 worker（SIGINT/SIGTERM 取消并等待任务退出）"
   task: "提交或控制 worker 任务；响应为协议 JSON"
   runtime: "worker 与客户端共用的私有 socket 目录"
   submit: "按清单默认配置提交任务；重试投递时复用同一 ID"
+  interactive: "系统步骤开始前等待前台终端接入"
+  attach: "跟踪运行中的任务并处理终端认证"
+  authorization_terminal: "认证需要前台终端"
   id: "稳定的请求/任务 ID；不同任务不可复用"
   status: "读取持久化任务快照与结果"
   logs: "读取任务日志，包括完整的待确认操作"

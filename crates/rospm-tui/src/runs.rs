@@ -20,6 +20,14 @@ pub trait RunBackend {
         false
     }
 
+    fn pending_authorization(&self) -> Option<&str> {
+        None
+    }
+
+    fn authorize_task(&mut self, _root: &Path, _id: &str) -> Result<()> {
+        anyhow::bail!("task authorization unavailable")
+    }
+
     fn task(
         &mut self,
         _root: &Path,

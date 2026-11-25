@@ -24,6 +24,7 @@ pub struct Runs {
     logs: Vec<RecordedRun>,
     task_runs: Vec<RunStatus>,
     task_logs: Vec<File>,
+    pending_authorization: Option<String>,
 }
 
 struct RecordedRun {
@@ -45,6 +46,15 @@ impl RecordedRun {
 impl rospm_tui::RunBackend for Runs {
     fn has_task_worker(&self) -> bool {
         true
+    }
+
+    fn pending_authorization(&self) -> Option<&str> {
+        self.pending_authorization.as_deref()
+    }
+
+    fn authorize_task(&mut self, root: &Path, id: &str) -> Result<()> {
+        let worker = connect(&root.join(".rospm/worker/runtime"))?;
+        authorization::authorize(&worker, id)
     }
 
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()> {
@@ -87,6 +97,7 @@ impl rospm_tui::RunBackend for Runs {
     }
 
     fn background(&mut self, root: &Path) -> Result<Vec<RunStatus>> {
+        self.pending_authorization = None;
         if let Some(worker) = &mut self.worker {
             if worker.try_wait()?.is_some() {
                 self.worker = None;
@@ -127,6 +138,9 @@ impl rospm_tui::RunBackend for Runs {
                 .join("snapshot.json");
             if let Ok(bytes) = std::fs::read(path) {
                 if let Ok(snapshot) = serde_json::from_slice::<TaskSnapshot>(&bytes) {
+                    if snapshot.state == TaskState::WaitingAuthorization {
+                        self.pending_authorization = Some(process.id.clone());
+                    }
                     if snapshot.state.is_terminal() {
                         process.exit = Some(if snapshot.result.is_some_and(|r| r.success) {
                             RunExit::Code(0)
@@ -235,11 +249,20 @@ impl rospm_tui::RunBackend for Runs {
                         task_id: id.clone(),
                         workspace,
                         operation,
+                        interactive: true,
                     }
                 )?,
                 Message::Accepted { task_id, .. } if task_id == id
             ),
             "worker did not accept the TUI task"
+        );
+        eprintln!(
+            "{}",
+            rospm_core::msg!(
+                "worker_cli.follow",
+                id = &id,
+                runtime = rospm_core::plan::shell_quote(&runtime.to_string_lossy())
+            )
         );
         if detach {
             let log = File::open(
@@ -414,6 +437,24 @@ fn task_id() -> String {
     )
 }
 
+pub(super) fn attach(runtime: &Path, id: &str) -> Result<()> {
+    authorization::foreground_terminal()?;
+    let mut stream = BufReader::new(connect(runtime)?);
+    stream
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream
+        .get_ref()
+        .set_write_timeout(Some(Duration::from_secs(10)))?;
+    exchange(
+        &mut stream,
+        Message::Hello {
+            client: "rospm-attach".into(),
+        },
+    )?;
+    follow_task(&mut stream, id)
+}
+
 fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
     let mut cursor = 0;
     let mut review = None;
@@ -473,10 +514,17 @@ fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
             };
         }
         if snapshot.state == TaskState::WaitingConfirmation {
-            if review.take().is_some() {
+            if let Some(review) = review
+                .take()
+                .filter(|review| review["step"] == snapshot.step)
+            {
+                show_review(&review)?;
                 let mut answer = String::new();
                 let read = io::stdin().read_line(&mut answer)?;
-                let approved = read > 0 && matches!(answer.trim(), "y" | "Y" | "yes");
+                let approved = read > 0
+                    && (matches!(answer.trim(), "y" | "Y" | "yes")
+                        || (answer.trim().is_empty()
+                            && review["operation"]["kind"] == "switch_mirror"));
                 exchange(
                     stream,
                     Message::Confirm {
@@ -491,8 +539,49 @@ fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
                 )?;
             }
         }
+        if snapshot.state == TaskState::WaitingAuthorization {
+            authorization::authorize(stream.get_ref(), id)?;
+        }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn show_review(review: &serde_json::Value) -> Result<()> {
+    let mut err = io::stderr().lock();
+    if let Some(explanation) = review["explanation"].as_str() {
+        writeln!(err, "{explanation}")?;
+    }
+    let operation = &review["operation"];
+    for key in ["commands", "retry"] {
+        if let Some(commands) = operation[key].as_array() {
+            for command in commands {
+                let command: rospm_core::plan::Command = serde_json::from_value(command.clone())?;
+                writeln!(err, "  $ {}", command.render())?;
+            }
+        }
+    }
+    for path in operation["paths"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        writeln!(err, "  {path}")?;
+    }
+    for key in ["ros_apt", "rosdistro"] {
+        if let Some(value) = operation[key].as_str() {
+            writeln!(err, "  {value}")?;
+        }
+    }
+    write!(
+        err,
+        "{}",
+        review["prompt"]
+            .as_str()
+            .context("missing confirmation prompt")?
+    )?;
+    err.flush()?;
+    Ok(())
 }
 
 fn writer(file: &File) -> std::io::Result<File> {

@@ -139,9 +139,15 @@ fn dispatch_persisted(
             task_id,
             workspace,
             operation,
+            interactive,
         } => {
-            let status = match store.register_submission(request_id, task_id, workspace, operation)
-            {
+            let status = match store.register_submission_with_mode(
+                request_id,
+                task_id,
+                workspace,
+                operation,
+                *interactive,
+            ) {
                 Ok(status) => status,
                 Err(StoreError::SubmissionConflict | StoreError::AlreadyExists) => {
                     return Ok(error(
@@ -453,6 +459,7 @@ mod tests {
                 task_id: "t1".into(),
                 workspace: "/tmp/ws".into(),
                 operation: Operation::Check,
+                interactive: false,
             },
             Message::Snapshot {
                 task_id: "t1".into(),

@@ -10,6 +10,7 @@ use std::{io::Write, path::PathBuf};
 pub enum State {
     Running,
     WaitingConfirmation,
+    WaitingAuthorization,
     CancelRequested,
     Cancelled,
     Succeeded,
@@ -112,6 +113,17 @@ pub trait Interaction: Sync {
     /// Only worker adapters opt into isolated process groups.
     fn process_groups(&self) -> bool {
         false
+    }
+    /// A detached worker may hand a system step to an attached foreground
+    /// terminal. Returning None keeps the normal subprocess path.
+    fn terminal_command(
+        &self,
+        _task: &str,
+        _step: usize,
+        _command: &crate::plan::Command,
+        _input: Option<&str>,
+    ) -> Option<crate::Result<std::process::ExitStatus>> {
+        None
     }
     /// A task-scoped, latched request. Must return promptly and remain true
     /// once requested. Disconnecting a frontend must not set this flag.

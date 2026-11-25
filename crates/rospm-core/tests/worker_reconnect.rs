@@ -118,6 +118,7 @@ fn submit() -> Message {
         task_id: "t1".into(),
         workspace: "/workspace".into(),
         operation: Operation::Check,
+        interactive: false,
     }
 }
 fn register(store: &TaskStore) -> Result<SubmissionStatus, StoreError> {

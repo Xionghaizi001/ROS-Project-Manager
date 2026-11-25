@@ -73,6 +73,8 @@ pub enum Message {
         task_id: String,
         workspace: String,
         operation: Operation,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        interactive: bool,
     },
     Snapshot {
         task_id: String,
@@ -150,6 +152,7 @@ pub enum TaskState {
     Pending,
     Running,
     WaitingConfirmation,
+    WaitingAuthorization,
     CancelRequested,
     Succeeded,
     Failed,

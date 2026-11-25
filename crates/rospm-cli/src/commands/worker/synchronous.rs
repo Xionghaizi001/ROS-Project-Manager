@@ -110,7 +110,11 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
     // Print before submitting: even a lost acknowledgement must be queryable.
     eprintln!(
         "{}",
-        rospm_core::msg!("worker_cli.follow", id = &id, runtime = runtime.display())
+        rospm_core::msg!(
+            "worker_cli.follow",
+            id = &id,
+            runtime = rospm_core::plan::shell_quote(&runtime.to_string_lossy())
+        )
     );
     let reply = exchange(
         &mut stream,
@@ -119,6 +123,7 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
             task_id: id.clone(),
             workspace: loaded.root.to_str().context(tr("worker_cli.utf8"))?.into(),
             operation: cli.command.mutation().expect("mutation"),
+            interactive: global.interactive,
         },
     )?;
     anyhow::ensure!(
@@ -210,6 +215,9 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
                 )?;
             }
         }
+        if snapshot.state == TaskState::WaitingAuthorization {
+            authorization::authorize(stream.get_ref(), &id)?;
+        }
         thread::sleep(Duration::from_millis(20));
     }
 }
@@ -290,9 +298,12 @@ pub(crate) fn serve(cli: Cli) -> Result<ExitCode> {
                                         failure: std::sync::Mutex::new(None),
                                     };
                                     let interactive = cli.internal_worker_interactive;
+                                    let terminal = authorization::TerminalInteraction(&adapter);
+                                    let interaction: &dyn Interaction =
+                                        if interactive { &terminal } else { &adapter };
                                     let code = crate::execute_cli(
                                         cli,
-                                        Some(&adapter),
+                                        Some(interaction),
                                         Some(&task),
                                         interactive,
                                     );

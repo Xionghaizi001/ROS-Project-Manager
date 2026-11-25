@@ -245,6 +245,7 @@ impl TaskRunner {
             let state = match &result {
                 Ok(()) => TaskState::Succeeded,
                 Err(Error::Cancelled) => TaskState::Cancelled,
+                Err(Error::TerminalOutcomeUnknown) => TaskState::Unknown,
                 Err(_) => TaskState::Failed,
             };
             let mut snapshot = store.load_snapshot(&task_id).map_err(store_error)?;
@@ -370,10 +371,10 @@ impl Interaction for WorkerInteraction {
                 // Confirmation publishes its state only after the review is durable.
                 if state != State::WaitingConfirmation {
                     self.set_state(
-                        if state == State::CancelRequested {
-                            TaskState::CancelRequested
-                        } else {
-                            TaskState::Running
+                        match state {
+                            State::CancelRequested => TaskState::CancelRequested,
+                            State::WaitingAuthorization => TaskState::WaitingAuthorization,
+                            _ => TaskState::Running,
                         },
                         step as u32,
                     );

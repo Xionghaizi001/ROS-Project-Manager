@@ -403,6 +403,22 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         }
                         Err(error) => process_error = Some(format!("{error:#}")),
                     }
+                    if let Some(id) = backend.pending_authorization().map(str::to_owned) {
+                        leave_screen(terminal)?;
+                        disable_raw_mode()?;
+                        let result = backend.authorize_task(&project.root, &id);
+                        enable_raw_mode()?;
+                        execute!(
+                            terminal.backend_mut(),
+                            EnterAlternateScreen,
+                            EnableMouseCapture
+                        )?;
+                        terminal.hide_cursor()?;
+                        terminal.clear()?;
+                        if let Err(error) = result {
+                            process_error = Some(format!("{error:#}"));
+                        }
+                    }
                     let history = backend.history();
                     let finished: std::collections::HashSet<_> =
                         history.iter().map(|process| &process.id).collect();

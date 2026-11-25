@@ -725,13 +725,12 @@ fn execute_cli(
                 }
                 eprintln!("{}", rospm_core::msg!("cli.err.prefix", text = text));
             }
-            if err
-                .downcast_ref::<rospm_core::Error>()
-                .is_some_and(|e| matches!(e, rospm_core::Error::Cancelled))
-            {
-                Err(rospm_core::Error::Cancelled)
-            } else {
-                Err(rospm_core::Error::Host(rospm_core::Message::text(text)))
+            match err.downcast::<rospm_core::Error>() {
+                Ok(
+                    error @ (rospm_core::Error::Cancelled
+                    | rospm_core::Error::TerminalOutcomeUnknown),
+                ) => Err(error),
+                _ => Err(rospm_core::Error::Host(rospm_core::Message::text(text))),
             }
         }
     }

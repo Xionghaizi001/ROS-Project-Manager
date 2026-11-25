@@ -15,6 +15,8 @@ struct Submission {
     task_id: String,
     workspace: String,
     operation: Operation,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    interactive: bool,
 }
 
 impl TaskStore {
@@ -28,6 +30,17 @@ impl TaskStore {
         workspace: &str,
         operation: &Operation,
     ) -> Result<SubmissionStatus, StoreError> {
+        self.register_submission_with_mode(request_id, task_id, workspace, operation, false)
+    }
+
+    pub(super) fn register_submission_with_mode(
+        &self,
+        request_id: &str,
+        task_id: &str,
+        workspace: &str,
+        operation: &Operation,
+        interactive: bool,
+    ) -> Result<SubmissionStatus, StoreError> {
         if !valid_identifier(request_id)
             || !valid_identifier(task_id)
             || workspace.is_empty()
@@ -39,6 +52,7 @@ impl TaskStore {
             task_id: task_id.into(),
             workspace: workspace.into(),
             operation: operation.clone(),
+            interactive,
         };
         // '@' is not a valid task identifier, so metadata cannot collide with tasks.
         let lock = OpenOptions::new()
