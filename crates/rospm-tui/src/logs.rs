@@ -85,7 +85,13 @@ pub(crate) struct Browser {
 impl Browser {
     pub fn new(root: Option<&Path>, processes: &[RunStatus], preferred: Option<&str>) -> Self {
         let mut sources = root.map(sources).unwrap_or_default();
-        let mut selected = 0;
+        let mut selected = preferred
+            .and_then(|id| {
+                sources
+                    .iter()
+                    .position(|source| source.label == format!("task/{id}"))
+            })
+            .unwrap_or(0);
         for process in processes {
             if let Some(source) = process_source(process) {
                 if preferred == Some(process.id.as_str()) {
@@ -258,6 +264,8 @@ mod tests {
             target: "pkg/node".into(),
             background: false,
             task: false,
+            task_snapshot: None,
+            task_connected: false,
             shell: false,
             pid: None,
             suspended: false,
@@ -276,6 +284,22 @@ mod tests {
             .sources
             .iter()
             .any(|source| source.label == "deps.log"));
+    }
+
+    #[test]
+    fn restored_task_opens_its_disk_log_without_an_output_descriptor() {
+        let root = std::env::temp_dir().join(format!("rospm-task-log-{}", std::process::id()));
+        let directory = root.join(".rospm/worker/tasks/saved-task");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("logs.jsonl"),
+            "{\"cursor\":0,\"stream\":\"stdout\",\"text\":\"saved output\"}\n",
+        )
+        .unwrap();
+        let browser = Browser::new(Some(&root), &[], Some("saved-task"));
+        assert_eq!(browser.sources[browser.selected].label, "task/saved-task");
+        assert_eq!(browser.lines, ["[0 stdout] saved output"]);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

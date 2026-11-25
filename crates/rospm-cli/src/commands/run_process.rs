@@ -86,6 +86,8 @@ impl ManagedRun {
                 target: format!("{}/{}", request.package, request.name),
                 background,
                 task: false,
+                task_snapshot: None,
+                task_connected: false,
                 shell: false,
                 pid: None,
                 suspended: false,

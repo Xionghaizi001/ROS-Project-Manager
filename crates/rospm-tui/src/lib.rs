@@ -106,6 +106,18 @@ pub struct Text {
     pub verify_result: String,
     pub deps_result: String,
     pub task_status: String,
+    pub task_attach: String,
+    pub task_cancel: String,
+    pub task_pending: String,
+    pub task_waiting_confirmation: String,
+    pub task_waiting_authorization: String,
+    pub task_cancelling: String,
+    pub task_succeeded: String,
+    pub task_failed: String,
+    pub task_cancelled: String,
+    pub task_interrupted: String,
+    pub task_offline: String,
+    pub task_step: String,
     pub logs: String,
     pub diagnostics: String,
     pub status_ok: String,
@@ -387,6 +399,24 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                     last_process_refresh = None;
                 }
                 if let Some(InstallPage::Run(page)) = &mut install_page {
+                    if let Some(id) = page.take_task_attach() {
+                        leave_screen(terminal)?;
+                        disable_raw_mode()?;
+                        if let Err(error) = backend.attach_task(&project.root, &id) {
+                            eprintln!("{error:#}");
+                        }
+                        println!("Enter ↩");
+                        io::stdin().read_line(&mut String::new())?;
+                        enable_raw_mode()?;
+                        execute!(
+                            terminal.backend_mut(),
+                            EnterAlternateScreen,
+                            EnableMouseCapture
+                        )?;
+                        terminal.hide_cursor()?;
+                        terminal.clear()?;
+                        last_process_refresh = None;
+                    }
                     if page.dispatch(*backend, project, *verbosity, text) {
                         install_page = None;
                         focused_row = first_selectable(Some(project), text, selected, None);
@@ -423,11 +453,15 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                     let finished: std::collections::HashSet<_> =
                         history.iter().map(|process| &process.id).collect();
                     processes.retain(|process| !finished.contains(&process.id));
-                    active_processes = processes.len();
                     project.installing = processes
                         .iter()
                         .any(|process| process.task && process.exit.is_none());
                     processes.extend(history);
+                    processes.sort_by_key(|process| process.exit.is_some());
+                    active_processes = processes
+                        .iter()
+                        .filter(|process| process.exit.is_none())
+                        .count();
                     if let Some(InstallPage::Run(page)) = &mut install_page {
                         page.refresh(&processes, process_error.as_deref(), &mut focused_row, text);
                     }

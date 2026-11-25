@@ -203,6 +203,52 @@ impl Drop for Worker {
 }
 
 #[test]
+fn rebuild_removes_artifacts_without_removing_sources() {
+    let worker = Worker::new("worker-rebuild");
+    for path in ["build/cache", "install/cache"] {
+        let path = worker.root.join("ws").join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "old artifact").unwrap();
+    }
+    fs::write(worker.root.join("ws/fast"), "").unwrap();
+    worker.ok(&["submit", "rebuild", "--id", "rebuild"]);
+    let snapshot = worker.wait("rebuild", "succeeded");
+    assert_eq!(snapshot["result"]["success"], true);
+    assert!(!worker.root.join("ws/build").exists());
+    assert!(!worker.root.join("ws/install").exists());
+    assert!(worker.root.join("ws/src/my_pkg/package.xml").exists());
+    assert!(worker
+        .ok(&["logs", "rebuild"])
+        .to_string()
+        .contains("started"));
+}
+
+#[test]
+fn interactive_worker_build_preserves_clean_retry_confirmation() {
+    let worker = Worker::new("worker-build-retry");
+    fs::create_dir(worker.root.join("ws/build")).unwrap();
+    fs::write(worker.root.join("ws/build/cache"), "stale").unwrap();
+    fs::write(
+        worker.root.join("bin/bash"),
+        "#!/bin/sh\ncase \"$*\" in *'colcon build'*) if [ -d build ]; then echo first-failure >&2; exit 1; fi; echo retried;; *) exec /bin/bash \"$@\";; esac\n",
+    )
+    .unwrap();
+    worker.ok(&["submit", "build", "--interactive", "--id", "retry"]);
+    let step = worker.wait("retry", "waiting_confirmation")["step"].to_string();
+    assert!(worker.root.join("ws/build/cache").exists());
+    let logs = worker.ok(&["logs", "retry"]).to_string();
+    assert!(logs.contains("first-failure") && logs.contains("clean_build"));
+    worker.ok(&["confirm", "retry", "--step", &step, "approve"]);
+    worker.wait("retry", "succeeded");
+    assert!(!worker.root.join("ws/build").exists());
+    assert!(worker.root.join("ws/src/my_pkg/package.xml").exists());
+    assert!(worker
+        .ok(&["logs", "retry"])
+        .to_string()
+        .contains("retried"));
+}
+
+#[test]
 fn cli_build_cancel_reconnect_deduplicate_and_restart() {
     let mut worker = Worker::new("worker-build");
     worker.ok(&["submit", "build", "--id", "build-1"]);

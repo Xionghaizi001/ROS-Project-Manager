@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rospm_core::run::{RunExit, RunRequest, RunSignal, RunStatus, Target};
-use rospm_core::worker::Operation;
+use rospm_core::worker::{Operation, TaskState};
 
 use crate::{dashboard::Dashboard, pages::Entry, Text};
 
@@ -26,6 +26,10 @@ pub trait RunBackend {
 
     fn authorize_task(&mut self, _root: &Path, _id: &str) -> Result<()> {
         anyhow::bail!("task authorization unavailable")
+    }
+
+    fn attach_task(&mut self, _root: &Path, _id: &str) -> Result<()> {
+        anyhow::bail!("task attachment unavailable")
     }
 
     fn task(
@@ -57,6 +61,7 @@ pub(crate) enum Page {
         list: Vec<RunStatus>,
         selected: Option<RunStatus>,
         signal: Option<RunSignal>,
+        attach: bool,
         error: Option<String>,
     },
 }
@@ -78,6 +83,7 @@ impl Page {
             list,
             selected: None,
             signal: None,
+            attach: false,
             error,
         }
     }
@@ -128,7 +134,12 @@ impl Page {
                 if let Some(process) = selected {
                     rows.push(process_row(process, text));
                     rows[0].selectable = false;
-                    if controllable(process) {
+                    if controllable(process) && process.task {
+                        rows.extend([
+                            Entry::link(&text.task_attach),
+                            Entry::link(&text.task_cancel),
+                        ]);
+                    } else if controllable(process) {
                         rows.extend([
                             Entry::link(&text.run_terminate),
                             Entry::link(&text.run_kill),
@@ -178,16 +189,22 @@ impl Page {
                 list,
                 selected,
                 signal,
+                attach,
                 error,
             } => {
                 if let Some(process) = selected.as_ref().filter(|process| controllable(process)) {
-                    *signal = match index {
-                        1 => Some(RunSignal::Terminate),
-                        2 => Some(RunSignal::Kill),
-                        3 if process.suspended => Some(RunSignal::Resume),
-                        3 => Some(RunSignal::Suspend),
-                        _ => None,
-                    };
+                    if process.task {
+                        *attach = index == 1;
+                        *signal = (index == 2).then_some(RunSignal::Terminate);
+                    } else {
+                        *signal = match index {
+                            1 => Some(RunSignal::Terminate),
+                            2 => Some(RunSignal::Kill),
+                            3 if process.suspended => Some(RunSignal::Resume),
+                            3 => Some(RunSignal::Suspend),
+                            _ => None,
+                        };
+                    }
                 } else if selected.is_none() {
                     let Some(process) = process_at(list, index) else {
                         return None;
@@ -203,6 +220,20 @@ impl Page {
 
     pub fn is_processes(&self) -> bool {
         matches!(self, Self::Processes { .. })
+    }
+
+    pub fn take_task_attach(&mut self) -> Option<String> {
+        if let Self::Processes {
+            selected: Some(process),
+            attach,
+            ..
+        } = self
+        {
+            if std::mem::take(attach) && process.task && controllable(process) {
+                return Some(process.id.clone());
+            }
+        }
+        None
     }
 
     pub fn focused_process(&self, focused: Option<usize>) -> Option<&RunStatus> {
@@ -373,11 +404,49 @@ fn first_process(list: &[RunStatus]) -> Option<usize> {
 }
 
 fn controllable(process: &RunStatus) -> bool {
-    process.exit.is_none() && process.pid.is_some()
+    process.exit.is_none()
+        && if process.task {
+            process.task_connected && process.task_snapshot.is_some()
+        } else {
+            process.pid.is_some()
+        }
 }
 
 fn process_row(process: &RunStatus, text: &Text) -> Entry {
     let mut row = Entry::link(&process.target);
+    if let Some(snapshot) = &process.task_snapshot {
+        row.cells[1] = match snapshot.state {
+            TaskState::Pending => &text.task_pending,
+            TaskState::Running => &text.running,
+            TaskState::WaitingConfirmation => &text.task_waiting_confirmation,
+            TaskState::WaitingAuthorization => &text.task_waiting_authorization,
+            TaskState::CancelRequested => &text.task_cancelling,
+            TaskState::Succeeded => &text.task_succeeded,
+            TaskState::Failed => &text.task_failed,
+            TaskState::Cancelled => &text.task_cancelled,
+            TaskState::Interrupted => &text.task_interrupted,
+            TaskState::Unknown => &text.status_unknown,
+        }
+        .clone();
+        if !process.task_connected && !snapshot.state.is_terminal() {
+            row.cells[1] = format!("{} · {}", text.task_offline, row.cells[1]);
+        }
+        row.cells[2] = snapshot
+            .result
+            .as_ref()
+            .and_then(|result| result.error.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "{} {} / {}",
+                    text.task_step,
+                    snapshot.step,
+                    snapshot
+                        .total_steps
+                        .map_or_else(|| "?".into(), |total| total.to_string())
+                )
+            });
+        return row;
+    }
     row.cells[1] = if process.task && process.exit.is_none() {
         text.installing.clone()
     } else if process.exit.is_some() {
@@ -405,4 +474,86 @@ fn process_row(process: &RunStatus, text: &Text) -> Entry {
         (None, None) => text.run_starting.clone(),
     };
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rospm_core::worker::TaskSnapshot;
+
+    fn waiting_task() -> RunStatus {
+        RunStatus {
+            id: "saved-task".into(),
+            target: "task/saved-task".into(),
+            task: true,
+            task_connected: true,
+            background: true,
+            shell: false,
+            pid: None,
+            suspended: false,
+            output_fd: None,
+            exit: None,
+            task_snapshot: Some(TaskSnapshot {
+                task_id: "saved-task".into(),
+                state: TaskState::WaitingConfirmation,
+                step: 2,
+                total_steps: Some(3),
+                log_cursor: 4,
+                result: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn restored_tasks_offer_attach_and_cancel_without_process_signals() {
+        let text = Text {
+            task_attach: "Continue".into(),
+            task_cancel: "Cancel".into(),
+            task_waiting_confirmation: "Waiting".into(),
+            task_cancelled: "Cancelled".into(),
+            ..Text::default()
+        };
+        let mut process = waiting_task();
+        let mut page = Page::processes(vec![process.clone()], None);
+        assert_eq!(page.activate(1), Some(1));
+        let rows = page.rows(&text);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].cells[1], "Waiting");
+        assert_eq!(rows[1].cells[0], "Continue");
+        assert_eq!(rows[2].cells[0], "Cancel");
+        page.activate(1);
+        assert_eq!(page.take_task_attach(), Some("saved-task".into()));
+        assert_eq!(page.take_task_attach(), None);
+        page.activate(2);
+        assert!(matches!(
+            page,
+            Page::Processes {
+                signal: Some(RunSignal::Terminate),
+                ..
+            }
+        ));
+        process.task_snapshot.as_mut().unwrap().state = TaskState::Cancelled;
+        process.exit = Some(RunExit::Unknown);
+        let mut focus = Some(2);
+        page.refresh(&[process], None, &mut focus, &text);
+        assert_eq!(focus, None);
+        assert_eq!(page.rows(&text).len(), 1);
+        assert_eq!(page.rows(&text)[0].cells[1], "Cancelled");
+    }
+
+    #[test]
+    fn disconnected_tasks_show_last_state_and_cannot_be_controlled() {
+        let text = Text {
+            task_waiting_confirmation: "Waiting".into(),
+            task_offline: "Unavailable".into(),
+            ..Text::default()
+        };
+        let mut process = waiting_task();
+        process.task_connected = false;
+        let mut page = Page::processes(vec![process], None);
+        assert_eq!(page.activate(1), None);
+        let rows = page.rows(&text);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].cells[1], "Unavailable · Waiting");
+    }
 }

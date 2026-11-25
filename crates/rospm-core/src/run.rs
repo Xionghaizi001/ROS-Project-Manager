@@ -71,6 +71,10 @@ pub struct RunStatus {
     pub background: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub task: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_snapshot: Option<crate::worker::TaskSnapshot>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub task_connected: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
     pub pid: Option<u32>,

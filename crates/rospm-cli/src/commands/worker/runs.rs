@@ -22,8 +22,7 @@ pub struct Runs {
     worker: Option<Child>,
     shell: Option<Session>,
     logs: Vec<RecordedRun>,
-    task_runs: Vec<RunStatus>,
-    task_logs: Vec<File>,
+    detached_tasks: Vec<String>,
     pending_authorization: Option<String>,
 }
 
@@ -55,6 +54,10 @@ impl rospm_tui::RunBackend for Runs {
     fn authorize_task(&mut self, root: &Path, id: &str) -> Result<()> {
         let worker = connect(&root.join(".rospm/worker/runtime"))?;
         authorization::authorize(&worker, id)
+    }
+
+    fn attach_task(&mut self, root: &Path, id: &str) -> Result<()> {
+        attach(&root.join(".rospm/worker/runtime"), id)
     }
 
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()> {
@@ -131,27 +134,18 @@ impl rospm_tui::RunBackend for Runs {
             Err(error) => return Err(error),
         };
         self.update_running(&mut running);
-        for process in &mut self.task_runs {
-            let path = root
-                .join(".rospm/worker/tasks")
-                .join(&process.id)
-                .join("snapshot.json");
-            if let Ok(bytes) = std::fs::read(path) {
-                if let Ok(snapshot) = serde_json::from_slice::<TaskSnapshot>(&bytes) {
-                    if snapshot.state == TaskState::WaitingAuthorization {
-                        self.pending_authorization = Some(process.id.clone());
-                    }
-                    if snapshot.state.is_terminal() {
-                        process.exit = Some(if snapshot.result.is_some_and(|r| r.success) {
-                            RunExit::Code(0)
-                        } else {
-                            RunExit::Code(1)
-                        });
-                    }
-                }
+        for process in task_processes(root)? {
+            if process.task_connected
+                && self.detached_tasks.contains(&process.id)
+                && process
+                    .task_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.state == TaskState::WaitingAuthorization)
+            {
+                self.pending_authorization = Some(process.id.clone());
             }
+            running.push(process);
         }
-        running.extend(self.task_runs.iter().cloned());
         for record in &mut self.logs {
             if record.process.background
                 && record.process.exit.is_none()
@@ -177,7 +171,19 @@ impl rospm_tui::RunBackend for Runs {
     }
 
     fn signal(&mut self, root: &Path, process: &RunStatus, signal: RunSignal) -> Result<()> {
-        if process.background {
+        if process.task {
+            anyhow::ensure!(
+                signal == RunSignal::Terminate,
+                "tasks only support cancellation"
+            );
+            query(
+                connect(&root.join(".rospm/worker/runtime"))?,
+                Message::Cancel {
+                    task_id: process.id.clone(),
+                },
+            )?;
+            Ok(())
+        } else if process.background {
             query(
                 connect(&WorkspaceLock::run_runtime(root)?)?,
                 Message::SignalRun {
@@ -265,29 +271,87 @@ impl rospm_tui::RunBackend for Runs {
             )
         );
         if detach {
-            let log = File::open(
-                root.join(".rospm/worker/tasks")
-                    .join(&id)
-                    .join("logs.jsonl"),
-            )?;
-            self.task_logs.push(log);
-            self.task_runs.push(RunStatus {
-                id,
-                target: "deps install".into(),
-                background: true,
-                task: true,
-                shell: false,
-                pid: None,
-                suspended: false,
-                output_fd: self.task_logs.last().map(|file| file.as_raw_fd()),
-                exit: None,
-            });
+            self.detached_tasks.push(id);
             Ok(rospm_tui::TaskOutcome::Detached)
         } else {
             follow_task(&mut stream, &id)?;
             Ok(rospm_tui::TaskOutcome::Completed)
         }
     }
+}
+
+fn task_processes(root: &Path) -> Result<Vec<RunStatus>> {
+    let tasks = root.join(".rospm/worker/tasks");
+    let metadata = match std::fs::symlink_metadata(&tasks) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| tasks.display().to_string()),
+    };
+    anyhow::ensure!(
+        metadata.is_dir()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o077 == 0,
+        "task store must be a private directory owned by the current user: {}",
+        tasks.display()
+    );
+    let connected = connect(&root.join(".rospm/worker/runtime")).is_ok();
+    let mut processes = Vec::new();
+    for entry in std::fs::read_dir(&tasks)? {
+        let entry = entry?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type()?.is_dir() || !valid_identifier(&id) {
+            continue;
+        }
+        let path = entry.path().join("snapshot.json");
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(&path)
+        {
+            Ok(file) => file,
+            // A submission or retention cleanup can be between directory and snapshot writes.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| path.display().to_string()),
+        };
+        anyhow::ensure!(
+            file.metadata()?.is_file(),
+            "task snapshot is not a file: {}",
+            path.display()
+        );
+        let snapshot: TaskSnapshot =
+            serde_json::from_reader(file).with_context(|| path.display().to_string())?;
+        anyhow::ensure!(
+            snapshot.task_id == id,
+            "task snapshot ID mismatch: {}",
+            path.display()
+        );
+        let exit = snapshot.state.is_terminal().then(|| match snapshot.state {
+            TaskState::Succeeded => RunExit::Code(0),
+            TaskState::Failed => RunExit::Code(
+                snapshot
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.exit_code)
+                    .unwrap_or(1),
+            ),
+            _ => RunExit::Unknown,
+        });
+        processes.push(RunStatus {
+            target: format!("task/{id}"),
+            id,
+            background: true,
+            task: true,
+            task_snapshot: Some(snapshot),
+            task_connected: connected,
+            shell: false,
+            pid: None,
+            suspended: false,
+            output_fd: None,
+            exit,
+        });
+    }
+    processes.sort_by(|a, b| b.id.cmp(&a.id));
+    Ok(processes)
 }
 
 impl Runs {
@@ -718,4 +782,104 @@ pub fn serve(root: PathBuf, runtime: &Path, idle_timeout: Duration) -> Result<()
         },
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_discovery_restores_states_and_results_without_creating_or_replaying_tasks() {
+        let root = std::env::temp_dir().join(task_id());
+        assert!(task_processes(&root).unwrap().is_empty());
+        assert!(!root.exists());
+        let store = TaskStore::open(root.join(".rospm/worker/tasks")).unwrap();
+        for (index, state) in [
+            TaskState::Pending,
+            TaskState::Running,
+            TaskState::WaitingConfirmation,
+            TaskState::WaitingAuthorization,
+            TaskState::CancelRequested,
+            TaskState::Succeeded,
+            TaskState::Failed,
+            TaskState::Cancelled,
+            TaskState::Interrupted,
+            TaskState::Unknown,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .create_task(&TaskSnapshot {
+                    task_id: format!("task-{index}"),
+                    result: state.is_terminal().then(|| TaskResult {
+                        success: state == TaskState::Succeeded,
+                        exit_code: Some(7),
+                        error: Some("saved result".into()),
+                    }),
+                    state,
+                    step: 2,
+                    total_steps: Some(3),
+                    log_cursor: 0,
+                })
+                .unwrap();
+        }
+        let processes = task_processes(&root).unwrap();
+        assert_eq!(processes.len(), 10);
+        for process in &processes {
+            let snapshot = store.load_snapshot(&process.id).unwrap();
+            assert_eq!(process.task_snapshot.as_ref(), Some(&snapshot));
+            assert_eq!(process.exit.is_some(), snapshot.state.is_terminal());
+            assert!(process.task && !process.task_connected && process.pid.is_none());
+            if snapshot.state == TaskState::Failed {
+                assert_eq!(process.exit, Some(RunExit::Code(7)));
+            }
+            if matches!(snapshot.state, TaskState::Unknown | TaskState::Interrupted) {
+                assert_eq!(process.exit, Some(RunExit::Unknown));
+            }
+        }
+        assert_eq!(task_processes(&root).unwrap(), processes);
+        assert!(!root.join(".rospm/worker/runtime").exists());
+        assert!(task_processes(&root.join("other-project"))
+            .unwrap()
+            .is_empty());
+        let mut snapshot = store.load_snapshot("task-0").unwrap();
+        snapshot.state = TaskState::Cancelled;
+        store.write_snapshot(&snapshot).unwrap();
+        assert!(task_processes(&root)
+            .unwrap()
+            .iter()
+            .find(|p| p.id == "task-0")
+            .unwrap()
+            .exit
+            .is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn task_discovery_rejects_mismatched_ids_and_symlinked_snapshots() {
+        let root = std::env::temp_dir().join(task_id());
+        let store = TaskStore::open(root.join(".rospm/worker/tasks")).unwrap();
+        let snapshot = TaskSnapshot {
+            task_id: "task".into(),
+            state: TaskState::Running,
+            step: 0,
+            total_steps: None,
+            log_cursor: 0,
+            result: None,
+        };
+        store.create_task(&snapshot).unwrap();
+        let path = root.join(".rospm/worker/tasks/task/snapshot.json");
+        let mut bad = snapshot;
+        bad.task_id = "another-task".into();
+        std::fs::write(&path, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(task_processes(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("ID mismatch"));
+        std::fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(root.join("outside"), &path).unwrap();
+        assert!(task_processes(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -93,6 +93,8 @@ impl Session {
                 target: "Shell".into(),
                 background: false,
                 task: false,
+                task_snapshot: None,
+                task_connected: false,
                 shell: true,
                 pid: None,
                 suspended: false,
