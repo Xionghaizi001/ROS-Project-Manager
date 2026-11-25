@@ -708,7 +708,14 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                         }
                         KeyCode::Char('b') | KeyCode::Char('B') if selected == 2 => {
                             let rebuild = key.code == KeyCode::Char('B');
-                            compile(terminal, text, build, rebuild)?;
+                            compile(
+                                terminal,
+                                dashboard.as_ref(),
+                                text,
+                                build,
+                                rebuild,
+                                task_backend(runs),
+                            )?;
                             dashboard =
                                 dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
                             scroll = 0;
@@ -1189,7 +1196,14 @@ fn activate_footer<B: ratatui::backend::Backend + Write>(
             last_runtime_refresh,
         )?,
         view::FooterAction::Build | view::FooterAction::Rebuild => {
-            compile(terminal, text, build, action == view::FooterAction::Rebuild)?;
+            compile(
+                terminal,
+                dashboard.as_ref(),
+                text,
+                build,
+                action == view::FooterAction::Rebuild,
+                backend,
+            )?;
             *dashboard = dashboard::Dashboard::load(manifest, text)?;
             *scroll = 0;
             *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
@@ -1313,9 +1327,11 @@ fn run_action<B: ratatui::backend::Backend + Write>(
 
 fn compile<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
+    dashboard: Option<&dashboard::Dashboard>,
     text: &Text,
     build: &mut impl FnMut(bool) -> Result<()>,
     rebuild: bool,
+    backend: Option<&mut dyn RunBackend>,
 ) -> Result<()> {
     leave_screen(terminal)?;
     disable_raw_mode()?;
@@ -1330,7 +1346,23 @@ fn compile<B: ratatui::backend::Backend + Write>(
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     if matches!(answer.trim(), "y" | "Y" | "yes") {
-        if let Err(error) = build(rebuild) {
+        let result = if let Some(backend) = backend {
+            let root = dashboard.map_or(Path::new("."), |project| project.root.as_path());
+            backend
+                .task(
+                    root,
+                    dashboard.map(|project| project.manifest.as_path()),
+                    if rebuild {
+                        Operation::Rebuild
+                    } else {
+                        Operation::Build
+                    },
+                )
+                .map(|_| ())
+        } else {
+            build(rebuild)
+        };
+        if let Err(error) = result {
             eprintln!("{error:#}");
         }
         println!("Enter ↩");

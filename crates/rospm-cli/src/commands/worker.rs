@@ -31,7 +31,7 @@ use std::{
 pub enum TaskCommand {
     #[command(about = tr("worker_cli.submit"))]
     Submit {
-        #[arg(value_parser = ["apply", "apply_locked", "build", "uninstall", "check", "verify", "deps", "deps_check", "deps_install", "components_install", "conda_install"])]
+        #[arg(value_parser = ["apply", "apply_locked", "build", "rebuild", "uninstall", "check", "verify", "deps", "deps_check", "deps_install", "components_install", "conda_install"])]
         operation: String,
         #[arg(long, help = tr("worker_cli.id"))]
         id: String,
@@ -266,7 +266,7 @@ pub fn serve(global: &Global, runtime: &Path, auto_exit_timeout: Duration) -> Re
                         .start_with(&task_id, &workspace, move |interaction| {
                             let terminal = authorization::TerminalInteraction(interaction);
                             let interaction = if interactive { &terminal } else { interaction };
-                            execute(&root, &id, operation, interaction).map_err(|e| {
+                            execute(&root, &id, operation, interactive, interaction).map_err(|e| {
                                 let description = super::describe(&e);
                                 e.downcast::<rospm_core::Error>().unwrap_or_else(|_| {
                                     rospm_core::Error::Host(rospm_core::Message::text(description))
@@ -339,6 +339,7 @@ fn execute(
     root: &Path,
     id: &str,
     operation: Operation,
+    interactive: bool,
     interaction: &dyn Interaction,
 ) -> Result<()> {
     if operation == Operation::CondaInstall {
@@ -400,7 +401,34 @@ fn execute(
         Operation::DepsInstall => provider.plan_deps_install(&ctx)?,
         Operation::Apply | Operation::ApplyLocked => provider.plan_apply(&ctx)?,
         Operation::ComponentsInstall => provider.plan_components_install(&ctx)?,
-        Operation::Build => provider.plan_build(&ctx, None, false)?,
+        Operation::Build | Operation::Rebuild => {
+            if operation == Operation::Rebuild {
+                rospm_core::confirmation::clean_build_artifacts(&ctx)?;
+            }
+            super::build::run_build(
+                &loaded,
+                &host,
+                None,
+                false,
+                false,
+                false,
+                &Global {
+                    verbose: false,
+                    manifest: Some(loaded.path.clone()),
+                    json: false,
+                    interaction: Some(interaction),
+                    task: Some(id),
+                    interactive,
+                },
+            )?;
+            interaction.event(Event::Log {
+                task: id,
+                step: 0,
+                stream: Stream::Stdout,
+                bytes: format!("{}\n", tr("cli.build.success")).as_bytes(),
+            });
+            return Ok(());
+        }
         Operation::Uninstall => {
             let plan = provider.plan_uninstall(&ctx, false)?;
             rospm_core::confirmation::uninstall(id, &plan, false, interaction, |plan| {

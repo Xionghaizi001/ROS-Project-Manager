@@ -133,6 +133,7 @@ pub enum Operation {
     Apply,
     ApplyLocked,
     Build,
+    Rebuild,
     Uninstall,
     Check,
     Verify,
