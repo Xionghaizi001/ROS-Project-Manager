@@ -32,7 +32,19 @@ use std::time::{Duration, Instant};
 
 const PROCESS_KEY: char = 'p';
 const LOG_KEY: char = 'l';
+const DEBUG_TAB: usize = 4;
 const HELP_TAB: usize = 6;
+
+pub const DEBUG_TOOLS: [&str; 8] = [
+    "rqt",
+    "rviz2",
+    "rqt_graph",
+    "rqt_topic",
+    "rqt_publisher",
+    "rqt_service_caller",
+    "rqt_reconfigure",
+    "rqt_console",
+];
 
 /// Localized strings supplied by the CLI layer.
 #[derive(Default)]
@@ -129,6 +141,8 @@ pub struct Text {
     pub run_empty: String,
     pub run_node: String,
     pub run_launch: String,
+    pub debug_tools: [String; DEBUG_TOOLS.len()],
+    pub debug_no_project: String,
     pub run_processes: String,
     pub run_foreground: String,
     pub run_background: String,
@@ -166,6 +180,7 @@ enum InstallPage {
     },
     ScannedProjects(Vec<std::path::PathBuf>),
     Run(runs::Page),
+    DebugTool(&'static str),
     Shell,
     CliHelp,
 }
@@ -378,6 +393,25 @@ fn loop_ui<B: ratatui::backend::Backend + Write>(
                 *project_lock = Some(lock_project(project, text)?);
             }
             if let Some((backend, verbosity)) = runs {
+                if let Some(InstallPage::DebugTool(tool)) = install_page {
+                    match backend.start_debug(&project.root, &project.manifest, tool) {
+                        Ok(process) => {
+                            install_page =
+                                Some(InstallPage::Run(runs::Page::processes(vec![process], None)));
+                            focused_row = Some(1);
+                        }
+                        Err(error) => {
+                            install_page = Some(InstallPage::Detail {
+                                title: tool.into(),
+                                body: format!("{error:#}"),
+                                return_to_ros: false,
+                            });
+                            focused_row = None;
+                        }
+                    }
+                    scroll = 0;
+                    last_process_refresh = None;
+                }
                 if matches!(install_page, Some(InstallPage::Shell)) {
                     leave_screen(terminal)?;
                     let result = backend.shell(&project.root, &project.manifest);
@@ -1458,7 +1492,7 @@ fn move_focus(
     };
     let index = selectable[next];
     *focused = Some(index);
-    if (tab == 3 && install_page.is_none()
+    if (matches!(tab, 3 | DEBUG_TAB) && install_page.is_none()
         || matches!(install_page, Some(InstallPage::Run(page)) if page.is_processes()))
         && next != 0
     {
@@ -1492,6 +1526,10 @@ fn activate(
     }
     if selected == 3 && install_page.is_none() && index == 0 {
         *install_page = Some(InstallPage::Shell);
+        return;
+    }
+    if selected == DEBUG_TAB && install_page.is_none() {
+        *install_page = Some(InstallPage::DebugTool(DEBUG_TOOLS[index]));
         return;
     }
     if let (Some(index), Some(dashboard)) = (row.run_target, dashboard) {

@@ -9,7 +9,7 @@ use std::{
             process::{CommandExt, ExitStatusExt},
         },
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -21,6 +21,14 @@ use std::{
 
 use anyhow::{bail, Result};
 use rospm_core::run::{output, RunRequest, RunSignal, RunStatus};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum ChildRequest {
+    Run(RunRequest),
+    Debug { manifest: PathBuf, tool: String },
+}
 
 pub(super) struct ManagedRun {
     owner: UnixStream,
@@ -36,6 +44,35 @@ impl ManagedRun {
     pub(super) fn start(
         root: &Path,
         request: RunRequest,
+        background: bool,
+        log: File,
+    ) -> Result<Self> {
+        let target = format!("{}/{}", request.package, request.name);
+        Self::spawn(root, ChildRequest::Run(request), target, background, log)
+    }
+
+    pub(super) fn start_debug(
+        root: &Path,
+        manifest: PathBuf,
+        tool: &str,
+        log: File,
+    ) -> Result<Self> {
+        Self::spawn(
+            root,
+            ChildRequest::Debug {
+                manifest,
+                tool: tool.into(),
+            },
+            tool.into(),
+            false,
+            log,
+        )
+    }
+
+    fn spawn(
+        root: &Path,
+        request: ChildRequest,
+        target: String,
         background: bool,
         log: File,
     ) -> Result<Self> {
@@ -72,6 +109,7 @@ impl ManagedRun {
         let child = Command::new(std::env::current_exe()?)
             .arg("run-child")
             .arg(serde_json::to_string(&request)?)
+            .env("ROSPM_LANG", crate::i18n::current().code())
             .current_dir(root)
             .process_group(0)
             .stdin(Stdio::from(OwnedFd::from(supervisor)))
@@ -83,7 +121,7 @@ impl ManagedRun {
             child,
             status: RunStatus {
                 id,
-                target: format!("{}/{}", request.package, request.name),
+                target,
                 background,
                 task: false,
                 task_snapshot: None,
@@ -182,7 +220,10 @@ impl Drop for ManagedRun {
 }
 
 pub fn child(request: &str) -> Result<()> {
-    let request: RunRequest = serde_json::from_str(request)?;
+    let request = match serde_json::from_str::<ChildRequest>(request)? {
+        ChildRequest::Run(request) => request,
+        ChildRequest::Debug { manifest, tool } => return super::run::debug_tool(manifest, &tool),
+    };
     anyhow::ensure!(
         !(request.venv && request.venv_path.is_some()),
         "conflicting virtual environments"

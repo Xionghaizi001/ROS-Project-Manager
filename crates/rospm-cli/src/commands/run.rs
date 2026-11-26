@@ -1,7 +1,9 @@
 use std::io::{self, IsTerminal, Read, Write};
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{bail, Context as _, Result};
+use rospm_core::manifest::ProviderKind;
 use rospm_core::mirror;
 use rospm_core::probe::Host;
 use rospm_core::provider::{self, Shell};
@@ -66,6 +68,95 @@ pub(super) fn managed(global: &Global, request: RunRequest) -> Result<()> {
         })
         .with_context(|| rospm_core::msg!("cli.run.not_found", name = request.name).to_string())?;
     let command = command(&loaded, &target, &request.args, request.verbosity, true)?;
+    check_status(super::run_process::supervise(command)?)
+}
+
+pub(super) fn debug_tool(manifest: PathBuf, tool: &str) -> Result<()> {
+    anyhow::ensure!(
+        rospm_tui::DEBUG_TOOLS.contains(&tool),
+        "unknown ROS debug tool: {tool}"
+    );
+    let loaded = super::load(&Global {
+        manifest: Some(manifest),
+        verbose: false,
+        json: false,
+        interaction: None,
+        task: None,
+        interactive: false,
+    })?;
+    anyhow::ensure!(
+        loaded.manifest.environment.provider == ProviderKind::Native,
+        crate::i18n::tr("cli.tui.debug.no_project")
+    );
+    let _read_leases = loaded.read_leases(false)?;
+    let host = Host::probe();
+    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
+    let env = provider::native::Native::ros_env_script(&ctx, Shell::Bash)?;
+    let distro = loaded.manifest.project.ros_distro;
+    let package = format!("ros-{distro}-{}", tool.replace('_', "-"));
+    let missing = rospm_core::msg!("cli.tui.debug.missing", tool = tool, package = package);
+    let no_display = crate::i18n::tr("cli.tui.debug.no_display");
+    let script = format!(
+        "set -e\n{env}\n{}",
+        r#"
+executable=
+if [[ $1 == rqt ]]; then
+    executable=$(type -P rqt || true)
+elif prefix=$(ros2 pkg prefix "$1" 2>/dev/null); then
+    executable="$prefix/lib/$1/$1"
+fi
+if [[ ! -x $executable ]]; then
+    printf '%s\n' "$2" >&2
+    exit 127
+fi
+if [[ -z $DISPLAY && -z $WAYLAND_DISPLAY && -z $QT_QPA_PLATFORM ]]; then
+    printf '%s\n' "$3" >&2
+    exit 1
+fi
+exec "$executable"
+"#
+    );
+    let mut command = Command::new("/bin/bash");
+    command
+        .args([
+            "--noprofile",
+            "--norc",
+            "-c",
+            &script,
+            "rospm-debug",
+            tool,
+            &missing.to_string(),
+            &no_display,
+        ])
+        .current_dir(&loaded.root)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin");
+    // Keep display and ROS communication variables from the session, while
+    // sourcing the requested ROS distro and overlay paths from scratch.
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("CONDA_")
+            || name.starts_with("VIRTUAL_ENV")
+            || name.starts_with("PYTHON")
+            || matches!(
+                name.as_ref(),
+                "_CE_CONDA"
+                    | "_CE_M"
+                    | "BASH_ENV"
+                    | "LD_LIBRARY_PATH"
+                    | "AMENT_PREFIX_PATH"
+                    | "CMAKE_PREFIX_PATH"
+                    | "COLCON_PREFIX_PATH"
+                    | "ROS_DISTRO"
+                    | "ROS_VERSION"
+                    | "ROS_PYTHON_VERSION"
+                    | "QT_PLUGIN_PATH"
+                    | "QT_QPA_PLATFORM_PLUGIN_PATH"
+                    | "QML2_IMPORT_PATH"
+            )
+        {
+            command.env_remove(key);
+        }
+    }
     check_status(super::run_process::supervise(command)?)
 }
 

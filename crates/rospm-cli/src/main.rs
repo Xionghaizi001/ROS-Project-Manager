@@ -640,6 +640,9 @@ fn execute_cli(
                 run_empty: tr("cli.run.none"),
                 run_node: tr("cli.run.nodes"),
                 run_launch: tr("cli.run.launch_files"),
+                debug_tools: rospm_tui::DEBUG_TOOLS
+                    .map(|tool| tr(&format!("cli.tui.debug.{tool}"))),
+                debug_no_project: tr("cli.tui.debug.no_project"),
                 run_processes: tr("cli.tui.run_processes"),
                 run_foreground: tr("cli.tui.run_foreground"),
                 run_background: tr("cli.tui.run_background"),

@@ -285,6 +285,7 @@ pub(crate) fn draw(
                 format!("{} / {}", text.tabs[0], text.project_scan_title)
             }
             Some(InstallPage::Run(page)) => page.title(text),
+            Some(InstallPage::DebugTool(tool)) => (*tool).into(),
             Some(InstallPage::Shell) => "Shell".into(),
             Some(InstallPage::CliHelp) => format!("{} / {}", text.tabs[HELP_TAB], text.cli_help),
             None => text.tabs[selected].clone(),

@@ -91,6 +91,16 @@ impl rospm_tui::RunBackend for Runs {
         Ok(())
     }
 
+    fn start_debug(&mut self, root: &Path, manifest: &Path, tool: &str) -> Result<RunStatus> {
+        let manifest = std::env::current_dir()?.join(manifest);
+        let log = output::create()?;
+        let process = ManagedRun::start_debug(root, manifest, tool, writer(&log)?)?;
+        let status = process.status().clone();
+        self.track(status.clone(), log);
+        self.foreground.push(process);
+        Ok(status)
+    }
+
     fn foreground(&mut self) -> Vec<RunStatus> {
         self.foreground.retain_mut(ManagedRun::refresh);
         let mut running = statuses(&self.foreground);

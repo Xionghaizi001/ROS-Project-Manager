@@ -9,6 +9,7 @@ use crate::{dashboard::Dashboard, pages::Entry, Text};
 
 pub trait RunBackend {
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()>;
+    fn start_debug(&mut self, root: &Path, manifest: &Path, tool: &str) -> Result<RunStatus>;
     fn foreground(&mut self) -> Vec<RunStatus>;
     fn background(&mut self, root: &Path) -> Result<Vec<RunStatus>>;
     fn history(&mut self) -> Vec<RunStatus>;

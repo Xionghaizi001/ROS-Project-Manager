@@ -224,6 +224,18 @@ cli:
     tab_build: "Build"
     tab_run: "Run"
     tab_debug: "Debug"
+    debug:
+      no_project: "Open a ROS project using the native provider to launch these tools"
+      rqt: "Plugin-based debugging dashboard"
+      rviz2: "3D visualization"
+      rqt_graph: "Node and topic graph"
+      rqt_topic: "Inspect topics and messages"
+      rqt_publisher: "Publish topic messages"
+      rqt_service_caller: "Call ROS services"
+      rqt_reconfigure: "View and edit node parameters"
+      rqt_console: "View ROS logs"
+      missing: "Could not find %{tool}. Add %{package} to dependencies.apt and run rospm apply."
+      no_display: "No graphical display is available. Launch from a desktop terminal or an SSH session with X11 forwarding."
     tab_diagnose: "Diagnose"
     tab_help: "Help"
     tab_settings: "Settings"
@@ -254,6 +266,7 @@ cli:
       On Install, open ROS, Conda, or Project base components and follow the footer. Press d to check dependencies, D to install them, or a to prepare the environment.
       On Build, press b to build or B to clean build artifacts and rebuild, then confirm.
       On Run, pick a built node or launch file, enter arguments, and choose foreground or background. You can also open a project shell.
+      On Debug, open a ROS tool. Press l in the process list to view its output and any installation hints.
       On Diagnose, press c to check the environment or v to verify it against the lockfile.
       Press p or click the process count to manage processes and saved tasks. Focus a task and press l to open its log; open task details to explicitly continue confirmation/authorization or cancel.
       Closing the TUI does not cancel environment tasks. Reopen the same project to recover task status; cancellation takes effect at a safe step boundary and does not roll back changes.

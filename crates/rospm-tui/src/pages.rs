@@ -1,6 +1,6 @@
 //! Page data stays independent of terminal drawing and column widths.
-use crate::{dashboard::Dashboard, InstallPage, Text, HELP_TAB};
-use rospm_core::{conda::ToolInstallation, probe::Status, run::TargetKind};
+use crate::{dashboard::Dashboard, InstallPage, Text, DEBUG_TAB, DEBUG_TOOLS, HELP_TAB};
+use rospm_core::{conda::ToolInstallation, manifest::ProviderKind, probe::Status, run::TargetKind};
 
 pub(crate) struct Entry {
     pub cells: [String; 3],
@@ -54,6 +54,21 @@ pub(crate) fn rows(
     }
     if let Some(InstallPage::Run(page)) = install_page {
         return page.rows(text);
+    }
+    if tab == DEBUG_TAB {
+        return if dashboard.is_some_and(|d| d.provider == ProviderKind::Native) {
+            DEBUG_TOOLS
+                .into_iter()
+                .zip(&text.debug_tools)
+                .map(|(tool, description)| {
+                    let mut row = Entry::link(tool);
+                    row.cells[2].clone_from(description);
+                    row
+                })
+                .collect()
+        } else {
+            vec![Entry::value(&text.tabs[DEBUG_TAB], &text.debug_no_project)]
+        };
     }
     if let Some(InstallPage::ScannedProjects(projects)) = install_page {
         return if projects.is_empty() {
