@@ -86,7 +86,7 @@ build_args = ["--symlink-install", "--event-handlers", "console_direct+"]
 
 # ---------- 依赖 ----------
 [dependencies]
-apt = ["libfoo-dev"]                       # package.xml 未覆盖的额外 apt 包
+apt = ["libfoo-dev"]                       # 项目开发者指定的额外 apt 包
 pip = ["numpy>=1.26"]                      # 只作记录（决策 #6）
 
 [dependencies.rosdep]
@@ -322,6 +322,8 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 | `doctor [--no-network]` | 只读 | 自检工具依赖（vcs、colcon、rosdep、pixi、docker）是否可用；ROS apt 源 / `universe` / locale 状态；官方源与各镜像的测速表 | — |
 
 全局选项：`--manifest <path>`、`--verbose`、`--json`（机器可读输出，供 GUI 与 CI 使用）、`--lang zh|en`。
+
+native 项目的 `[dependencies].apt` 由项目开发者按需填写，可列入调试工具、可选功能包和其他需要随项目环境安装的 apt 包。两种 `init` 模式均生成空列表。常规 `rospm apply` 按目标平台处理包名覆盖后安装列表中的包。
 
 诊断首期覆盖常见 GCC / Clang 语法、类型及缺头文件、CMake 包发现、链接库 / 符号缺失，以及 Python 语法、缩进、导入与 traceback 异常；自定义工具格式、交错 traceback、ExceptionGroup 树等不保证识别，依赖建议不自动安装依赖或修改源码。交互 shell 中自行运行的命令不在采集范围内。
 

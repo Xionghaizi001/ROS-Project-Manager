@@ -89,6 +89,16 @@ fn init_from_env_writes_a_valid_manifest_that_check_accepts() {
         "a draft without any TODO is suspicious:\n{text}"
     );
     assert!(text.contains("#   rclcpp"), "{text}");
+    let apt_line = text
+        .lines()
+        .find(|line| line.starts_with("apt = "))
+        .unwrap();
+    assert!(apt_line.starts_with("apt = []") && !apt_line.contains("TODO"));
+    assert!(v["draft"]["todos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|todo| !todo.as_str().unwrap().contains("dependencies.apt")));
 
     // Refuses to overwrite without --force, like the template path.
     let out = rospm()
@@ -463,6 +473,7 @@ fn chinese_locale_localises_help_check_apply_and_errors() {
     // init --from-env: detected / TODO lines and the drafted file's comments.
     let out = rospm_zh()
         .current_dir(&dir)
+        .env("COLCON_DEFAULTS_FILE", dir.join("missing-defaults.yaml"))
         .args(["init", "--from-env"])
         .output()
         .unwrap();

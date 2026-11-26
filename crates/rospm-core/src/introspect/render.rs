@@ -122,7 +122,7 @@ impl Draft {
 
         o.push_str("[dependencies]\n");
         o.push_str(&format!(
-            "apt = []                              # TODO: {}\n",
+            "apt = []                              # {}\n",
             msg!("draft.apt_hint")
         ));
         o.push_str(&format!(

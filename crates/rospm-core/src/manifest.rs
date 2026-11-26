@@ -332,7 +332,7 @@ pub struct Colcon {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dependencies {
-    /// Extra apt packages not covered by any `package.xml`.
+    /// Extra apt packages the project explicitly asks native apply to install.
     #[serde(default)]
     pub apt: Vec<String>,
     /// Recorded only; never installed by rospm (decision #6).

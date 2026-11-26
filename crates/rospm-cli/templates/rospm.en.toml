@@ -39,7 +39,7 @@ underlays = []
 build_args = ["--symlink-install"]
 
 [dependencies]
-apt = []                                 # extra apt packages not in any package.xml
+apt = []                                 # extra apt packages chosen by project developers (e.g. debugging tools or add-ons)
 pip = []                                 # recorded only, installed via rosdep
 
 [dependencies.rosdep]

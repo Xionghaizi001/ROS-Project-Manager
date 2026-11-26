@@ -834,7 +834,6 @@ init:
     placeholder: "占位"
   dependencies:
     rosdep_keys: "dependencies：package.xml 引用了 %{count} 个 rosdep 键（交给 rosdep 解析，以注释列出）"
-    apt_undetectable: "dependencies.apt：package.xml 之外的额外 apt 包无法探测；请手动添加"
 
 draft:
   header:
@@ -848,7 +847,7 @@ draft:
   sources_hint: "没有匹配的 .repos 文件；纯本地源码可省略"
   underlays_hint: "未探测到叠加顺序"
   mixins_hint: "colcon mixins 无法从环境中还原（决策 #8）"
-  apt_hint: "package.xml 未覆盖的额外 apt 包"
+  apt_hint: "项目开发者指定的额外 apt 包（如调试工具或可选功能包）"
   pip_hint: "仅记录，通过 rosdep 安装（决策 #6）"
   rosdep_keys: "package.xml 引用的 %{count} 个 rosdep 键（由 `rosdep install` 解析，无需声明）："
   env_hint: "当前环境未设置任何 ROS_* 变量"

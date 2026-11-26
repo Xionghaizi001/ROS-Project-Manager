@@ -396,5 +396,4 @@ pub(super) fn detect_workspaces(d: &mut Draft, root: &Path, facts: &HostFacts) {
             count = d.external_keys.len()
         ));
     }
-    d.todos.push(msg!("init.dependencies.apt_undetectable"));
 }

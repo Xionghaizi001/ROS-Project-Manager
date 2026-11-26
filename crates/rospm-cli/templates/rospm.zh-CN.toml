@@ -39,7 +39,7 @@ underlays = []
 build_args = ["--symlink-install"]
 
 [dependencies]
-apt = []                                 # package.xml 未覆盖的额外 apt 包
+apt = []                                 # 项目开发者指定的额外 apt 包（如调试工具或可选功能包）
 pip = []                                 # 仅记录，通过 rosdep 安装
 
 [dependencies.rosdep]

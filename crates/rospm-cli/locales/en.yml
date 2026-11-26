@@ -839,7 +839,6 @@ init:
     placeholder: "placeholder"
   dependencies:
     rosdep_keys: "dependencies: %{count} rosdep keys referenced by package.xml (left to rosdep, listed as a comment)"
-    apt_undetectable: "dependencies.apt: extra apt packages outside package.xml cannot be detected; add them by hand"
 
 draft:
   header:
@@ -853,7 +852,7 @@ draft:
   sources_hint: "no .repos file matched; omit for purely local sources"
   underlays_hint: "overlay order not detected"
   mixins_hint: "colcon mixins are not recoverable from an environment (decision #8)"
-  apt_hint: "extra apt packages not covered by package.xml"
+  apt_hint: "extra apt packages chosen by project developers (e.g. debugging tools or add-ons)"
   pip_hint: "recorded only, installed via rosdep (decision #6)"
   rosdep_keys: "%{count} rosdep keys referenced by package.xml (resolved by `rosdep install`, nothing to declare):"
   env_hint: "no ROS_* variables set in the current environment"
