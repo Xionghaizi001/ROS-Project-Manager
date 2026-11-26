@@ -305,6 +305,25 @@ fn status_label(status: rospm_core::probe::Status, text: &Text) -> &str {
     }
 }
 
+fn plan_lines(plan: &Plan) -> Vec<String> {
+    let mut lines = vec![format!("{}  steps={}", plan.title, plan.steps.len())];
+    lines.extend(plan.steps.iter().map(step_line));
+    lines
+}
+
+fn step_line(step: &rospm_core::plan::Step) -> String {
+    let line = match step {
+        rospm_core::plan::Step::Run(command) => command.render(),
+        rospm_core::plan::Step::Conda(_) => "conda environment step".to_string(),
+        rospm_core::plan::Step::WriteFile { path, .. } => format!("write {}", path.display()),
+        rospm_core::plan::Step::FetchKey { url, dest, .. } => {
+            format!("fetch {url} -> {}", dest.display())
+        }
+        rospm_core::plan::Step::Note(message) => format!("note: {message}"),
+    };
+    line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,23 +349,4 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(found, [expected]);
     }
-}
-
-fn plan_lines(plan: &Plan) -> Vec<String> {
-    let mut lines = vec![format!("{}  steps={}", plan.title, plan.steps.len())];
-    lines.extend(plan.steps.iter().map(step_line));
-    lines
-}
-
-fn step_line(step: &rospm_core::plan::Step) -> String {
-    let line = match step {
-        rospm_core::plan::Step::Run(command) => command.render(),
-        rospm_core::plan::Step::Conda(_) => "conda environment step".to_string(),
-        rospm_core::plan::Step::WriteFile { path, .. } => format!("write {}", path.display()),
-        rospm_core::plan::Step::FetchKey { url, dest, .. } => {
-            format!("fetch {url} -> {}", dest.display())
-        }
-        rospm_core::plan::Step::Note(message) => format!("note: {message}"),
-    };
-    line
 }

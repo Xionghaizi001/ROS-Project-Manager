@@ -209,6 +209,7 @@ pub(crate) fn footer_action_at(
     None
 }
 
+#[allow(clippy::too_many_arguments)] // Rendering borrows the event loop's separate UI state fields.
 pub(crate) fn draw(
     frame: &mut ratatui::Frame<'_>,
     dashboard: Option<&Dashboard>,

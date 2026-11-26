@@ -279,6 +279,7 @@ pub fn run_with_actions(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // Preserve the public callback-based entry point.
 pub fn run_with_runs(
     manifest_path: Option<&Path>,
     text: Text,
@@ -343,6 +344,7 @@ fn run_dashboard(
     result
 }
 
+#[allow(clippy::too_many_arguments)] // Callbacks and the workspace lock remain owned by the terminal session.
 fn loop_ui<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
     manifest: Option<&Path>,
@@ -1015,6 +1017,7 @@ fn lock_project(project: &dashboard::Dashboard, text: &Text) -> Result<Workspace
         .with_context(|| format!("{} ({})", text.tui_already_running, project.root.display()))
 }
 
+#[allow(clippy::too_many_arguments)] // Switching projects updates the lock and navigation state together.
 fn open_project(
     path: PathBuf,
     text: &Text,
@@ -1425,6 +1428,7 @@ fn first_selectable(
         .position(|row| row.selectable)
 }
 
+#[allow(clippy::too_many_arguments)] // Focus and scrolling use the current page and viewport together.
 fn move_focus(
     focused: &mut Option<usize>,
     scroll: &mut usize,

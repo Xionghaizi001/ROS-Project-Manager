@@ -206,9 +206,7 @@ impl Page {
                         };
                     }
                 } else if selected.is_none() {
-                    let Some(process) = process_at(list, index) else {
-                        return None;
-                    };
+                    let process = process_at(list, index)?;
                     *selected = Some(process.clone());
                     *error = None;
                     return controllable(process).then_some(1);

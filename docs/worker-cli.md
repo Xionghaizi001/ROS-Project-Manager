@@ -60,7 +60,7 @@ rospm task --runtime /tmp/rospm-my-project logs remove-001
 rospm task --runtime /tmp/rospm-my-project confirm remove-001 --step 2 reject
 ```
 
-确认响应只能是 `approve`、`reject` 或 `cancel`。错误步骤、重复响应和已经取消的确认会被拒绝。客户端断开不会批准或取消任务。任务运行期间可以使用 `cancel` 请求取消，实际生效时间遵循执行步骤的取消边界。
+确认响应只能是 `approve`、`reject` 或 `cancel`。错误步骤、重复响应和已经取消的确认会被拒绝。客户端断开不会批准或取消任务。任务运行期间可以使用 `cancel` 请求取消，实际生效时间遵循执行步骤的取消边界。apt / dpkg 等受保护步骤完成当前命令后才响应取消；已完成的系统更改不会回滚。
 
 ## 系统权限
 
@@ -105,7 +105,7 @@ worker 在分派前持久化提交账本 `@submissions.json` 和初始 `pending`
 
 每个请求最多分派一次。若账本已写入但未成功创建快照，重试会返回 `task_unavailable`。分派被拒绝会记为 `failed`，同一请求的重试不会再次入队。账本损坏会导致提交失败，worker 会保留原账本。
 
-CLI worker 会保留已结束任务。库接口 `TaskStore::prune_completed` 可按数量清理最旧的终态任务目录，同时保留活动任务和去重账本。已清理任务的旧 ID 仍占用，重复提交返回 `task_unavailable`。
+CLI worker 会保留已结束任务，不自动轮转或清理磁盘日志。库接口 `TaskStore::prune_completed` 可按数量清理最旧的终态任务目录，同时保留活动任务和去重账本。已清理任务的旧 ID 仍占用，重复提交返回 `task_unavailable`。
 
 ## 本机 socket 协议
 

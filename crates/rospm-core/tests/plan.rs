@@ -19,12 +19,16 @@ const FULL: &str = include_str!("fixtures/full.toml");
 
 /// A bare host: nothing installed, locale POSIX, no ROS apt source.
 fn bare_host() -> Host {
-    Host::empty()
+    Host {
+        // Match ctx()'s synthetic target, independent of the test runner's architecture.
+        platform: Some(Platform::LinuxX86_64),
+        ..Host::empty()
+    }
 }
 
 /// A host the official install guide has already been followed on.
 fn ready_host() -> Host {
-    let mut h = Host::empty();
+    let mut h = bare_host();
     h.os = Some(OsRelease::parse(
         "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.2 LTS\"\n",
     ));

@@ -1,7 +1,7 @@
 # rospm 规格 — manifest / lock schema v1
 
-> 状态：manifest / lock schema v1 已于 2026-10-25 冻结；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。软件版本已设为 1.0.0，1.0 发布验收见 [Phase 4 启动清单](p4-release-preparation.md)。
-> 决策依据见 `decisions.md`。
+> 状态：软件版本为 1.1.0，manifest / lock 继续使用已于 2026-10-25 冻结的 schema v1；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。1.0 发布准备记录见 [Phase 4 启动清单](p4-release-preparation.md)。
+> TUI 与 worker 架构决策见本文 [TUI 与任务生命周期](#tui-与任务生命周期)；阶段路线图见 [phases.md](phases.md)。
 
 ## 1. 文件与目录约定
 
@@ -332,6 +332,18 @@ definition_sha256 = "sha256:…"             # 规范化环境定义的哈希
 `check --target aarch64`（也接受 `linux-aarch64` / `arm64`）的仓库检查独立输出为 JSON 的 `repositories.items`；未指定 `--target` 时该字段为 `null`，不联网查询索引。native 查询官方 ROS 与 Ubuntu 的目标架构索引（arm64 使用 Ubuntu ports），覆盖 release / updates / security 的四个组件，检查平台覆盖合并后的 apt 包、底包及三个构建工具包。pixi 读取配置的 `pixi.toml`，不存在则在内存中生成默认配置；查询各 channel 的目标子目录及 `noarch` 的完整 `repodata.json.bz2`，包含普通、host、build 与适用 target 依赖，暂不支持 feature 环境。需安装 `gzip`（apt）或 `bzip2`（conda）。
 
 这里仅检查包名存在性，不求解版本约束、虚拟包或传递依赖，也不代表目标主机已安装或可成功构建。成功索引中存在包即报告 `ok`；全部索引查询成功仍找不到才报告 `missing`；下载、解压、解析失败或 `ROSPM_NO_NETWORK=1` 则报告 `unknown`，`--strict` 退出 1。该检查不修改主机 apt 源、不注册额外架构，也不替代包管理器安装时的签名验证。
+
+### TUI 与任务生命周期
+
+`rospm tui` 复用 core 的业务计划、校验与诊断，通过结构化任务协议获取状态和结果，不解析 CLI 人类可读输出。`rospm worker` / `rospm task` 的参数、协议 v1、权限、确认绑定及提交去重见 [worker 使用说明](worker-cli.md)。同步 CLI 保持原参数、退出码、中英文与 JSON 契约，变更操作交由独立 worker 执行并跟随结果。
+
+架构决策：采用按需启动的当前用户进程和本机私有 Unix socket。环境任务持有自己的子进程、工作区租约和持久化结果；TUI / CLI 客户端退出不取消任务，重连不重复提交或默认批准。无需常驻 daemon 或网络 RPC。SSH 用户登录目标机后运行本机客户端；存活取决于目标机是否清理登录会话所属 cgroup，不承诺跨主机重启存活或自动续跑。
+
+任务状态包括等待确认、等待授权、取消请求及准确终态。取消可中断构建进程组；apt / dpkg 等受保护步骤先完成当前步骤，再在安全边界取消，已完成的更改不回滚。系统命令由前台 sudo 授权，密码不进入协议；Git、Conda、构建和项目 shell 保持普通用户。授权命令已交付但结果丢失时记为 `unknown`，先核实系统状态后才能显式重新提交。
+
+每个任务的 `.rospm/worker/tasks/<id>/snapshot.json` 与 `logs.jsonl` 独立持久化，worker 退出后可离线查询；CLI 不自动清理，去重账本保留旧 ID，不能删除账本来重放任务。`.rospm/log/build.log` 是每次覆盖的兼容日志。实时队列有界不代表磁盘日志有容量上限；用户按 [保留规则](worker-cli.md#任务存储与提交去重) 管理记录。
+
+交互 Shell 复用真实 PTY，由 TUI 所有的 shell worker 管理，不实现终端模拟器。`rospm bakground`（现有命令拼写）收起会话并返回界面，重开 Shell 接回原会话；`exit` / `rospm exit` 结束会话。关闭 TUI 会清理它持有的 shell 及前台进程；环境任务与后台 Run 任务另由独立 worker 持有。实测终端范围与故障证据见 [P4.5 总体验收](p454-acceptance-20261126.md)。
 
 ### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
 

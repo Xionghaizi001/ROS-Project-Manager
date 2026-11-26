@@ -12,14 +12,15 @@
 
 ## 当前状态
 
-当前版本为 **v1.0.0**。
+当前版本为 **v1.1.0**。
 
 - **native 工作流**：支持初始化、主机检查、依赖安装、源码导入、锁定重放、构建、环境加载与卸载；在 Ubuntu 22.04 / Humble、24.04 / Jazzy 实机测试通过。
 - **aarch64**：arm64 架构已在设计上支持，但未进行实机验证（因为开发者手上暂时没有）。
 - **Conda**：支持已有环境及自动安装 Miniforge、创建受管环境。
 - **错误诊断**：构建日志、常见 C++ / Python 错误摘要；未知错误保留原始日志和失败状态。
 - **worker CLI**：可显式启动独立任务服务，提交、查询、确认与取消任务；使用方式见 [worker CLI 使用说明](docs/worker-cli.md)。
-- **后续功能**：完整 TUI、离线导出 / 导入、编辑器集成、GUI、Pixi / Docker 提供者、ROS1 支持。
+- **TUI**：键盘 / 鼠标操作、独立环境任务、日志与任务重连。
+- **后续功能**：离线导出 / 导入、编辑器集成、GUI、Pixi / Docker 提供者、ROS1 支持；见 [阶段路线图](docs/phases.md)。
 
 ## 从源码构建
 
@@ -88,6 +89,14 @@ rospm uninstall --dry-run                # 先审阅卸载范围
 
 构建与 `apply --build` 的完整输出保存在 `.rospm/log/build.log`，每次执行覆盖。失败摘要用于辅助排查，不替代原始日志；`--json` 提供机器可读结果，构建计划和子进程输出转到 stderr。
 
+## 终端界面与任务恢复
+
+执行 `rospm tui`，用 Tab / 方向键或鼠标切换页面；`l` 查看日志，`p` 打开进程管理。环境任务由当前用户的独立 worker 执行。关闭 TUI 或退出日志跟随不等于取消；重开同一项目可查看原任务，显式继续确认、授权或请求取消。apt / dpkg 等受保护步骤在安全边界响应取消，已完成的更改不会回滚。
+
+系统步骤由前台 sudo 授权，项目 shell、Git、Conda 和构建保持普通用户身份。交互 Shell 的生命周期属于 TUI；它与可断连继续的环境任务不同。SSH 断连存活取决于目标机的 session / cgroup 策略；主机或 worker 故障只恢复状态，不自动重放副作用。
+
+任务日志与结果保存在 `.rospm/worker/tasks/<id>/logs.jsonl` 和 `snapshot.json`，退出后保留，CLI 不自动轮转或清理。用原 ID 查询或继续，先核实 `unknown` 任务的系统状态。操作、保留规则与恢复命令见 [worker 使用说明](docs/worker-cli.md)。
+
 ## Conda 环境
 
 已有环境可通过清单的 `[build.conda]` 指定 `name` 或 `prefix`，也可仅覆盖本次构建：
@@ -109,7 +118,7 @@ rospm run --venv package/node
 rospm shell --venv
 ```
 
-显式 venv 覆盖清单 Conda；不传参数则保持原有行为。所选 venv 会清除继承的 Conda/Python 路径并从系统 PATH 组装环境。支持边界与验证记录见 [P4.4 说明](docs/p44-venv.md)。 可用 `rospm venv install --venv -r requirements.txt` 安装显式依赖文件，`--uv` 选择 uv 后端，`--dry-run` 预览。现有 pip 字段只记录，`apply --locked` 不重放 venv，`pyproject.toml` / `uv.lock` 不自动同步。详见 [依赖与锁定边界](docs/p44-python-dependencies.md) 和 [Humble / Jazzy 隔离验收](docs/p44-install-validation.md)。
+显式 venv 覆盖清单 Conda；不传参数则保持原有行为。所选 venv 会清除继承的 Conda/Python 路径并从系统 PATH 组装环境。可用 `rospm venv install --venv -r requirements.txt` 安装显式依赖文件，`--uv` 选择 uv 后端，`--dry-run` 预览。现有 pip 字段只记录，`apply --locked` 不重放 venv，`pyproject.toml` / `uv.lock` 不自动同步。
 
 `rospm check --venv --strict`、`rospm verify --venv` 和 `rospm doctor --venv --no-network` 可诊断所选环境与旧 CMake Python 缓存；`verify` 仍需要锁文件，venv 就绪不代表其依赖已锁定。
 
@@ -200,4 +209,4 @@ rospm --lang zh --help
 
 若希望新终端也能找到命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入 `~/.bashrc`（已有该配置时无需重复添加）。更新源码后，重新编译并执行上述 `install` 命令即可更新本地安装。
 
-二进制依赖目标系统的运行时环境。建议在实际使用的 Ubuntu 版本和架构上构建、验证；在较新 Ubuntu 上生成的产物不能直接假定可在较旧版本上运行。
+二进制依赖目标系统的运行时环境。建议在实际使用的 Ubuntu 版本和架构上构建、验证。

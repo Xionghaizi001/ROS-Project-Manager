@@ -750,8 +750,9 @@ pub fn serve(root: PathBuf, runtime: &Path, idle_timeout: Duration) -> Result<()
                     let process = ManagedRun::start(&root, request, true, log)?;
                     let started = process.status().clone();
                     processes.push(process);
-                    Ok(Some(Message::RunStarted { process: started })
-                        .filter(|_| output_fd.is_some()))
+                    Ok(output_fd
+                        .is_some()
+                        .then_some(Message::RunStarted { process: started }))
                 })(),
                 Message::SignalRun { id, signal } => {
                     signal_run(&processes, &id, signal).map(|_| None)

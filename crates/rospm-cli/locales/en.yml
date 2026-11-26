@@ -255,7 +255,10 @@ cli:
       On Build, press b to build or B to clean build artifacts and rebuild, then confirm.
       On Run, pick a built node or launch file, enter arguments, and choose foreground or background. You can also open a project shell.
       On Diagnose, press c to check the environment or v to verify it against the lockfile.
-      Press p or click the process count to manage processes. Focus a process and press l to open its log.
+      Press p or click the process count to manage processes and saved tasks. Focus a task and press l to open its log; open task details to explicitly continue confirmation/authorization or cancel.
+      Closing the TUI does not cancel environment tasks. Reopen the same project to recover task status; cancellation takes effect at a safe step boundary and does not roll back changes.
+      System steps use foreground sudo; run the TUI as your normal user. Worker/host failure never automatically replays tasks.
+      In Shell, exit ends the session; rospm bakground returns to the TUI and keeps the shell running. Closing the TUI ends its shell and foreground processes.
     cli_help: "CLI usage"
     cli_usage: |-
       Command help
