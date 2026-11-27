@@ -279,38 +279,37 @@ cli:
       In Shell, Ctrl+] returns to the TUI and keeps the shell and its jobs running, even during a foreground command. At the prompt, rospm background also detaches; exit ends the session. Reopen Shell to reattach. Closing the TUI ends its shell and foreground processes.
     cli_help: "CLI usage"
     cli_usage: |-
-      Command help
-      rospm --help                  List subcommands and global options
-      rospm build --help            Show options for a subcommand
-      rospm --manifest PATH check   Select a project manifest explicitly
-
-      Initialize and install
-      rospm init --distro jazzy --base ros-base
-        Create rospm.toml. Use humble on Ubuntu 22.04 or jazzy on 24.04.
-      rospm init --from-env         Draft a manifest from the existing environment
-      rospm check                   Check the project environment
+      Command reference (alphabetical)
+      rospm apply                   Prepare the environment and import source
       rospm apply --dry-run         Preview installation and project changes
-      rospm apply                  Prepare the environment and import source
-      rospm deps check              Check dependencies declared in package.xml
-      rospm deps install --dry-run   Preview dependency installation. Drop --dry-run to install.
-
-      Build and run
+      rospm apply --locked --build  Prepare and build using the lockfile
       rospm build                   Build the workspace
       rospm build -- --packages-select my_pkg
         Pass package selection through to colcon.
-      rospm run --list               List runnable nodes and launch files
+      rospm check                   Check the project environment
+      rospm completions bash        Generate a Bash script for Tab completion
+      rospm deps check              Check dependencies declared in package.xml
+      rospm deps install --dry-run  Preview dependency installation. Drop --dry-run to install.
+      rospm doctor                  Check host tools, package sources, and network
+      rospm env                     Print the project environment; load it in Bash with source <(rospm env)
+      rospm help                    List subcommands and global options; also available as rospm --help
+      rospm help build              Show options for a subcommand; also available as rospm build --help
+      rospm init --distro jazzy --base ros-base
+        Create rospm.toml. Use humble on Ubuntu 22.04 or jazzy on 24.04.
+      rospm init --from-env         Draft a manifest from the existing environment
+      rospm lock                    Write or update lock records for this platform
+      rospm run --list              List runnable nodes and launch files
       rospm run my_pkg/my_node       Run a target
       rospm shell                   Open a shell with the project environment
-      source <(rospm env)            Load the project environment into the current Bash shell
-
-      Lock, diagnose, and uninstall
-      rospm lock                    Write or update lock records for this platform
+      rospm uninstall --dry-run     Preview what uninstall would remove
       rospm verify                  Verify the environment against the lockfile
-      rospm apply --locked --build   Prepare and build using the lockfile
-      rospm doctor                  Check host tools, package sources, and network
-      rospm uninstall --dry-run      Preview what uninstall would remove
+
+      Tab completion
+      In Bash, run source <(rospm completions bash) to complete subcommands, options, and fixed values.
+      Add this command to ~/.bashrc to enable it in new terminals; see rospm completions --help for other shells.
 
       Global options
+      rospm --manifest PATH check selects a project manifest explicitly.
       Use --lang zh or --lang en to select a language, --json for structured results, and -v or -vv for more detail.
     footer_select: "↑↓ Select"
     footer_open: "Enter Open"
@@ -424,6 +423,14 @@ cli:
     not_run: "not run"
     not_found: "not found"
     core_missing: "core tools missing: native provider needs %{tools}"
+  completions:
+    about: "Generate a shell script for Tab completion"
+    shell: "Shell to generate completions for"
+    usage: |-
+      Bash: source <(rospm completions bash)
+      Zsh:  autoload -Uz compinit && compinit; source <(rospm completions zsh)
+      Fish: rospm completions fish | source
+      Add the corresponding command to your shell startup file to enable completion in new terminals.
   help:
     about: "Print this message or the help of the given subcommand"
     command: "Subcommand to describe (e.g. `deps install`)"

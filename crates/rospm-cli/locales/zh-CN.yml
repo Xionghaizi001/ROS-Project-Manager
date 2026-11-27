@@ -274,38 +274,37 @@ cli:
       在 Shell 按 Ctrl+] 收起会话并返回界面，前台命令运行时也可使用，shell 与任务继续运行。提示符下也可输入 rospm background 收起会话；exit 结束会话。重开 Shell 可接回原会话。关闭 TUI 会结束其 shell 与前台进程。
     cli_help: "CLI 使用说明"
     cli_usage: |-
-      命令帮助
-      rospm --help                  列出子命令和全局选项
-      rospm build --help            查看指定子命令的参数
-      rospm --manifest 路径 check   显式指定项目清单
-
-      初始化和安装
-      rospm init --distro jazzy --base ros-base
-        创建 rospm.toml。Ubuntu 22.04 使用 humble，24.04 使用 jazzy。
-      rospm init --from-env         根据现有环境生成清单草稿
-      rospm check                   检查项目环境
+      命令参考（按字母排序）
+      rospm apply                   准备环境并导入源码
       rospm apply --dry-run         预览安装和项目变更
-      rospm apply                  准备环境并导入源码
-      rospm deps check              检查 package.xml 声明的依赖
-      rospm deps install --dry-run   预览依赖安装，去掉 --dry-run 后执行
-
-      编译和运行
+      rospm apply --locked --build  按锁文件准备环境并编译
       rospm build                   编译工作区
       rospm build -- --packages-select my_pkg
         将选包参数传给 colcon。
-      rospm run --list               列出可运行的节点和 launch 文件
+      rospm check                   检查项目环境
+      rospm completions bash        生成 Bash 的 Tab 补全脚本
+      rospm deps check              检查 package.xml 声明的依赖
+      rospm deps install --dry-run  预览依赖安装，去掉 --dry-run 后执行
+      rospm doctor                  检查本机工具、软件源和网络
+      rospm env                     输出项目环境；用 source <(rospm env) 在当前 Bash 中加载
+      rospm help                    列出子命令和全局选项，也可使用 rospm --help
+      rospm help build              查看指定子命令的参数，也可使用 rospm build --help
+      rospm init --distro jazzy --base ros-base
+        创建 rospm.toml。Ubuntu 22.04 使用 humble，24.04 使用 jazzy。
+      rospm init --from-env         根据现有环境生成清单草稿
+      rospm lock                    生成或更新本机平台的锁文件记录
+      rospm run --list              列出可运行的节点和 launch 文件
       rospm run my_pkg/my_node       运行指定目标
       rospm shell                   进入项目环境
-      source <(rospm env)            在当前 Bash 中加载项目环境
-
-      锁定、诊断和卸载
-      rospm lock                    生成或更新本机平台的锁文件记录
+      rospm uninstall --dry-run     预览卸载范围，再按需执行卸载
       rospm verify                  按锁文件验证环境
-      rospm apply --locked --build   按锁文件准备环境并编译
-      rospm doctor                  检查本机工具、软件源和网络
-      rospm uninstall --dry-run      预览卸载范围，再按需执行卸载
+
+      Tab 补全
+      Bash 执行 source <(rospm completions bash)，即可补全子命令、选项和固定参数值。
+      将此命令加入 ~/.bashrc 可在新终端中自动启用；其它 Shell 见 rospm completions --help。
 
       全局选项
+      rospm --manifest 路径 check 显式指定项目清单。
       --lang zh 或 --lang en 切换语言，--json 输出结构化结果，-v 或 -vv 增加输出详情。
     footer_select: "↑↓ 选择"
     footer_open: "Enter 打开"
@@ -419,6 +418,14 @@ cli:
     not_run: "未运行"
     not_found: "未找到"
     core_missing: "缺少核心工具：native 提供者需要 %{tools}"
+  completions:
+    about: "生成用于 Tab 补全的 Shell 脚本"
+    shell: "生成补全脚本的目标 Shell"
+    usage: |-
+      Bash: source <(rospm completions bash)
+      Zsh:  autoload -Uz compinit && compinit; source <(rospm completions zsh)
+      Fish: rospm completions fish | source
+      将对应命令加入 Shell 启动文件，可在新终端中自动启用补全。
   help:
     about: "显示本信息或指定子命令的帮助"
     command: "要查看的子命令（例如 `deps install`）"

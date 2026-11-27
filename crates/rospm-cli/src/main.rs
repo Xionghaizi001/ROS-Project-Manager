@@ -1,5 +1,6 @@
 mod build_summary;
 mod commands;
+mod completions;
 mod i18n;
 
 use std::path::{Path, PathBuf};
@@ -63,6 +64,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    #[command(about = tr("cli.completions.about"), after_help = tr("cli.completions.usage"))]
+    Completions {
+        #[arg(value_enum, help = tr("cli.completions.shell"))]
+        shell: clap_complete::Shell,
+    },
     #[command(about = tr("conda.path.about"))]
     Conda {
         #[command(subcommand)]
@@ -361,7 +367,11 @@ fn localize_help(cmd: Command) -> Command {
     t.push('\n');
     t.push_str(&tr("help.options"));
     t.push_str("\n{options}{after-help}");
-    cmd.help_template(t).mut_subcommands(localize_help)
+    // Equal display orders make clap sort command names alphabetically,
+    // including nested commands, regardless of their enum declaration order.
+    cmd.display_order(0)
+        .help_template(t)
+        .mut_subcommands(localize_help)
 }
 
 fn parse_cli() -> Cli {
@@ -465,6 +475,7 @@ fn execute_cli(
         None
     };
     let result = match cli.command {
+        Cmd::Completions { shell } => completions::print(shell),
         Cmd::Conda { command } => {
             use rospm_core::conda::PathAction;
             let action = match command {

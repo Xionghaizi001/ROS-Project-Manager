@@ -136,6 +136,26 @@ ROSPM_LANG=zh rospm build
 
 命令名、参数名、清单键值、JSON 键名与枚举值、计划中的 shell 命令及外部工具输出不翻译。JSON 自由文本可能随语言变化，需要固定英文时使用 `ROSPM_LANG=en`。当前 `env --shell fish` 尚未完成。
 
+## Tab 命令补全
+
+`rospm completions <shell>` 根据当前版本的命令定义生成补全脚本，支持 Bash、Zsh、Fish、PowerShell 和 Elvish。加载后可用 Tab 补全子命令、选项和固定参数值，例如 `rospm bu<Tab>`、`rospm deps in<Tab>`、`rospm build --conda-<Tab>`。
+
+在当前终端中，按使用的 Shell 执行：
+
+```sh
+# Bash
+source <(rospm completions bash)
+
+# Zsh
+autoload -Uz compinit && compinit
+source <(rospm completions zsh)
+
+# Fish
+rospm completions fish | source
+```
+
+将对应命令加入 `~/.bashrc`、`~/.zshrc` 或 `~/.config/fish/config.fish`，可在新终端中自动启用。也可将生成结果保存到 Shell 的补全目录；更新 rospm 后需重新生成。`rospm completions --help` 可查看支持的 Shell 和加载示例。帮助中的命令列表按命令名字母顺序显示。
+
 ## 项目结构与文档
 
 | 路径 | 内容 |

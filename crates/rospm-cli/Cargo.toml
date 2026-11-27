@@ -12,7 +12,8 @@ path = "src/main.rs"
 [dependencies]
 rospm-core = { path = "../rospm-core" }
 rospm-tui = { path = "../rospm-tui" }
-clap.workspace = true
+clap = { workspace = true, features = ["string"] }
+clap_complete = "4"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
