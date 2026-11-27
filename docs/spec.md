@@ -1,6 +1,6 @@
 # rospm 规格 — manifest / lock schema v1
 
-> 状态：软件版本为 1.1.0，manifest / lock 继续使用已于 2026-10-25 冻结的 schema v1；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。1.0 发布准备记录见 [Phase 4 启动清单](p4-release-preparation.md)。
+> 状态：软件版本为 1.1.1，manifest / lock 继续使用已于 2026-10-25 冻结的 schema v1；字段全集、默认值、校验边界与测试基线见 [schema v1](schema-v1.md)。1.0 发布准备记录见 [Phase 4 启动清单](p4-release-preparation.md)。
 > TUI 与 worker 架构决策见本文 [TUI 与任务生命周期](#tui-与任务生命周期)；阶段路线图见 [phases.md](phases.md)。
 
 ## 1. 文件与目录约定
