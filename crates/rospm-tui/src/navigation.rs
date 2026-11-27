@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rospm_core::{
@@ -25,7 +25,7 @@ pub(super) enum InstallPage {
         body: String,
         return_to_ros: bool,
     },
-    ScannedProjects(Vec<std::path::PathBuf>),
+    ScannedProjects(Vec<dashboard::ScannedProject>),
     Run(runs::Page),
     DebugTool(&'static str),
     DebugToolMissing {
@@ -38,6 +38,14 @@ pub(super) enum InstallPage {
 }
 
 impl InstallPage {
+    pub(super) fn scan_projects(known_manifest: Option<&Path>) -> Result<Self> {
+        let known_manifest = known_manifest.map(std::path::absolute).transpose()?;
+        Ok(Self::ScannedProjects(dashboard::Dashboard::scan_projects(
+            &std::env::current_dir()?,
+            known_manifest.as_deref(),
+        )))
+    }
+
     pub(super) fn can_install(&self) -> bool {
         matches!(
             self,
@@ -53,10 +61,6 @@ impl InstallPage {
     pub(super) fn refresh(&mut self) {
         if matches!(self, Self::Conda { .. }) {
             *self = Self::conda();
-        } else if let Self::ScannedProjects(projects) = self {
-            if let Ok(root) = std::env::current_dir() {
-                *projects = dashboard::Dashboard::scan_projects(&root);
-            }
         }
     }
 
@@ -74,42 +78,78 @@ impl InstallPage {
     }
 }
 
-pub(super) fn lock_project(project: &dashboard::Dashboard, text: &Text) -> Result<WorkspaceLock> {
-    WorkspaceLock::try_acquire_tui(&project.root)?
-        .with_context(|| format!("{} ({})", text.tui_already_running, project.root.display()))
+pub(super) fn lock_project(root: &Path, text: &Text) -> Result<WorkspaceLock> {
+    WorkspaceLock::try_acquire_tui(root)?
+        .with_context(|| format!("{} ({})", text.tui_already_running, root.display()))
+}
+
+pub(super) fn refresh_project(
+    manifest: Option<&Path>,
+    text: &Text,
+    dashboard: &mut Option<dashboard::Dashboard>,
+    install_page: &mut Option<InstallPage>,
+    on_overview: bool,
+) -> Result<()> {
+    if matches!(install_page, Some(InstallPage::ScannedProjects(_))) {
+        *install_page = Some(InstallPage::scan_projects(manifest)?);
+        return Ok(());
+    }
+    if let Some(page) = install_page {
+        page.refresh();
+    }
+    let was_open = dashboard.is_some();
+    *dashboard = dashboard::Dashboard::load(manifest, text)?;
+    if was_open && dashboard.is_none() && on_overview {
+        *install_page = Some(InstallPage::scan_projects(manifest)?);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)] // Switching projects updates the lock and navigation state together.
 pub(super) fn open_project(
-    path: PathBuf,
     text: &Text,
-    active_manifest: &mut Option<PathBuf>,
     dashboard: &mut Option<dashboard::Dashboard>,
     project_lock: &mut Option<WorkspaceLock>,
     install_page: &mut Option<InstallPage>,
     focused: &mut Option<usize>,
     scroll: &mut usize,
-) -> Result<()> {
-    if let Some(project) = dashboard::Dashboard::load(Some(&path), text)? {
-        match lock_project(&project, text) {
-            Ok(lease) => {
-                *active_manifest = Some(path);
-                *dashboard = Some(project);
-                *project_lock = Some(lease);
-                *install_page = None;
-            }
-            Err(error) => {
-                *install_page = Some(InstallPage::Detail {
-                    title: text.project_scan_title.clone(),
-                    body: format!("{error:#}"),
-                    return_to_ros: false,
-                });
-            }
+    confirmation: &mut Option<PendingConfirmation>,
+) -> bool {
+    let Some(InstallPage::ScannedProjects(projects)) = install_page else {
+        return false;
+    };
+    let Some(project) = focused.and_then(|index| projects.get(index)) else {
+        return true;
+    };
+    let path = project.manifest.clone();
+    let opened = match dashboard::read_manifest(&path) {
+        Ok(manifest) => {
+            let project = dashboard::Dashboard::from_manifest(path, manifest, text);
+            lock_project(&project.root, text).map(|lease| (project, lease))
         }
-        *focused = first_selectable(dashboard.as_ref(), text, 0, install_page.as_ref());
-        *scroll = 0;
+        Err(error) if dashboard::can_recover(&error) => {
+            *confirmation = Some(PendingConfirmation::RecoverProject(path));
+            return true;
+        }
+        Err(error) => Err(error.into()),
+    };
+    match opened {
+        Ok((project, lease)) => {
+            *dashboard = Some(project);
+            *project_lock = Some(lease);
+            *install_page = None;
+        }
+        Err(error) => {
+            *install_page = Some(InstallPage::Detail {
+                title: text.project_scan_title.clone(),
+                body: format!("{error:#}"),
+                return_to_ros: false,
+            });
+        }
     }
-    Ok(())
+    *focused = first_selectable(dashboard.as_ref(), text, 0, install_page.as_ref());
+    *scroll = 0;
+    true
 }
 
 pub(super) fn back_run(

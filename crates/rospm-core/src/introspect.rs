@@ -34,6 +34,7 @@ mod render;
 mod workspaces;
 
 use workspaces::detect_workspaces;
+pub use workspaces::has_workspace_inputs;
 #[cfg(test)]
 use workspaces::workspace_name;
 

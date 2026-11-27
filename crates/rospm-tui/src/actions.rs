@@ -1,18 +1,21 @@
 use std::{
     cell::Cell,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
-use rospm_core::{conda::ToolInstallation, worker::Operation};
+use rospm_core::{
+    conda::ToolInstallation,
+    worker::{Operation, WorkspaceLock},
+};
 
 use crate::{
     dashboard,
-    navigation::first_selectable,
+    navigation::{first_selectable, lock_project},
     terminal::{leave_screen, Screen},
     InstallPage, RunBackend, TaskOutcome, Text,
 };
@@ -30,6 +33,7 @@ pub enum Action {
 
 pub(super) enum PendingConfirmation {
     Action(Action),
+    RecoverProject(PathBuf),
     Build { rebuild: bool },
     InstallDebugTool { package: String },
 }
@@ -40,6 +44,7 @@ impl PendingConfirmation {
             Self::Action(action) => {
                 format!("{} {}", text.confirm_action, action_label(*action, text))
             }
+            Self::RecoverProject(_) => text.confirm_recover_project.clone(),
             Self::Build { rebuild: true } => text.confirm_rebuild.clone(),
             Self::Build { rebuild: false } => text.confirm_build.clone(),
             Self::InstallDebugTool { package } => {
@@ -167,6 +172,7 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
     manifest: Option<&Path>,
     text: &Text,
     dashboard: &mut Option<dashboard::Dashboard>,
+    project_lock: &mut Option<WorkspaceLock>,
     install_page: &mut Option<InstallPage>,
     focused_row: &mut Option<usize>,
     scroll: &mut usize,
@@ -179,6 +185,32 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
     match pending {
         PendingConfirmation::Action(operation) => {
             execute_action(terminal, screen, manifest, action, operation, backend)?;
+        }
+        PendingConfirmation::RecoverProject(path) => {
+            let root = path.parent().unwrap_or_else(|| Path::new("."));
+            let recovered = lock_project(root, text).and_then(|lease| {
+                dashboard::recover_manifest(&path, &text.project_recovery_busy)
+                    .map(|manifest| (manifest, lease))
+            });
+            match recovered {
+                Ok((manifest, lease)) => {
+                    *dashboard = Some(dashboard::Dashboard::from_manifest(path, manifest, text));
+                    *project_lock = Some(lease);
+                    *install_page = None;
+                }
+                Err(error) => {
+                    *install_page = Some(InstallPage::Detail {
+                        title: text.project_scan_title.clone(),
+                        body: format!("{error:#}"),
+                        return_to_ros: false,
+                    });
+                }
+            }
+            *scroll = 0;
+            *focused_row =
+                first_selectable(dashboard.as_ref(), text, selected, install_page.as_ref());
+            *last_runtime_refresh = Instant::now();
+            return Ok(());
         }
         PendingConfirmation::Build { rebuild } => {
             execute_compile(

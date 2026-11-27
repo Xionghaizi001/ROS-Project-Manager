@@ -95,8 +95,12 @@ pub(crate) fn rows(
         } else {
             projects
                 .iter()
-                .map(|path| {
+                .map(|project| {
+                    let path = &project.manifest;
                     let mut row = Entry::link(path.parent().unwrap_or(path).display().to_string());
+                    if project.needs_manifest {
+                        row.cells[1].clone_from(&text.project_needs_manifest);
+                    }
                     row.cells[2] = path.display().to_string();
                     row
                 })

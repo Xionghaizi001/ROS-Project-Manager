@@ -1,16 +1,24 @@
 //! Project data loaded for the TUI dashboard.
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use rospm_core::{
-    lock::Lock,
+    introspect::{self, HostFacts},
+    lock::{Lock, LOCK_FILE},
     manifest::{Manifest, ProviderKind, MANIFEST_FILE},
     mirror,
+    package_xml::{find_package_files, IGNORE_MARKERS},
     plan::Plan,
     platform::Platform,
     probe::{Host, Status},
     provider::{self, Context as ProviderContext},
+    worker::WorkspaceLock,
+    Error,
 };
 
 use crate::Text;
@@ -44,14 +52,118 @@ pub(crate) struct Component {
     pub(crate) status: rospm_core::probe::Status,
 }
 
+pub(crate) struct ScannedProject {
+    pub(crate) manifest: PathBuf,
+    pub(crate) needs_manifest: bool,
+}
+
+impl ScannedProject {
+    fn new(manifest: PathBuf) -> Self {
+        Self {
+            needs_manifest: read_manifest(&manifest).is_err_and(|error| can_recover(&error)),
+            manifest,
+        }
+    }
+}
+
+pub(crate) fn read_manifest(path: &Path) -> rospm_core::Result<Manifest> {
+    let metadata = fs::metadata(path).map_err(|error| Error::io(path, error))?;
+    if !metadata.is_file() {
+        return Err(Error::io(path, io::Error::other("expected a regular file")));
+    }
+    Manifest::load(path)
+}
+
+pub(crate) fn can_recover(error: &Error) -> bool {
+    match error {
+        Error::ManifestParse { .. } | Error::Validation(_) => true,
+        Error::Io { source, .. } => {
+            matches!(
+                source.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+            )
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn recover_manifest(path: &Path, busy_message: &str) -> Result<Manifest> {
+    let root = path.parent().context("manifest has no parent directory")?;
+    let _lease = WorkspaceLock::try_acquire_mutation(root)?.context(busy_message.to_owned())?;
+    let facts = HostFacts::gather(&Host::probe());
+    let draft = introspect::draft(root, &facts).render();
+    let manifest = Manifest::parse(&draft, path)?;
+
+    let existing = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => match read_manifest(path) {
+            Ok(current) => return Ok(current),
+            Err(error) if can_recover(&error) => true,
+            Err(error) => return Err(error.into()),
+        },
+        Ok(_) => return Err(Error::io(path, io::Error::other("expected a regular file")).into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(Error::io(path, error).into()),
+    };
+
+    let mut temporary = path.as_os_str().to_os_string();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    temporary.push(format!(".recover.{stamp}.tmp"));
+    let temporary = PathBuf::from(temporary);
+    let mut file =
+        fs::File::create_new(&temporary).map_err(|error| Error::io(&temporary, error))?;
+    let result = (|| {
+        file.write_all(draft.as_bytes())?;
+        file.sync_all()?;
+        if existing {
+            let mut backup = path.as_os_str().to_os_string();
+            backup.push(".bak");
+            for number in 0.. {
+                let mut candidate = backup.clone();
+                if number != 0 {
+                    candidate.push(format!(".{number}"));
+                }
+                match fs::hard_link(path, candidate) {
+                    Ok(()) => break,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            fs::rename(&temporary, path)
+        } else {
+            fs::hard_link(&temporary, path)
+        }
+    })();
+    let _ = fs::remove_file(&temporary);
+    result.map_err(|error| Error::io(path, error))?;
+    Ok(manifest)
+}
+
 impl Dashboard {
-    pub(crate) fn scan_projects(root: &Path) -> Vec<PathBuf> {
-        let mut pending = vec![root.to_path_buf()];
+    pub(crate) fn scan_projects(root: &Path, known_manifest: Option<&Path>) -> Vec<ScannedProject> {
+        let mut pending = vec![(root.to_path_buf(), true)];
         let mut projects = Vec::new();
-        while let Some(directory) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&directory) else {
+        while let Some((directory, detect_workspace)) = pending.pop() {
+            let Ok(entries) = fs::read_dir(&directory) else {
                 continue;
             };
+            let manifest = directory.join(MANIFEST_FILE);
+            let has_manifest = fs::symlink_metadata(&manifest)
+                .is_ok_and(|metadata| metadata.is_file() || metadata.is_symlink());
+            let detect_workspace = detect_workspace
+                && !IGNORE_MARKERS
+                    .iter()
+                    .any(|marker| directory.join(marker).exists());
+            let has_workspace = detect_workspace
+                && (directory.join(LOCK_FILE).is_file()
+                    || directory.join(".rospm").is_dir()
+                    || directory.join("package.xml").is_file()
+                    || !find_package_files(&directory.join("src")).is_empty());
+            let is_project = has_manifest || has_workspace || known_manifest == Some(&manifest);
+            if is_project {
+                projects.push(ScannedProject::new(manifest));
+            }
             for entry in entries.flatten() {
                 let path = entry.path();
                 if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
@@ -63,14 +175,29 @@ impl Dashboard {
                             "build" | "install" | "log" | "node_modules" | "target" | ".venv"
                         )
                     {
-                        pending.push(path);
+                        pending.push((path, detect_workspace && !is_project));
                     }
-                } else if path.file_name().is_some_and(|name| name == MANIFEST_FILE) {
-                    projects.push(path);
                 }
             }
         }
-        projects.sort();
+        if let Some(manifest) =
+            known_manifest.filter(|path| !projects.iter().any(|project| project.manifest == *path))
+        {
+            projects.push(ScannedProject::new(manifest.to_path_buf()));
+        }
+        let root_manifest = root.join(MANIFEST_FILE);
+        // Drafting can discover workspaces below a project root that has no marker of its own.
+        if !projects
+            .iter()
+            .any(|project| project.manifest == root_manifest)
+            && introspect::has_workspace_inputs(root)
+        {
+            projects.push(ScannedProject::new(root_manifest.clone()));
+        }
+        projects.sort_by(|a, b| {
+            (a.manifest != root_manifest, &a.manifest)
+                .cmp(&(b.manifest != root_manifest, &b.manifest))
+        });
         projects
     }
 
@@ -85,8 +212,12 @@ impl Dashboard {
                 }
             }
         };
-        let manifest = Manifest::load(&path)
-            .with_context(|| format!("failed to load manifest `{}`", path.display()))?;
+        Ok(read_manifest(&path)
+            .ok()
+            .map(|manifest| Self::from_manifest(path, manifest, text)))
+    }
+
+    pub(crate) fn from_manifest(path: PathBuf, manifest: Manifest, text: &Text) -> Self {
         let conda = manifest
             .build
             .conda
@@ -197,7 +328,7 @@ impl Dashboard {
             deps.push(format!("! {message}"));
         }
         let diagnostics = crate::logs::diagnostics(root);
-        Ok(Some(Self {
+        Self {
             manifest: path.clone(),
             project: manifest.project.name,
             provider: manifest.environment.provider,
@@ -217,7 +348,7 @@ impl Dashboard {
             run,
             installing: false,
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        }))
+        }
     }
 
     pub(crate) fn refresh_runtime(&mut self) {
@@ -330,25 +461,80 @@ fn step_line(step: &rospm_core::plan::Step) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn project_scan_finds_manifests_and_skips_generated_directories() {
-        let root = std::env::temp_dir().join(format!(
+    fn test_root() -> PathBuf {
+        std::env::temp_dir().join(format!(
             "rospm-tui-scan-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
+        ))
+    }
+
+    #[test]
+    fn project_scan_finds_manifests_and_workspaces_and_skips_generated_directories() {
+        let root = test_root();
         let expected = root.join("nested/project").join(MANIFEST_FILE);
-        let hidden = root.join(".cache/hidden").join(MANIFEST_FILE);
-        let generated = root.join("target/generated").join(MANIFEST_FILE);
-        for path in [&expected, &hidden, &generated] {
+        let missing = root.join("workspace").join(MANIFEST_FILE);
+        for path in [
+            expected.clone(),
+            root.join(".cache/hidden").join(MANIFEST_FILE),
+            root.join("target/generated").join(MANIFEST_FILE),
+        ] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "").unwrap();
         }
-        let found = Dashboard::scan_projects(&root);
+        let package = root.join("workspace/src/repo/pkg/package.xml");
+        fs::create_dir_all(package.parent().unwrap()).unwrap();
+        fs::write(package, "<package><name>pkg</name></package>").unwrap();
+        let found = Dashboard::scan_projects(&root, None);
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(found, [expected]);
+        assert_eq!(
+            found
+                .into_iter()
+                .map(|project| (project.manifest, project.needs_manifest))
+                .collect::<Vec<_>>(),
+            [
+                (root.join(MANIFEST_FILE), true),
+                (expected, true),
+                (missing, true)
+            ]
+        );
+    }
+
+    #[test]
+    fn manifest_recovery_preserves_existing_backups_and_accepts_restored_files() {
+        let root = test_root();
+        let package = root.join("src/example/package.xml");
+        fs::create_dir_all(package.parent().unwrap()).unwrap();
+        fs::write(package, "<package><name>example</name></package>").unwrap();
+        let path = root.join(MANIFEST_FILE);
+        let text = Text::default();
+        assert!(Dashboard::load(Some(&path), &text).unwrap().is_none());
+        let manifest = recover_manifest(&path, "busy").unwrap();
+        assert_eq!(manifest.workspaces["main"].path, Path::new("."));
+        let generated = fs::read(&path).unwrap();
+        assert_eq!(
+            recover_manifest(&path, "busy").unwrap().project.name,
+            manifest.project.name
+        );
+        assert_eq!(fs::read(&path).unwrap(), generated);
+
+        fs::write(&path, "[broken").unwrap();
+        assert!(Dashboard::load(Some(&path), &text).unwrap().is_none());
+        fs::write(root.join("rospm.toml.bak"), "previous backup").unwrap();
+        recover_manifest(&path, "busy").unwrap();
+        assert_eq!(
+            fs::read(root.join("rospm.toml.bak")).unwrap(),
+            b"previous backup"
+        );
+        assert_eq!(fs::read(root.join("rospm.toml.bak.1")).unwrap(), b"[broken");
+        assert!(read_manifest(&path).is_ok());
+        assert!(!fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "tmp")));
+        fs::remove_dir_all(root).unwrap();
     }
 }

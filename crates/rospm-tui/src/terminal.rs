@@ -118,7 +118,7 @@ fn run_dashboard(
     let dashboard = dashboard::Dashboard::load(manifest_path, &text)?;
     let mut project_lock = dashboard
         .as_ref()
-        .map(|project| lock_project(project, &text))
+        .map(|project| lock_project(&project.root, &text))
         .transpose()?;
     enable_raw_mode().context("failed to enable terminal raw mode")?;
     let screen = Cell::new(Screen::Suspended);

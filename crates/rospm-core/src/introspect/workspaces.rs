@@ -85,6 +85,14 @@ fn find_repos_files(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Whether manifest drafting can infer a workspace without a placeholder.
+pub fn has_workspace_inputs(root: &Path) -> bool {
+    !find_workspace_dirs(root).is_empty()
+        || find_repos_files(root)
+            .iter()
+            .any(|file| ReposFile::load(file).is_ok_and(|repos| !repos.repositories.is_empty()))
+}
+
 pub(super) fn workspace_name(rel: &Path, sources: Option<&Path>) -> String {
     let dir_name = rel
         .file_name()

@@ -2,13 +2,14 @@ use std::{cell::Cell, io::Write, path::Path, time::Instant};
 
 use anyhow::Result;
 use ratatui::Terminal;
+use rospm_core::worker::WorkspaceLock;
 
 use crate::{
     actions::{
         execute_pending_confirmation, install, request_action, request_compile, PendingConfirmation,
     },
     dashboard, logs,
-    navigation::{activate, back_run, first_selectable, move_focus},
+    navigation::{activate, back_run, first_selectable, move_focus, open_project, refresh_project},
     terminal::Screen,
     view, Action, InstallPage, RunBackend, Text,
 };
@@ -24,6 +25,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
     browser: &mut Option<logs::Browser>,
     processes: &[rospm_core::run::RunStatus],
     dashboard: &mut Option<dashboard::Dashboard>,
+    project_lock: &mut Option<WorkspaceLock>,
     install_page: &mut Option<InstallPage>,
     focused_row: &mut Option<usize>,
     scroll: &mut usize,
@@ -60,15 +62,27 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
                 *scroll = scroll.saturating_add(1);
             }
         }
-        view::FooterAction::Open => activate(
-            install_page,
-            focused_row,
-            scroll,
-            dashboard.as_ref(),
-            text,
-            *selected,
-            confirmation,
-        ),
+        view::FooterAction::Open => {
+            if !open_project(
+                text,
+                dashboard,
+                project_lock,
+                install_page,
+                focused_row,
+                scroll,
+                confirmation,
+            ) {
+                activate(
+                    install_page,
+                    focused_row,
+                    scroll,
+                    dashboard.as_ref(),
+                    text,
+                    *selected,
+                    confirmation,
+                );
+            }
+        }
         view::FooterAction::ChangeTab => {
             *selected = (*selected + 1) % 8;
             *install_page = None;
@@ -83,11 +97,8 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
             let page_size = usize::from(terminal.size()?.height.saturating_sub(6).clamp(1, 10));
             *scroll = scroll.saturating_add(page_size);
         }
-        view::FooterAction::Refresh => {
-            if let Some(page) = install_page {
-                page.refresh();
-            }
-            *dashboard = dashboard::Dashboard::load(manifest, text)?;
+        view::FooterAction::Refresh | view::FooterAction::RescanProjects => {
+            refresh_project(manifest, text, dashboard, install_page, *selected == 0)?;
             *scroll = 0;
             *focused_row =
                 first_selectable(dashboard.as_ref(), text, *selected, install_page.as_ref());
@@ -116,6 +127,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
                         manifest,
                         text,
                         dashboard,
+                        project_lock,
                         install_page,
                         focused_row,
                         scroll,
@@ -138,19 +150,10 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
             request_action(confirmation, Action::CreateProject);
         }
         view::FooterAction::ScanProjects => {
-            let root = std::env::current_dir()?;
-            *install_page = Some(InstallPage::ScannedProjects(
-                dashboard::Dashboard::scan_projects(&root),
-            ));
+            *install_page = Some(InstallPage::scan_projects(manifest)?);
             *focused_row =
                 first_selectable(dashboard.as_ref(), text, *selected, install_page.as_ref());
             *scroll = 0;
-        }
-        view::FooterAction::RescanProjects => {
-            *dashboard = dashboard::Dashboard::load(manifest, text)?;
-            *scroll = 0;
-            *focused_row = first_selectable(dashboard.as_ref(), text, *selected, None);
-            *last_runtime_refresh = Instant::now();
         }
         view::FooterAction::Back => {
             if back_run(install_page, focused_row, scroll, text) {

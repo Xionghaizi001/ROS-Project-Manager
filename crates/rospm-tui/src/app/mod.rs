@@ -22,7 +22,8 @@ use crate::{
     },
     dashboard, log_view, logs,
     navigation::{
-        activate, back_run, first_selectable, lock_project, move_focus, open_project, tab_at,
+        activate, back_run, first_selectable, lock_project, move_focus, open_project,
+        refresh_project, tab_at,
     },
     pages, runs, table,
     terminal::{draw_frame, leave_screen, Screen},
@@ -70,6 +71,13 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut left_press = None;
     let mut confirmation = None::<PendingConfirmation>;
     loop {
+        if let Some(project) = &dashboard {
+            if active_manifest.as_ref() != Some(&project.manifest) {
+                active_manifest = Some(project.manifest.clone());
+            }
+        } else {
+            *project_lock = None;
+        }
         if let Some(InstallPage::DebugToolMissing {
             install: requested, ..
         }) = &mut install_page
@@ -95,7 +103,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                 .as_ref()
                 .is_none_or(|lease| lease.workspace() != project.root)
             {
-                *project_lock = Some(lock_project(project, text)?);
+                *project_lock = Some(lock_project(&project.root, text)?);
             }
             if let Some((backend, verbosity)) = runs {
                 if selected == DEBUG_TAB
@@ -250,6 +258,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     active_manifest.as_deref(),
                                     text,
                                     &mut dashboard,
+                                    project_lock,
                                     &mut install_page,
                                     &mut focused_row,
                                     &mut scroll,
@@ -360,22 +369,15 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                             )?;
                         }
                         KeyCode::Enter => {
-                            if let Some(InstallPage::ScannedProjects(projects)) = &install_page {
-                                if let Some(path) =
-                                    focused_row.and_then(|index| projects.get(index)).cloned()
-                                {
-                                    open_project(
-                                        path,
-                                        text,
-                                        &mut active_manifest,
-                                        &mut dashboard,
-                                        project_lock,
-                                        &mut install_page,
-                                        &mut focused_row,
-                                        &mut scroll,
-                                    )?;
-                                }
-                            } else {
+                            if !open_project(
+                                text,
+                                &mut dashboard,
+                                project_lock,
+                                &mut install_page,
+                                &mut focused_row,
+                                &mut scroll,
+                                &mut confirmation,
+                            ) {
                                 activate(
                                     &mut install_page,
                                     &mut focused_row,
@@ -470,11 +472,13 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                             }
                         }
                         KeyCode::Char('r') => {
-                            if let Some(page) = &mut install_page {
-                                page.refresh();
-                            }
-                            dashboard =
-                                dashboard::Dashboard::load(active_manifest.as_deref(), text)?;
+                            refresh_project(
+                                active_manifest.as_deref(),
+                                text,
+                                &mut dashboard,
+                                &mut install_page,
+                                selected == 0,
+                            )?;
                             scroll = 0;
                             focused_row = first_selectable(
                                 dashboard.as_ref(),
@@ -488,9 +492,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                             request_action(&mut confirmation, Action::CreateProject);
                         }
                         KeyCode::Char('s') if selected == 0 && dashboard.is_none() => {
-                            install_page = Some(InstallPage::ScannedProjects(
-                                dashboard::Dashboard::scan_projects(&std::env::current_dir()?),
-                            ));
+                            install_page =
+                                Some(InstallPage::scan_projects(active_manifest.as_deref())?);
                             focused_row = first_selectable(
                                 dashboard.as_ref(),
                                 text,
@@ -623,6 +626,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 &mut browser,
                                 &processes,
                                 &mut dashboard,
+                                project_lock,
                                 &mut install_page,
                                 &mut focused_row,
                                 &mut scroll,
@@ -661,22 +665,15 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                             ) {
                                 if rows.get(index).is_some_and(|row| row.selectable) {
                                     focused_row = Some(index);
-                                    if let Some(InstallPage::ScannedProjects(projects)) =
-                                        &install_page
-                                    {
-                                        if let Some(path) = projects.get(index).cloned() {
-                                            open_project(
-                                                path,
-                                                text,
-                                                &mut active_manifest,
-                                                &mut dashboard,
-                                                project_lock,
-                                                &mut install_page,
-                                                &mut focused_row,
-                                                &mut scroll,
-                                            )?;
-                                        }
-                                    } else {
+                                    if !open_project(
+                                        text,
+                                        &mut dashboard,
+                                        project_lock,
+                                        &mut install_page,
+                                        &mut focused_row,
+                                        &mut scroll,
+                                        &mut confirmation,
+                                    ) {
                                         activate(
                                             &mut install_page,
                                             &mut focused_row,
