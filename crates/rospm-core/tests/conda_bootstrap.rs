@@ -91,6 +91,8 @@ fn installs_pinned_miniforge_without_conda_and_reuses_it() {
         "{}",
         command.program
     );
+    let prefix = Path::new(&command.args[3]);
+    assert!(prefix.starts_with(host.data_dir.join("conda/envs")));
     let conda = PathBuf::from(&command.program);
     assert!(conda.starts_with(root.join("user/data/conda")));
     build.perform(&mut Vec::new()).unwrap();
@@ -106,7 +108,7 @@ fn installs_pinned_miniforge_without_conda_and_reuses_it() {
     assert!(probe.status.success(), "{probe:?}");
     let stdout = String::from_utf8(probe.stdout).unwrap();
     assert!(
-        stdout.starts_with(root.join(".rospm/conda/env/bin/python").to_str().unwrap()),
+        stdout.starts_with(prefix.join("bin/python").to_str().unwrap()),
         "{stdout}"
     );
 
@@ -176,17 +178,17 @@ fn locks_and_replays_a_real_environment() {
     let platform = Platform::current().expect("supported platform");
 
     // Solve and create on the first machine, then lock it.
-    CondaStep::new(&config, &machine, &host, platform, true, None)
-        .unwrap()
-        .perform(&mut Vec::new())
-        .unwrap();
+    let step = CondaStep::new(&config, &machine, &host, platform, true, None).unwrap();
+    step.perform(&mut Vec::new()).unwrap();
+    let command = step.command();
+    let prefix = Path::new(&command.args[3]);
     let mut notes = Vec::new();
     let record = resolve_lock(&config, &machine, &host, platform, &mut notes)
         .unwrap()
         .unwrap_or_else(|| panic!("{notes:?}"));
     println!("{notes:?}\n{record:?}");
     let text = fs::read_to_string(machine.join(&record.lock)).unwrap();
-    assert_eq!(text, explicit(&machine.join(".rospm/conda/env")));
+    assert_eq!(text, explicit(prefix));
     assert!(text.contains("/python-3.12"), "{text}");
     let lock = Lock {
         schema_version: SUPPORTED_SCHEMA_VERSION,
@@ -217,8 +219,9 @@ fn locks_and_replays_a_real_environment() {
     let step = CondaStep::new(&config, &clean, &host, platform, true, Some(&lock)).unwrap();
     println!("{}", step.render());
     step.perform(&mut Vec::new()).unwrap();
-    let prefix = clean.join(".rospm/conda/env");
-    assert_eq!(explicit(&prefix), text, "replay installed other packages");
+    let command = step.command();
+    let prefix = Path::new(&command.args[3]);
+    assert_eq!(explicit(prefix), text, "replay installed other packages");
     let probe = step
         .command()
         .args([

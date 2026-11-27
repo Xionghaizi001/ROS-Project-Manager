@@ -916,14 +916,16 @@ fn managed_conda_is_prepared_before_apply_mutations_and_build_only_checks() {
         .unwrap();
     assert!(matches!(first_action, Step::Conda(_)));
     let preview = apply.render();
-    assert!(preview.contains("/proj/.rospm/conda/env"));
+    let envs = host.conda.data_dir.join("conda/envs");
+    assert!(preview.contains(envs.to_str().unwrap()));
     assert!(preview.contains("conda env create --yes --prefix"));
     assert!(preview.contains("python=3.12"));
     let build = provider.plan_build(&context, Some("main"), false).unwrap();
     assert!(matches!(&build.steps[0], Step::Conda(_)));
-    assert!(build
-        .render()
-        .contains("conda run --no-capture-output -p /proj/.rospm/conda/env"));
+    assert!(build.render().contains(&format!(
+        "conda run --no-capture-output -p {}/",
+        envs.display()
+    )));
     assert!(!build.render().contains("conda env create"));
 
     let mut locked = context;

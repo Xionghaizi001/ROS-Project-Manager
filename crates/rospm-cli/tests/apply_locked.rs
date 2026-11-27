@@ -312,10 +312,13 @@ fn apply_locked_replays_the_managed_conda_lock_or_refuses_without_a_record() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(stdout.contains("without solving"), "{stdout}");
+    let id = sha256_hex(dir.canonicalize().unwrap().to_str().unwrap());
+    let id = id.strip_prefix("sha256:").unwrap();
+    let prefix = dir.join(format!("user/data/rospm/conda/envs/{subdir}-{id}/env"));
     assert!(
         stdout.contains(&format!(
             "conda create --yes --prefix {} --file {}",
-            dir.join(".rospm/conda/env").display(),
+            prefix.display(),
             dir.join(&lock_path).display()
         )),
         "{stdout}"

@@ -14,7 +14,7 @@ impl CondaStep {
         prepare: bool,
         lock: Option<&Lock>,
     ) -> Result<Self> {
-        let selection = Selection::from_config(config, root)?;
+        let selection = Selection::from_config(config, root, host, platform)?;
         let managed = if let Some(managed) = &config.managed {
             let definition = environment_yaml(managed, root)?;
             let fingerprint = sha256_hex(&definition.contents);
@@ -31,9 +31,9 @@ impl CondaStep {
             };
             Some(Preparation {
                 root: root.to_path_buf(),
-                prefix: root.join(MANAGED_PREFIX),
+                prefix: selection.prefix().to_path_buf(),
                 definition: root.join(DEFINITION),
-                ready: root.join(READY),
+                ready: selection.prefix().with_file_name(READY),
                 fingerprint,
                 platform,
                 contents: definition.contents,
@@ -453,6 +453,8 @@ impl CondaStep {
                 .definition
                 .parent()
                 .expect("project definition has a parent");
+            fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+            let parent = managed.ready.parent().expect("ready record has a parent");
             fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
             // Claims the prefix before creation; never a valid stamp.
             fs::write(&managed.ready, PENDING).map_err(|e| Error::io(&managed.ready, e))?;

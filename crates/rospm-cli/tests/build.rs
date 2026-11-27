@@ -163,6 +163,9 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
     let nested = dir.join("nested");
     fs::create_dir(&nested).unwrap();
     let user = dir.join("user");
+    let id = rospm_core::lock::sha256_hex(dir.canonicalize().unwrap().to_str().unwrap());
+    let id = id.strip_prefix("sha256:").unwrap();
+    let prefix = user.join(format!("data/rospm/conda/envs/{subdir}-{id}/env"));
     for (lang, expected, bootstrap) in [
         (
             "en",
@@ -187,7 +190,7 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
         let preview = String::from_utf8(out.stdout).unwrap();
         assert!(preview.contains(expected), "{preview}");
         assert!(preview.contains(dir.join("config/environment.yml").to_str().unwrap()));
-        assert!(preview.contains(dir.join(".rospm/conda/env").to_str().unwrap()));
+        assert!(preview.contains(prefix.to_str().unwrap()));
         assert!(preview.contains("python=3.12") && preview.contains("numpy"));
         assert!(!preview.contains("/ignored-prefix"));
         // The bootstrap is described in full but nothing is downloaded.
@@ -223,10 +226,17 @@ fn managed_apply_preview_resolves_inputs_without_writing_and_cli_can_select_exte
     }
     assert!(dir.join(".rospm/worker/tasks").is_dir() && !user.exists());
     assert!(!dir.join("ws/build").exists());
-    let build = preview(&nested, &[]);
+    let build = rospm()
+        .current_dir(&nested)
+        .env("XDG_DATA_HOME", user.join("data"))
+        .args(["build", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let build = String::from_utf8(build.stdout).unwrap();
     assert!(build.contains(&format!(
         "conda run --no-capture-output -p {}",
-        dir.join(".rospm/conda/env").display()
+        prefix.display()
     )));
     assert!(!build.contains("conda env create"));
     assert!(preview(&nested, &["--conda-env", "external"]).contains("-n external"));

@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use super::bootstrap::Bootstrap;
 use super::definition::{environment_yaml, spec_name, Definition};
 use super::system::{Real, System};
-use super::{stamp_head, Contents, Replay, Selection, MANAGED_PREFIX, READY};
+use super::{stamp_head, Contents, Replay, Selection, READY};
 use crate::error::{Error, Result};
 use crate::lock::{sha256_hex, Lock, LockedConda};
 use crate::manifest::{CondaBuild, ManagedConda};
@@ -225,19 +225,20 @@ pub(super) fn resolve_lock_with(
     notes: &mut Vec<Message>,
     system: &dyn System,
 ) -> Result<Option<LockedConda>> {
-    let selection = Selection::from_config(config, root)?;
+    let selection = Selection::from_config(config, root, host, platform)?;
     let Some(managed) = &config.managed else {
         notes.push(msg!("conda.lock_external", selection = selection.label()));
         return Ok(None);
     };
     let definition = environment_yaml(managed, root)?;
     let fingerprint = sha256_hex(&definition.contents);
-    let prefix = root.join(MANAGED_PREFIX);
+    let prefix = selection.prefix();
+    let ready_path = prefix.with_file_name(READY);
     let skipped = |notes: &mut Vec<Message>, reason: Message| {
         notes.push(msg!("conda.lock_skipped", reason = reason));
         Ok(None)
     };
-    let ready = fs::read_to_string(root.join(READY)).unwrap_or_default();
+    let ready = fs::read_to_string(&ready_path).unwrap_or_default();
     if !prefix.join("conda-meta/history").is_file()
         || ready.lines().next() != Some(&stamp_head(&fingerprint, platform))
     {
@@ -259,7 +260,7 @@ pub(super) fn resolve_lock_with(
         Some(b) if b.is_ready() => b.conda().to_string_lossy().into_owned(),
         _ => "conda".to_string(),
     };
-    let contents = match Contents::query(&prefix, &program, system) {
+    let contents = match Contents::query(prefix, &program, system) {
         Ok(contents) => contents,
         Err(error) => return skipped(notes, error.message()),
     };
@@ -300,8 +301,7 @@ pub(super) fn resolve_lock_with(
     let lock_sha256 = sha256_hex(text);
     let stamp = contents.record(&stamp_head(&fingerprint, platform));
     if ready != stamp {
-        let ready = root.join(READY);
-        fs::write(&ready, stamp).map_err(|e| Error::io(&ready, e))?;
+        fs::write(&ready_path, stamp).map_err(|e| Error::io(&ready_path, e))?;
     }
     notes.push(msg!(
         "conda.lock_recorded",

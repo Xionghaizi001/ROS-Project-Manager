@@ -145,7 +145,7 @@ sign = false
 
 已有环境模式下，`apply` / `build` 在执行系统安装或编译之前查询 Conda 并检查环境是否存在，缺失时明确报错；不会创建、更新或接管外部环境。名称或路径本身不锁定包版本：`lock` 不为外部环境写锁记录并说明，`apply --locked` 对它仍只检查存在并在计划中说明没有可重放保证。
 
-受管模式下，环境固定为 `<清单目录>/.rospm/conda/env`，不使用 Conda 的全局同名环境；两个同名项目位于不同目录时拥有不同 prefix。`apply` 在系统安装步骤之前准备环境；`build` 只检查环境和完成记录，缺失或定义变化时提示先执行 `apply`。环境创建命令为 `conda env create --yes --prefix <项目 prefix> --file <生成的定义>`，工作目录为清单目录，不执行 `conda init` 或修改 shell 启动文件。
+受管 Conda 环境默认创建在主机用户数据目录 `$XDG_DATA_HOME/rospm/conda/envs/<subdir>-<清单目录路径的 SHA256>/env`（默认数据目录为 `~/.local/share`）。不同目录的项目和不同 Conda 平台各有独立 prefix。已有 `.rospm/conda/ready.sha256` 记录的项目继续使用原来的工作区 prefix。`apply` 在系统安装步骤之前准备环境；`build` 只检查环境和完成记录，缺失或定义变化时提示先执行 `apply`。环境创建命令为 `conda env create --yes --prefix <项目 prefix> --file <生成的定义>`，工作目录为清单目录，不执行 `conda init` 或修改 shell 启动文件。
 
 受管模式所用的 Conda 按以下顺序确定（自动引导）：
 
@@ -159,7 +159,7 @@ sign = false
 
 `environment_file` 是可选的 Conda YAML；首期接受 `name`、`prefix`、`channels`、`dependencies` 和 `variables`，未知字段报错。文件中的 `name` / `prefix` 不决定受管环境位置，生成定义时会移除；`channels` 可省略，若声明则必须与清单顺序一致（忽略 `nodefaults`）。依赖中的 `python` 可省略或无版本，若指定版本则须与清单的 `python=<版本>` 完全一致，冲突时在计划执行前报错。生成定义补齐 Python，并添加 `nodefaults`，使用清单声明的 channels；依赖交由 Conda 处理（`dependencies` 中的 `pip:` 子列表由 Conda 调用 pip 安装），不合并清单的 `dependencies.pip`。定义文件引用本身及 YAML 内的相对依赖输入均以清单目录为基准。
 
-规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才写入 `.rospm/conda/ready.sha256`：第一行为规范化定义摘要加 Conda subdir（如 `linux-aarch64`，从其它架构拷来的 prefix 因此不会被当作就绪），按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。创建开始前先写入 `pending` 记录以标明该 prefix 归 rospm 所有；`apply` 遇到有记录但不匹配的 prefix（创建中断、定义变化，或 `--locked` 时非按该锁重放的环境）会删除后重建，`--dry-run` 预先说明；完全没有记录的已有目录视为外部目录，不覆盖并提示用户先移走再执行 `apply`。该记录不是包版本锁；手动修改包造成的漂移由下文的实时核对发现。
+规范化定义写入 `.rospm/conda/environment.yml`。只有创建命令成功且 prefix 中存在 `conda-meta/history` 后，才在环境 prefix 的同级目录写入 `ready.sha256`：第一行为规范化定义摘要加 Conda subdir（如 `linux-aarch64`，从其它架构拷来的 prefix 因此不会被当作就绪），按锁重放（或 `lock` 记录过）的环境另有第二行锁文件摘要。普通 `apply` 与 `build` 只要求第一行匹配；`apply --locked` 要求两行都与锁记录一致。创建开始前先写入 `pending` 记录以标明该 prefix 归 rospm 所有；`apply` 遇到有记录但不匹配的 prefix（创建中断、定义变化，或 `--locked` 时非按该锁重放的环境）会删除后重建，`--dry-run` 预先说明；完全没有记录的已有目录视为外部目录，不覆盖并提示用户先移走再执行 `apply`。该记录不是包版本锁；手动修改包造成的漂移由下文的实时核对发现。
 
 #### 受管环境的锁定与重放
 

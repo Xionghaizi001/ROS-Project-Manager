@@ -259,7 +259,12 @@ fn managed_creation_reuses_only_a_completed_matching_definition() {
     assert!(!project.0.join(".rospm").exists());
     let fake = Fake::default();
     step.perform_with(&mut Vec::new(), &fake).unwrap();
-    assert!(project.0.join(READY).is_file());
+    let managed = step.managed.as_ref().unwrap();
+    assert!(managed.ready.is_file());
+    assert!(managed
+        .prefix
+        .starts_with(project.host().data_dir.join("conda/envs")));
+    assert!(!project.0.join(LEGACY_DIR).join("env").exists());
     step.perform_with(&mut Vec::new(), &fake).unwrap();
     // The same prefix (e.g. copied to a Jetson) is not ready for aarch64.
     let arm = CondaStep::new(
@@ -275,7 +280,7 @@ fn managed_creation_reuses_only_a_completed_matching_definition() {
     // A compatible conda on PATH is used as is; nothing is installed.
     assert_eq!(*fake.creates.borrow(), ["conda"]);
     assert_eq!(fake.downloads.get() + fake.installs.get(), 0);
-    assert!(!project.0.join("user").exists());
+    assert!(!project.host().cache_dir.exists());
     project
         .step(&config, false)
         .perform_with(&mut Vec::new(), &fake)
@@ -289,6 +294,26 @@ fn managed_creation_reuses_only_a_completed_matching_definition() {
     assert_eq!(fake.creates.borrow().len(), 2);
     assert!(step.managed.as_ref().unwrap().is_ready());
     assert!(step.render().contains("conda.reuse_checked("));
+}
+
+#[test]
+fn existing_workspace_conda_is_reused_at_its_original_prefix() {
+    let project = Project::new();
+    let config = project.managed();
+    let legacy = project.0.join(LEGACY_DIR);
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join(READY), PENDING).unwrap();
+    let fake = Fake::default();
+    project
+        .step(&config, true)
+        .perform_with(&mut Vec::new(), &fake)
+        .unwrap();
+
+    let build = project.step(&config, false);
+    assert_eq!(build.selection.prefix(), legacy.join("env"));
+    build.perform_with(&mut Vec::new(), &fake).unwrap();
+    assert_eq!(fake.creates.borrow().len(), 1);
+    assert!(!project.host().data_dir.exists());
 }
 
 #[test]
@@ -315,29 +340,27 @@ fn failed_create_is_redone_but_foreign_directories_are_never_adopted() {
         .is_err());
     // Rerunning apply recreates it from scratch.
     assert!(step.render().contains("conda.recreate("));
-    fs::write(project.0.join(MANAGED_PREFIX).join("partial"), "").unwrap();
+    let partial = step.selection.prefix().join("partial");
+    fs::write(&partial, "").unwrap();
     step.perform_with(&mut Vec::new(), &Fake::default())
         .unwrap();
-    assert!(!project.0.join(MANAGED_PREFIX).join("partial").exists());
+    assert!(!partial.exists());
     assert!(step.managed.as_ref().unwrap().is_ready());
 
     // A prefix without rospm's record is someone else's: left untouched.
     let foreign = Project::new();
-    fs::create_dir_all(foreign.0.join(MANAGED_PREFIX).join("conda-meta")).unwrap();
-    fs::write(
-        foreign.0.join(MANAGED_PREFIX).join("conda-meta/history"),
-        "theirs",
-    )
-    .unwrap();
     let step = foreign.step(&config, true);
+    let managed = step.managed.as_ref().unwrap();
+    fs::create_dir_all(managed.prefix.join("conda-meta")).unwrap();
+    fs::write(managed.prefix.join("conda-meta/history"), "theirs").unwrap();
     assert!(step.render().contains("conda.managed_conflict("));
     let error = step.perform_with(&mut Vec::new(), &fake).unwrap_err();
     assert!(error.to_string().contains("conda.managed_conflict"));
     assert_eq!(
-        fs::read_to_string(foreign.0.join(MANAGED_PREFIX).join("conda-meta/history")).unwrap(),
+        fs::read_to_string(managed.prefix.join("conda-meta/history")).unwrap(),
         "theirs"
     );
-    assert!(!foreign.0.join(READY).exists());
+    assert!(!managed.ready.exists());
 }
 
 #[test]
@@ -488,14 +511,9 @@ fn build_requires_the_interpreter_and_tools_inside_the_environment() {
         .perform_with(&mut Vec::new(), &Fake::default())
         .unwrap();
     let step = project.step(&config, false);
-    assert!(step.render().contains(
-        project
-            .0
-            .join(MANAGED_PREFIX)
-            .join("bin/python")
-            .to_str()
-            .unwrap()
-    ));
+    assert!(step
+        .render()
+        .contains(step.selection.prefix().join("bin/python").to_str().unwrap()));
     step.perform_with(&mut Vec::new(), &Fake::default())
         .unwrap();
 }
@@ -517,7 +535,15 @@ fn definition_paths_are_project_relative_and_cannot_select_an_external_prefix() 
     assert!(!rendered.contains("shared-name"));
     assert!(rendered.contains("numpy") && rendered.contains("python=3.12"));
     assert!(rendered.contains("nodefaults"));
-    let other = other_project.step(&other_project.managed(), true);
+    let other = CondaStep::new(
+        &other_project.managed(),
+        &other_project.0,
+        &project.host(),
+        Platform::LinuxX86_64,
+        true,
+        None,
+    )
+    .unwrap();
     assert_ne!(
         step.managed.as_ref().unwrap().prefix,
         other.managed.as_ref().unwrap().prefix
@@ -674,7 +700,7 @@ fn lock_records_a_ready_environment_and_apply_locked_replays_it_without_solving(
     assert!(preview.contains("conda.replay("), "{preview}");
     assert!(preview.contains(&format!(
         "conda create --yes --prefix {}",
-        clean.0.join(MANAGED_PREFIX).display()
+        step.selection.prefix().display()
     )));
     assert!(preview
         .contains("pip install --no-deps --no-input --disable-pip-version-check requests==2.32.3"));
@@ -690,7 +716,7 @@ fn lock_records_a_ready_environment_and_apply_locked_replays_it_without_solving(
     );
     assert!(replayer.creates.borrow().is_empty(), "replay never solves");
     assert_eq!(
-        fs::read_to_string(clean.0.join(READY)).unwrap(),
+        fs::read_to_string(&step.managed.as_ref().unwrap().ready).unwrap(),
         format!(
             "{} linux-64\n{}\n{}",
             record.definition_sha256,
@@ -936,7 +962,7 @@ fn missing_conda_is_bootstrapped_once_and_then_used_by_apply_and_build() {
     let conda = bootstrap.conda().to_string_lossy().into_owned();
     assert_eq!(*fake.creates.borrow(), std::slice::from_ref(&conda));
     assert_eq!((fake.downloads.get(), fake.installs.get()), (1, 1));
-    assert!(bootstrap.is_ready() && project.0.join(READY).is_file());
+    assert!(bootstrap.is_ready() && step.managed.as_ref().unwrap().ready.is_file());
     assert!(String::from_utf8(out).unwrap().contains("conda.installed("));
 
     // Later plans pick the installed tool without any subprocess, and

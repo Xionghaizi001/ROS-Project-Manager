@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
 use crate::lock::{sha256_hex, Lock};
@@ -47,9 +48,9 @@ pub(crate) use conda_verify::verify_with;
 pub use definition::definition_sha256;
 pub use explicit::{lock_path, resolve_lock};
 
-const MANAGED_PREFIX: &str = ".rospm/conda/env";
+const LEGACY_DIR: &str = ".rospm/conda";
 const DEFINITION: &str = ".rospm/conda/environment.yml";
-const READY: &str = ".rospm/conda/ready.sha256";
+const READY: &str = "ready.sha256";
 const PENDING: &str = "pending\n";
 /// What every build command runs inside the environment.
 const BUILD_TOOLS: [&str; 1] = ["colcon"];
@@ -184,20 +185,27 @@ pub enum Selection {
 }
 
 impl Selection {
-    pub fn from_config(config: &CondaBuild, root: &Path) -> Result<Self> {
+    fn from_config(
+        config: &CondaBuild,
+        root: &Path,
+        host: &CondaHost,
+        platform: Platform,
+    ) -> Result<Self> {
         config.validate()?;
         Ok(if let Some(name) = &config.name {
             Self::Name(name.clone())
+        } else if let Some(prefix) = &config.prefix {
+            Self::Prefix(root.join(prefix))
         } else {
-            Self::Prefix(
-                root.join(
-                    config
-                        .prefix
-                        .as_deref()
-                        .unwrap_or(Path::new(MANAGED_PREFIX)),
-                ),
-            )
+            Self::Prefix(managed_dir(root, host, platform).join("env"))
         })
+    }
+
+    fn prefix(&self) -> &Path {
+        match self {
+            Self::Prefix(prefix) => prefix,
+            Self::Name(_) => unreachable!("managed Conda always uses a prefix"),
+        }
     }
 
     /// `conda run` through `program`, which is `conda` on PATH or the
@@ -223,6 +231,19 @@ impl Selection {
             Self::Prefix(prefix) => format!("-p {}", shell_quote(&prefix.to_string_lossy())),
         }
     }
+}
+
+fn managed_dir(root: &Path, host: &CondaHost, platform: Platform) -> PathBuf {
+    let legacy = root.join(LEGACY_DIR);
+    if legacy.join(READY).is_file() {
+        return legacy;
+    }
+    // Hash the full path so projects with the same name remain isolated.
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let id = Sha256::digest(root.as_os_str().as_encoded_bytes());
+    host.data_dir
+        .join("conda/envs")
+        .join(format!("{}-{id:x}", conda_platform(platform)))
 }
 
 #[derive(Debug, Clone)]

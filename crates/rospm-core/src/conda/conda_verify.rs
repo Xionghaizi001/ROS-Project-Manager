@@ -45,7 +45,7 @@ pub(crate) fn verify_with(
         }
         return Ok(());
     };
-    let selection = Selection::from_config(config, root)?;
+    let selection = Selection::from_config(config, root, host, platform)?;
     let Some(managed) = &config.managed else {
         r.push(
             "conda",
