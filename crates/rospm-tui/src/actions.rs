@@ -1,21 +1,20 @@
 use std::{
+    cell::Cell,
     io::{self, Write},
     path::Path,
     time::Instant,
 };
 
 use anyhow::Result;
-use crossterm::{
-    event::EnableMouseCapture,
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
-};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::Terminal;
 use rospm_core::{conda::ToolInstallation, worker::Operation};
 
 use crate::{
-    dashboard, navigation::first_selectable, terminal::leave_screen, InstallPage, RunBackend,
-    TaskOutcome, Text,
+    dashboard,
+    navigation::first_selectable,
+    terminal::{leave_screen, Screen},
+    InstallPage, RunBackend, TaskOutcome, Text,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +86,7 @@ pub(super) fn task_backend<'a>(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn install<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
     manifest: Option<&Path>,
     dashboard: &mut Option<dashboard::Dashboard>,
     install_page: &mut Option<InstallPage>,
@@ -97,7 +97,7 @@ pub(super) fn install<B: ratatui::backend::Backend + Write>(
     backend: Option<&mut dyn RunBackend>,
     last_runtime_refresh: &mut Instant,
 ) -> Result<()> {
-    leave_screen(terminal)?;
+    leave_screen(terminal, screen)?;
     disable_raw_mode()?;
     let root = dashboard
         .as_ref()
@@ -139,13 +139,6 @@ pub(super) fn install<B: ratatui::backend::Backend + Write>(
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )?;
-    terminal.hide_cursor()?;
-    terminal.clear()?;
     if let Some(page) = install_page {
         page.refresh();
     }
@@ -167,6 +160,7 @@ pub(super) fn request_compile(confirmation: &mut Option<PendingConfirmation>, re
 pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>(
     pending: PendingConfirmation,
     terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
     manifest: Option<&Path>,
     text: &Text,
     dashboard: &mut Option<dashboard::Dashboard>,
@@ -181,10 +175,17 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
 ) -> Result<()> {
     match pending {
         PendingConfirmation::Action(operation) => {
-            execute_action(terminal, manifest, action, operation, backend)?;
+            execute_action(terminal, screen, manifest, action, operation, backend)?;
         }
         PendingConfirmation::Build { rebuild } => {
-            execute_compile(terminal, dashboard.as_ref(), build, rebuild, backend)?;
+            execute_compile(
+                terminal,
+                screen,
+                dashboard.as_ref(),
+                build,
+                rebuild,
+                backend,
+            )?;
         }
         PendingConfirmation::InstallDebugTool { package } => {
             if let Some(InstallPage::DebugToolMissing {
@@ -207,15 +208,15 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
 
 fn execute_action<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
     manifest: Option<&Path>,
     action: &mut impl FnMut(Action) -> Result<()>,
     operation: Action,
     backend: Option<&mut dyn RunBackend>,
 ) -> Result<()> {
-    leave_screen(terminal)?;
+    leave_screen(terminal, screen)?;
     disable_raw_mode()?;
     let mut answer = String::new();
-    let mut detached = false;
     let result = if let (Some(backend), Some(operation)) = (backend, task_operation(operation)) {
         let root = manifest
             .and_then(Path::parent)
@@ -227,7 +228,7 @@ fn execute_action<B: ratatui::backend::Backend + Write>(
         action(operation).map(|_| false)
     };
     match result {
-        Ok(true) => detached = true,
+        Ok(true) => {}
         Ok(false) => {
             println!("Enter ↩");
             io::stdin().read_line(&mut answer)?;
@@ -239,30 +240,18 @@ fn execute_action<B: ratatui::backend::Backend + Write>(
         }
     }
     enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )?;
-    terminal.hide_cursor()?;
-    if detached {
-        // EnterAlternateScreen already blanked the screen. Reset both Ratatui buffers.
-        terminal.swap_buffers();
-        terminal.swap_buffers();
-    } else {
-        terminal.clear()?;
-    }
     Ok(())
 }
 
 fn execute_compile<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
     dashboard: Option<&dashboard::Dashboard>,
     build: &mut impl FnMut(bool) -> Result<()>,
     rebuild: bool,
     backend: Option<&mut dyn RunBackend>,
 ) -> Result<()> {
-    leave_screen(terminal)?;
+    leave_screen(terminal, screen)?;
     disable_raw_mode()?;
     let mut answer = String::new();
     let result = if let Some(backend) = backend {
@@ -287,13 +276,6 @@ fn execute_compile<B: ratatui::backend::Backend + Write>(
     println!("Enter ↩");
     io::stdin().read_line(&mut answer)?;
     enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )?;
-    terminal.hide_cursor()?;
-    terminal.clear()?;
     Ok(())
 }
 

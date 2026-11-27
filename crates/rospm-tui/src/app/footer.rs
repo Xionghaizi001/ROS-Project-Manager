@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path, time::Instant};
+use std::{cell::Cell, io::Write, path::Path, time::Instant};
 
 use anyhow::Result;
 use ratatui::Terminal;
@@ -9,6 +9,7 @@ use crate::{
     },
     dashboard, logs,
     navigation::{activate, back_run, first_selectable, move_focus},
+    terminal::Screen,
     view, Action, InstallPage, RunBackend, Text,
 };
 
@@ -18,6 +19,7 @@ use super::open_logs;
 pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
     action: view::FooterAction,
     terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
     manifest: Option<&Path>,
     browser: &mut Option<logs::Browser>,
     processes: &[rospm_core::run::RunStatus],
@@ -93,6 +95,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
         }
         view::FooterAction::Install => install(
             terminal,
+            screen,
             manifest,
             dashboard,
             install_page,
@@ -109,6 +112,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
                     execute_pending_confirmation(
                         pending,
                         terminal,
+                        screen,
                         manifest,
                         text,
                         dashboard,

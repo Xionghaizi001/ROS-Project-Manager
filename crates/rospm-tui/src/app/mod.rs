@@ -9,9 +9,8 @@ use std::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
+    event::{self, Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::Terminal;
 use rospm_core::{manifest::ProviderKind, probe::Status, worker::WorkspaceLock};
@@ -26,7 +25,7 @@ use crate::{
         activate, back_run, first_selectable, lock_project, move_focus, open_project, tab_at,
     },
     pages, runs, table,
-    terminal::{draw_frame, leave_screen},
+    terminal::{draw_frame, leave_screen, Screen},
     view, Action, DebugStart, InstallPage, RunBackend, Text, DEBUG_TAB, DEBUG_TOOLS,
 };
 
@@ -38,7 +37,7 @@ pub(super) const LOG_KEY: char = 'l';
 #[allow(clippy::too_many_arguments)] // Callbacks and the workspace lock remain owned by the terminal session.
 pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
-    drawing: &Cell<bool>,
+    screen: &Cell<Screen>,
     manifest: Option<&Path>,
     mut dashboard: Option<dashboard::Dashboard>,
     text: &Text,
@@ -70,6 +69,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
             if std::mem::take(requested) {
                 install(
                     terminal,
+                    screen,
                     active_manifest.as_deref(),
                     &mut dashboard,
                     &mut install_page,
@@ -129,17 +129,10 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     last_process_refresh = None;
                 }
                 if matches!(install_page, Some(InstallPage::Shell)) {
-                    leave_screen(terminal)?;
+                    leave_screen(terminal, screen)?;
                     let result = backend.shell(&project.root, &project.manifest);
                     // The main screen may still be at the shell prompt, with raw output enabled.
                     terminal.backend_mut().write_all(b"\r\n")?;
-                    execute!(
-                        terminal.backend_mut(),
-                        EnterAlternateScreen,
-                        EnableMouseCapture
-                    )?;
-                    terminal.hide_cursor()?;
-                    terminal.clear()?;
                     install_page = result.err().map(|error| InstallPage::Detail {
                         title: "Shell".into(),
                         body: format!("{error:#}"),
@@ -152,7 +145,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                 }
                 if let Some(InstallPage::Run(page)) = &mut install_page {
                     if let Some(id) = page.take_task_attach() {
-                        leave_screen(terminal)?;
+                        leave_screen(terminal, screen)?;
                         disable_raw_mode()?;
                         if let Err(error) = backend.attach_task(&project.root, &id) {
                             eprintln!("{error:#}");
@@ -160,13 +153,6 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         println!("Enter ↩");
                         io::stdin().read_line(&mut String::new())?;
                         enable_raw_mode()?;
-                        execute!(
-                            terminal.backend_mut(),
-                            EnterAlternateScreen,
-                            EnableMouseCapture
-                        )?;
-                        terminal.hide_cursor()?;
-                        terminal.clear()?;
                         last_process_refresh = None;
                     }
                     if page.dispatch(*backend, project, *verbosity, text) {
@@ -186,17 +172,10 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         Err(error) => process_error = Some(format!("{error:#}")),
                     }
                     if let Some(id) = backend.pending_authorization().map(str::to_owned) {
-                        leave_screen(terminal)?;
+                        leave_screen(terminal, screen)?;
                         disable_raw_mode()?;
                         let result = backend.authorize_task(&project.root, &id);
                         enable_raw_mode()?;
-                        execute!(
-                            terminal.backend_mut(),
-                            EnterAlternateScreen,
-                            EnableMouseCapture
-                        )?;
-                        terminal.hide_cursor()?;
-                        terminal.clear()?;
                         if let Err(error) = result {
                             process_error = Some(format!("{error:#}"));
                         }
@@ -229,7 +208,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
             }
             last_runtime_refresh = Instant::now();
         }
-        draw_frame(terminal, drawing, |frame| {
+        draw_frame(terminal, screen, |frame| {
             if let Some(browser) = &browser {
                 log_view::draw(frame, browser, text);
                 return;
@@ -260,6 +239,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 execute_pending_confirmation(
                                     pending,
                                     terminal,
+                                    screen,
                                     active_manifest.as_deref(),
                                     text,
                                     &mut dashboard,
@@ -360,6 +340,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         {
                             install(
                                 terminal,
+                                screen,
                                 active_manifest.as_deref(),
                                 &mut dashboard,
                                 &mut install_page,
@@ -630,6 +611,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                             let quit = activate_footer(
                                 footer_action,
                                 terminal,
+                                screen,
                                 active_manifest.as_deref(),
                                 &mut browser,
                                 &processes,
