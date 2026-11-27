@@ -12,3 +12,4 @@ ratatui.workspace = true
 rospm-core = { path = "../rospm-core" }
 serde_json.workspace = true
 shlex = "2"
+toml_edit = "0.22"

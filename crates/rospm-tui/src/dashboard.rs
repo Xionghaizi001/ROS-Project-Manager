@@ -1,16 +1,19 @@
 //! Project data loaded for the TUI dashboard.
 
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Write},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 use rospm_core::{
+    conda,
     introspect::{self, HostFacts},
     lock::{Lock, LOCK_FILE},
-    manifest::{Manifest, ProviderKind, MANIFEST_FILE},
+    manifest::{CondaBuild, Manifest, ProviderKind, MANIFEST_FILE},
     mirror,
     package_xml::{find_package_files, IGNORE_MARKERS},
     plan::Plan,
@@ -55,15 +58,47 @@ pub(crate) struct Component {
 pub(crate) struct ScannedProject {
     pub(crate) manifest: PathBuf,
     pub(crate) needs_manifest: bool,
+    pub(crate) conda: Option<String>,
 }
 
 impl ScannedProject {
-    fn new(manifest: PathBuf) -> Self {
+    fn new(manifest: PathBuf, environments: &BTreeSet<String>) -> Self {
+        let (needs_manifest, name) = match read_manifest(&manifest) {
+            Ok(manifest) => (false, conda_project_name(&manifest).map(str::to_owned)),
+            Err(error) if can_recover(&error) => (
+                true,
+                manifest
+                    .parent()
+                    .and_then(|root| root.canonicalize().ok())
+                    .filter(|root| !root.join("pixi.toml").is_file())
+                    .and_then(|root| {
+                        root.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    }),
+            ),
+            Err(_) => (false, None),
+        };
+        let conda = name.filter(|name| {
+            environments.contains(name)
+                && !name.chars().any(char::is_control)
+                && CondaBuild {
+                    name: Some(name.clone()),
+                    ..Default::default()
+                }
+                .validate()
+                .is_ok()
+        });
         Self {
-            needs_manifest: read_manifest(&manifest).is_err_and(|error| can_recover(&error)),
             manifest,
+            needs_manifest,
+            conda,
         }
     }
+}
+
+pub(crate) fn conda_project_name(manifest: &Manifest) -> Option<&str> {
+    (manifest.environment.provider == ProviderKind::Native && manifest.build.conda.is_none())
+        .then_some(manifest.project.name.as_str())
 }
 
 pub(crate) fn read_manifest(path: &Path) -> rospm_core::Result<Manifest> {
@@ -105,17 +140,7 @@ pub(crate) fn recover_manifest(path: &Path, busy_message: &str) -> Result<Manife
         Err(error) => return Err(Error::io(path, error).into()),
     };
 
-    let mut temporary = path.as_os_str().to_os_string();
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos();
-    temporary.push(format!(".recover.{stamp}.tmp"));
-    let temporary = PathBuf::from(temporary);
-    let mut file =
-        fs::File::create_new(&temporary).map_err(|error| Error::io(&temporary, error))?;
-    let result = (|| {
-        file.write_all(draft.as_bytes())?;
-        file.sync_all()?;
+    write_manifest(path, &draft, None, |temporary| {
         if existing {
             let mut backup = path.as_os_str().to_os_string();
             backup.push(".bak");
@@ -130,18 +155,91 @@ pub(crate) fn recover_manifest(path: &Path, busy_message: &str) -> Result<Manife
                     Err(error) => return Err(error),
                 }
             }
-            fs::rename(&temporary, path)
+            fs::rename(temporary, path)
         } else {
-            fs::hard_link(&temporary, path)
+            fs::hard_link(temporary, path)
         }
+    })?;
+    Ok(manifest)
+}
+
+pub(crate) fn add_conda(path: &Path, name: &str, busy_message: &str) -> Result<Manifest> {
+    let root = path.parent().context("manifest has no parent directory")?;
+    let _lease = WorkspaceLock::try_acquire_mutation(root)?.context(busy_message.to_owned())?;
+    let target = path
+        .canonicalize()
+        .map_err(|error| Error::io(path, error))?;
+    let target_root = target
+        .parent()
+        .context("manifest has no parent directory")?;
+    // A symlink can share its manifest with a separately locked workspace.
+    let _target_lease = if target_root != root.canonicalize()? {
+        Some(WorkspaceLock::try_acquire_mutation(target_root)?.context(busy_message.to_owned())?)
+    } else {
+        None
+    };
+    let metadata = fs::metadata(&target).map_err(|error| Error::io(&target, error))?;
+    if !metadata.is_file() {
+        return Err(Error::io(path, io::Error::other("expected a regular file")).into());
+    }
+    let contents = fs::read_to_string(&target).map_err(|error| Error::io(&target, error))?;
+    let manifest = Manifest::parse(&contents, path)?;
+    if conda_project_name(&manifest) != Some(name) {
+        return Ok(manifest);
+    }
+
+    let mut doc = contents.parse::<toml_edit::DocumentMut>()?;
+    let mut conda = toml_edit::Table::new();
+    conda.insert("name", toml_edit::value(name));
+    doc.entry("build")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
+        .context("expected a build table")?
+        .insert("conda", toml_edit::Item::Table(conda));
+    let updated = doc.to_string();
+    let manifest = Manifest::parse(&updated, path)?;
+    write_manifest(&target, &updated, Some(metadata.permissions()), |temp| {
+        fs::rename(temp, &target)
+    })?;
+    Ok(manifest)
+}
+
+fn write_manifest(
+    path: &Path,
+    text: &str,
+    permissions: Option<fs::Permissions>,
+    commit: impl FnOnce(&Path) -> io::Result<()>,
+) -> Result<()> {
+    let mut temporary = path.as_os_str().to_os_string();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    temporary.push(format!(".{stamp}.tmp"));
+    let temporary = PathBuf::from(temporary);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    if let Some(permissions) = &permissions {
+        options.mode(permissions.mode() & 0o777);
+    }
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| Error::io(&temporary, error))?;
+    let result = (|| {
+        file.write_all(text.as_bytes())?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
+        file.sync_all()?;
+        commit(&temporary)
     })();
     let _ = fs::remove_file(&temporary);
     result.map_err(|error| Error::io(path, error))?;
-    Ok(manifest)
+    Ok(())
 }
 
 impl Dashboard {
     pub(crate) fn scan_projects(root: &Path, known_manifest: Option<&Path>) -> Vec<ScannedProject> {
+        let environments = conda::named_environments();
         let mut pending = vec![(root.to_path_buf(), true)];
         let mut projects = Vec::new();
         while let Some((directory, detect_workspace)) = pending.pop() {
@@ -162,7 +260,7 @@ impl Dashboard {
                     || !find_package_files(&directory.join("src")).is_empty());
             let is_project = has_manifest || has_workspace || known_manifest == Some(&manifest);
             if is_project {
-                projects.push(ScannedProject::new(manifest));
+                projects.push(ScannedProject::new(manifest, &environments));
             }
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -183,7 +281,7 @@ impl Dashboard {
         if let Some(manifest) =
             known_manifest.filter(|path| !projects.iter().any(|project| project.manifest == *path))
         {
-            projects.push(ScannedProject::new(manifest.to_path_buf()));
+            projects.push(ScannedProject::new(manifest.to_path_buf(), &environments));
         }
         let root_manifest = root.join(MANIFEST_FILE);
         // Drafting can discover workspaces below a project root that has no marker of its own.
@@ -192,7 +290,7 @@ impl Dashboard {
             .any(|project| project.manifest == root_manifest)
             && introspect::has_workspace_inputs(root)
         {
-            projects.push(ScannedProject::new(root_manifest.clone()));
+            projects.push(ScannedProject::new(root_manifest.clone(), &environments));
         }
         projects.sort_by(|a, b| {
             (a.manifest != root_manifest, &a.manifest)
@@ -536,5 +634,47 @@ mod tests {
             .flatten()
             .any(|entry| entry.path().extension().is_some_and(|ext| ext == "tmp")));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn same_name_conda_is_added_without_overwriting_the_manifest_configuration() {
+        let root = test_root().join("different-directory-name");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(MANIFEST_FILE);
+        let environments = BTreeSet::from(["minimal".into()]);
+        let original = include_str!("../../rospm-core/tests/fixtures/minimal.toml");
+        for build in [
+            "",
+            "[build]\nverify = [\"echo ok\"] # build check\n\n",
+            "build = { verify = [\"echo ok\"] } # build check\n\n",
+            "build.verify = [\"echo ok\"] # build check\n\n",
+        ] {
+            let contents = original.replacen("[project]", &format!("{build}[project]"), 1);
+            fs::write(&path, &contents).unwrap();
+            assert_eq!(
+                ScannedProject::new(path.clone(), &environments)
+                    .conda
+                    .as_deref(),
+                Some("minimal")
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+
+            let manifest = add_conda(&path, "minimal", "busy").unwrap();
+            assert_eq!(
+                manifest.build.conda.unwrap().name.as_deref(),
+                Some("minimal")
+            );
+            let updated = fs::read_to_string(&path).unwrap();
+            if !build.is_empty() {
+                assert_eq!(manifest.build.verify, ["echo ok"]);
+                assert!(updated.contains("# build check"));
+            }
+            assert!(ScannedProject::new(path.clone(), &environments)
+                .conda
+                .is_none());
+            add_conda(&path, "minimal", "busy").unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), updated);
+        }
+        fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 }

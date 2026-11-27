@@ -33,9 +33,20 @@ pub enum Action {
 
 pub(super) enum PendingConfirmation {
     Action(Action),
-    RecoverProject(PathBuf),
-    Build { rebuild: bool },
-    InstallDebugTool { package: String },
+    RecoverProject {
+        path: PathBuf,
+        conda: Option<String>,
+    },
+    AddProjectConda {
+        path: PathBuf,
+        name: String,
+    },
+    Build {
+        rebuild: bool,
+    },
+    InstallDebugTool {
+        package: String,
+    },
 }
 
 impl PendingConfirmation {
@@ -44,7 +55,10 @@ impl PendingConfirmation {
             Self::Action(action) => {
                 format!("{} {}", text.confirm_action, action_label(*action, text))
             }
-            Self::RecoverProject(_) => text.confirm_recover_project.clone(),
+            Self::RecoverProject { .. } => text.confirm_recover_project.clone(),
+            Self::AddProjectConda { name, .. } => {
+                text.confirm_project_conda.replace("{name}", name)
+            }
             Self::Build { rebuild: true } => text.confirm_rebuild.clone(),
             Self::Build { rebuild: false } => text.confirm_build.clone(),
             Self::InstallDebugTool { package } => {
@@ -166,7 +180,7 @@ pub(super) fn request_compile(confirmation: &mut Option<PendingConfirmation>, re
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>(
-    pending: PendingConfirmation,
+    confirmation: &mut Option<PendingConfirmation>,
     terminal: &mut Terminal<B>,
     screen: &Cell<Screen>,
     manifest: Option<&Path>,
@@ -182,11 +196,14 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
     action: &mut impl FnMut(Action) -> Result<()>,
     backend: Option<&mut dyn RunBackend>,
 ) -> Result<()> {
+    let Some(pending) = confirmation.take() else {
+        return Ok(());
+    };
     match pending {
         PendingConfirmation::Action(operation) => {
             execute_action(terminal, screen, manifest, action, operation, backend)?;
         }
-        PendingConfirmation::RecoverProject(path) => {
+        PendingConfirmation::RecoverProject { path, conda } => {
             let root = path.parent().unwrap_or_else(|| Path::new("."));
             let recovered = lock_project(root, text).and_then(|lease| {
                 dashboard::recover_manifest(&path, &text.project_recovery_busy)
@@ -194,6 +211,14 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
             });
             match recovered {
                 Ok((manifest, lease)) => {
+                    if let Some(name) =
+                        conda.filter(|name| dashboard::conda_project_name(&manifest) == Some(name))
+                    {
+                        *confirmation = Some(PendingConfirmation::AddProjectConda {
+                            path: path.clone(),
+                            name,
+                        });
+                    }
                     *dashboard = Some(dashboard::Dashboard::from_manifest(path, manifest, text));
                     *project_lock = Some(lease);
                     *install_page = None;
@@ -201,6 +226,25 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
                 Err(error) => {
                     *install_page = Some(InstallPage::Detail {
                         title: text.project_scan_title.clone(),
+                        body: format!("{error:#}"),
+                        return_to_ros: false,
+                    });
+                }
+            }
+            *scroll = 0;
+            *focused_row =
+                first_selectable(dashboard.as_ref(), text, selected, install_page.as_ref());
+            *last_runtime_refresh = Instant::now();
+            return Ok(());
+        }
+        PendingConfirmation::AddProjectConda { path, name } => {
+            match dashboard::add_conda(&path, &name, &text.project_recovery_busy) {
+                Ok(manifest) => {
+                    *dashboard = Some(dashboard::Dashboard::from_manifest(path, manifest, text));
+                }
+                Err(error) => {
+                    *install_page = Some(InstallPage::Detail {
+                        title: text.conda.clone(),
                         body: format!("{error:#}"),
                         return_to_ros: false,
                     });

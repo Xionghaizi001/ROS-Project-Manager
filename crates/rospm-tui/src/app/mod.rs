@@ -256,11 +256,11 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     {
                         break Ok(());
                     }
-                    if let Some(pending) = confirmation.take() {
+                    if confirmation.is_some() {
                         match key.code {
                             KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
                                 execute_pending_confirmation(
-                                    pending,
+                                    &mut confirmation,
                                     terminal,
                                     screen,
                                     active_manifest.as_deref(),
@@ -277,8 +277,10 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     task_backend(runs),
                                 )?;
                             }
-                            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {}
-                            _ => confirmation = Some(pending),
+                            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                                confirmation = None;
+                            }
+                            _ => {}
                         }
                         continue;
                     }

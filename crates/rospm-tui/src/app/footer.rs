@@ -118,26 +118,26 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
             last_runtime_refresh,
         )?,
         view::FooterAction::Confirm(approved) => {
-            if let Some(pending) = confirmation.take() {
-                if approved {
-                    execute_pending_confirmation(
-                        pending,
-                        terminal,
-                        screen,
-                        manifest,
-                        text,
-                        dashboard,
-                        project_lock,
-                        install_page,
-                        focused_row,
-                        scroll,
-                        *selected,
-                        last_runtime_refresh,
-                        build,
-                        execute_action,
-                        backend,
-                    )?;
-                }
+            if approved {
+                execute_pending_confirmation(
+                    confirmation,
+                    terminal,
+                    screen,
+                    manifest,
+                    text,
+                    dashboard,
+                    project_lock,
+                    install_page,
+                    focused_row,
+                    scroll,
+                    *selected,
+                    last_runtime_refresh,
+                    build,
+                    execute_action,
+                    backend,
+                )?;
+            } else {
+                *confirmation = None;
             }
         }
         view::FooterAction::Build | view::FooterAction::Rebuild => {

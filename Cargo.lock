@@ -916,6 +916,7 @@ dependencies = [
  "rospm-core",
  "serde_json",
  "shlex",
+ "toml_edit",
 ]
 
 [[package]]

@@ -19,6 +19,7 @@ mod system;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,6 +50,43 @@ pub(crate) use conda_verify::verify_with;
 pub use definition::definition_sha256;
 pub use explicit::{lock_path, resolve_lock};
 pub use path::PathAction;
+
+/// Names that the Conda executable on PATH can select with `--name`.
+pub fn named_environments() -> BTreeSet<String> {
+    let Ok(output) = std::process::Command::new("conda")
+        .args(["info", "--json"])
+        .output()
+    else {
+        return BTreeSet::new();
+    };
+    if !output.status.success() {
+        return BTreeSet::new();
+    }
+
+    #[derive(Deserialize)]
+    struct Info {
+        envs: Vec<PathBuf>,
+        envs_dirs: Vec<PathBuf>,
+        root_prefix: PathBuf,
+    }
+    let Ok(info) = serde_json::from_slice::<Info>(&output.stdout) else {
+        return BTreeSet::new();
+    };
+    let mut names = BTreeSet::new();
+    for prefix in info.envs {
+        if prefix == info.root_prefix {
+            names.insert("base".into());
+        } else if prefix
+            .parent()
+            .is_some_and(|parent| info.envs_dirs.iter().any(|dir| dir == parent))
+        {
+            if let Some(name) = prefix.file_name().and_then(|name| name.to_str()) {
+                names.insert(name.to_owned());
+            }
+        }
+    }
+    names
+}
 
 const LEGACY_DIR: &str = ".rospm/conda";
 const DEFINITION: &str = ".rospm/conda/environment.yml";

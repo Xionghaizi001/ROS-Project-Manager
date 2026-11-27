@@ -102,6 +102,10 @@ pub(crate) fn rows(
                         row.cells[1].clone_from(&text.project_needs_manifest);
                     }
                     row.cells[2] = path.display().to_string();
+                    if let Some(name) = &project.conda {
+                        row.cells[2].push_str(" · ");
+                        row.cells[2].push_str(&text.project_conda_match.replace("{name}", name));
+                    }
                     row
                 })
                 .collect()

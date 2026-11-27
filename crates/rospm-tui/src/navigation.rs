@@ -124,17 +124,30 @@ pub(super) fn open_project(
     let path = project.manifest.clone();
     let opened = match dashboard::read_manifest(&path) {
         Ok(manifest) => {
+            let conda = project
+                .conda
+                .as_deref()
+                .filter(|name| dashboard::conda_project_name(&manifest) == Some(*name));
             let project = dashboard::Dashboard::from_manifest(path, manifest, text);
-            lock_project(&project.root, text).map(|lease| (project, lease))
+            lock_project(&project.root, text).map(|lease| (project, lease, conda))
         }
         Err(error) if dashboard::can_recover(&error) => {
-            *confirmation = Some(PendingConfirmation::RecoverProject(path));
+            *confirmation = Some(PendingConfirmation::RecoverProject {
+                path,
+                conda: project.conda.clone(),
+            });
             return true;
         }
         Err(error) => Err(error.into()),
     };
     match opened {
-        Ok((project, lease)) => {
+        Ok((project, lease, conda)) => {
+            if let Some(name) = conda {
+                *confirmation = Some(PendingConfirmation::AddProjectConda {
+                    path: project.manifest.clone(),
+                    name: name.to_owned(),
+                });
+            }
             *dashboard = Some(project);
             *project_lock = Some(lease);
             *install_page = None;
