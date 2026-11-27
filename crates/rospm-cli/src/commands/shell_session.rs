@@ -343,7 +343,7 @@ rospm() {{
     if [[ $# == 1 ]]; then
         case $1 in
             exit) builtin kill -USR1 {pid}; return ;;
-            bakground) builtin kill -USR2 {pid}; return ;;
+            background) builtin kill -USR2 {pid}; return ;;
         esac
     fi
     command rospm "$@"

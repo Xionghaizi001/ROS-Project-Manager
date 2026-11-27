@@ -811,3 +811,119 @@ fn run_echoes_full_command_only_when_verbose() {
         );
     }
 }
+
+#[test]
+fn managed_conda_path_round_trip_preserves_existing_bash_setup() {
+    use rospm_core::{pixi::conda_platform, platform::Platform};
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let dir = fixture("conda-path");
+    let data = dir.join("user's data");
+    let platform = Platform::current().expect("supported platform");
+    let table = include_str!("../../rospm-core/data/miniforge.toml")
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    let version = table["version"].as_str().unwrap();
+    let prefix = data.join("rospm/conda").join(format!(
+        "miniforge3-{}-{}",
+        version,
+        conda_platform(platform)
+    ));
+    let conda = prefix.join("bin/conda");
+    let condabin = prefix.join("condabin");
+    let marker = prefix.with_file_name(format!(
+        "{}.ready",
+        prefix.file_name().unwrap().to_str().unwrap()
+    ));
+    let rc = dir.join("bashrc");
+    let login = dir.join(".bash_profile");
+    let original = "conda() { printf 'external\\n'; }";
+    let profile = ". ~/.bashrc\n";
+    fs::write(&rc, original).unwrap();
+    fs::set_permissions(&rc, fs::Permissions::from_mode(0o640)).unwrap();
+    symlink(&rc, dir.join(".bashrc")).unwrap();
+    fs::write(&login, profile).unwrap();
+
+    let run = |verb| {
+        rospm()
+            .current_dir(&dir)
+            .env("HOME", &dir)
+            .env("SHELL", "/bin/bash")
+            .env("XDG_DATA_HOME", &data)
+            .args(["conda", verb, "--json"])
+            .output()
+            .unwrap()
+    };
+    let shell = |startup: &Path| {
+        let out = Command::new("/bin/bash")
+            .env("HOME", &dir)
+            .env("PATH", "/usr/bin:/bin")
+            .env_remove("BASH_ENV")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                r#". "$1"; conda; printf '%s\n' "$PATH""#,
+                "--",
+            ])
+            .arg(startup)
+            .output()
+            .unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "{out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    fs::create_dir_all(conda.parent().unwrap()).unwrap();
+    fs::create_dir_all(&condabin).unwrap();
+    fs::write(
+        &conda,
+        "#!/bin/sh\nprintf \"conda() { printf 'managed\\\\\\\\n'; }\\n\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&conda, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = run("set-default");
+    assert!(!out.status.success());
+    assert_eq!(json(&out)["ok"], false);
+    assert_eq!(fs::read_to_string(&rc).unwrap(), original);
+
+    fs::write(
+        &marker,
+        table["installer"][&platform.to_string()]["sha256"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let out = run("set-default");
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(json(&out)["ok"], true);
+    }
+    for startup in [&rc, &login] {
+        assert_eq!(
+            shell(startup),
+            format!("managed\n{}:/usr/bin:/bin\n", condabin.display())
+        );
+        assert_eq!(
+            fs::read_to_string(startup)
+                .unwrap()
+                .matches("# >>> rospm conda >>>")
+                .count(),
+            1
+        );
+    }
+    fs::remove_file(marker).unwrap(); // Stale configuration can still be removed.
+    for _ in 0..2 {
+        let out = run("remove-path");
+        assert!(out.status.success(), "{out:?}");
+        assert_eq!(json(&out)["ok"], true);
+    }
+    assert_eq!(shell(&login), "external\n/usr/bin:/bin\n");
+    assert_eq!(fs::read_to_string(&rc).unwrap(), original);
+    assert_eq!(fs::read_to_string(&login).unwrap(), profile);
+    assert_eq!(fs::read_link(dir.join(".bashrc")).unwrap(), rc);
+    assert_eq!(
+        fs::metadata(&rc).unwrap().permissions().mode() & 0o777,
+        0o640
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
