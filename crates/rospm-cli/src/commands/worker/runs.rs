@@ -264,6 +264,7 @@ impl rospm_tui::RunBackend for Runs {
             self.shell = Some(shell);
         }
         let result = self.shell.as_mut().unwrap().attach();
+        self.shell_status();
         if !matches!(result, Ok(true)) {
             self.shell = None;
         }
@@ -394,6 +395,7 @@ fn task_processes(root: &Path) -> Result<Vec<RunStatus>> {
             task_snapshot: Some(snapshot),
             task_connected: connected,
             shell: false,
+            last_command: None,
             pid: None,
             suspended: false,
             output_fd: None,
@@ -427,11 +429,17 @@ impl Runs {
             };
             process.output_fd = record.process.output_fd;
             record.process.pid = process.pid;
+            record
+                .process
+                .last_command
+                .clone_from(&process.last_command);
         }
     }
 
     fn shell_status(&mut self) -> Option<RunStatus> {
         let status = self.shell.as_mut()?.refresh();
+        let mut latest = [self.shell.as_ref()?.status().clone()];
+        self.update_running(&mut latest);
         if status.is_none() {
             self.shell = None;
         }

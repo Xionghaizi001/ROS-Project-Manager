@@ -88,6 +88,8 @@ pub struct RunStatus {
     pub task_connected: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub shell: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_command: Option<String>,
     pub pid: Option<u32>,
     pub suspended: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +221,25 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn run_status_accepts_older_workers_and_round_trips_last_command() {
+        let old = serde_json::json!({
+            "id": "run-old", "target": "Shell", "background": false,
+            "pid": 42, "suspended": false
+        });
+        let mut status: RunStatus = serde_json::from_value(old).unwrap();
+        assert_eq!(status.last_command, None);
+        assert!(serde_json::to_value(&status)
+            .unwrap()
+            .get("last_command")
+            .is_none());
+        status.last_command = Some("echo 中文; true".into());
+        assert_eq!(
+            serde_json::from_value::<RunStatus>(serde_json::to_value(&status).unwrap()).unwrap(),
+            status
+        );
+    }
 
     #[test]
     fn discovers_installed_nodes_and_launch_files() {

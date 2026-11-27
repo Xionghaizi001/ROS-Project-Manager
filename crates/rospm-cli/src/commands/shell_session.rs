@@ -6,6 +6,7 @@ use std::{
     os::{
         fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
         unix::{
+            fs::FileExt,
             net::UnixStream,
             process::{CommandExt, ExitStatusExt},
         },
@@ -36,6 +37,7 @@ pub(super) struct Session {
     reader: Option<JoinHandle<()>>,
     status: RunStatus,
     log: File,
+    command: File,
     exit: Option<ExitStatus>,
 }
 
@@ -71,11 +73,13 @@ impl Session {
         }
 
         let (owner, worker) = UnixStream::pair()?;
+        let (command, command_path) = anonymous_rc("")?;
         let worker = Command::new(std::env::current_exe()?)
             .arg("--manifest")
             .arg(std::env::current_dir()?.join(manifest))
             .arg("shell-worker")
             .env("ROSPM_LANG", crate::i18n::current().code())
+            .env("ROSPM_SHELL_COMMAND", command_path)
             .current_dir(root)
             .process_group(0)
             .stdin(Stdio::from(OwnedFd::from(worker)))
@@ -96,12 +100,14 @@ impl Session {
                 task_snapshot: None,
                 task_connected: false,
                 shell: true,
+                last_command: None,
                 pid: None,
                 suspended: false,
                 output_fd: Some(log.as_raw_fd()),
                 exit: None,
             },
             log,
+            command,
             exit: None,
         };
         let master = session.master.try_clone()?;
@@ -151,6 +157,7 @@ impl Session {
             self.finish_reader();
             self.output.lock().unwrap().flush()?;
         }
+        self.refresh_command();
         result
     }
 
@@ -183,11 +190,19 @@ impl Session {
     }
 
     pub(super) fn refresh(&mut self) -> Option<RunStatus> {
-        if self.worker.try_wait().ok()?.is_some() {
+        let exited = self.worker.try_wait().ok()?.is_some();
+        self.refresh_command();
+        if exited {
             return None;
         }
         self.status.suspended = self.status.pid.is_some_and(super::run_process::suspended);
         Some(self.status.clone())
+    }
+
+    fn refresh_command(&mut self) {
+        if let Ok(Some(command)) = read_command(&self.command) {
+            self.status.last_command = Some(command);
+        }
     }
 
     pub(super) fn status(&self) -> &RunStatus {
@@ -354,6 +369,9 @@ printf '%s\n' {help}
         pid = std::process::id(),
         help = rospm_core::plan::shell_quote(&crate::i18n::tr("cli.shell.tui_help")),
     ));
+    rc.push_str(&command_tracking_rc(Path::new(
+        &std::env::var_os("ROSPM_SHELL_COMMAND").context("missing shell command file")?,
+    )));
     let (_rc_file, rc_path) = anonymous_rc(&rc)?;
     drop(leases);
 
@@ -380,6 +398,7 @@ printf '%s\n' {help}
     bash.arg("--rcfile")
         .arg(rc_path)
         .arg("-i")
+        .env_remove("ROSPM_SHELL_COMMAND")
         .stdin(Stdio::from(io::stdout().as_fd().try_clone_to_owned()?))
         .current_dir(&loaded.root);
     unsafe {
@@ -438,11 +457,50 @@ fn anonymous_rc(script: &str) -> io::Result<(File, PathBuf)> {
         return Err(io::Error::last_os_error());
     }
     let mut file = unsafe { File::from_raw_fd(fd) };
+    if unsafe { libc::fchmod(fd, 0o600) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
     file.write_all(script.as_bytes())?;
     Ok((
         file,
         PathBuf::from(format!("/proc/{}/fd/{fd}", std::process::id())),
     ))
+}
+
+fn command_tracking_rc(path: &Path) -> String {
+    // PS0 runs before the command; PROMPT_COMMAND also establishes the initial history boundary.
+    // shortcut: retain 4096 characters, expand only if full pasted scripts are needed in process rows.
+    format!(
+        r#"
+_rospm_mark_history() {{
+    local status=$?
+    _rospm_prompt_history=$(HISTTIMEFORMAT= builtin history 1)
+    return "$status"
+}}
+_rospm_record_command() {{
+    local entry command
+    entry=$(HISTTIMEFORMAT= builtin history 1)
+    [[ $entry != "$_rospm_prompt_history" && $entry =~ ^[[:space:]]*[0-9]+[[:space:]][[:space:]](.*)$ ]] || return 0
+    command=${{BASH_REMATCH[1]}}
+    [[ $command =~ ^[[:space:]]*(rospm[[:space:]]+(background|exit)|exit([[:space:]]+[0-9]+)?)[[:space:]]*\;?[[:space:]]*$ ]] && return 0
+    builtin printf '%s\0' "${{command:0:4096}}" > {path} 2>/dev/null || :
+}}
+PROMPT_COMMAND=("${{PROMPT_COMMAND[@]}}" _rospm_mark_history)
+PS0='$(_rospm_record_command)'"${{PS0-}}"
+export -n PS0
+"#,
+        path = rospm_core::plan::shell_quote(&path.to_string_lossy()),
+    )
+}
+
+fn read_command(file: &File) -> io::Result<Option<String>> {
+    // A final NUL distinguishes a complete update from a concurrent truncate/write.
+    let mut bytes = [0; BUFFER_BYTES];
+    let count = file.read_at(&mut bytes, 0)?;
+    Ok(bytes[..count]
+        .strip_suffix(&[0])
+        .filter(|command| !command.is_empty())
+        .map(|command| String::from_utf8_lossy(command).into_owned()))
 }
 
 struct ShellProcess {
@@ -498,5 +556,105 @@ impl Drop for ShellProcess {
         if !self.reaped {
             let _ = self.finish();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capture(input: &str, prompt: &str) -> (Option<String>, std::process::Output) {
+        let (command, path) = anonymous_rc("").unwrap();
+        let script = format!(
+            "HISTCONTROL=ignorespace\nHISTIGNORE='*private*'\nHISTSIZE=100\nHISTTIMEFORMAT='%F '\nshopt -s lithist\nhistory -s 'old command'\nrospm() {{ :; }}\nPS0='before-command\\n'\n{prompt}\n{}",
+            command_tracking_rc(&path)
+        );
+        let (_rc, path) = anonymous_rc(&script).unwrap();
+        let mut child = Command::new("bash")
+            .args(["--noprofile", "--rcfile"])
+            .arg(path)
+            .arg("-i")
+            .env("HISTFILE", "/dev/null")
+            .env_remove("PROMPT_COMMAND")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        (read_command(&command).unwrap(), output)
+    }
+
+    #[test]
+    fn captures_full_commands_before_execution_and_preserves_prompt_hooks() {
+        for prompt in [
+            "PROMPT_COMMAND='printf \"status:%s\\n\" \"$?\"'",
+            "PROMPT_COMMAND=('printf \"status:%s\\n\" \"$?\"' 'printf \"prompt-hook\\n\"')",
+        ] {
+            let (command, output) = capture("false\nrospm background\nrospm exit\nexit\n", prompt);
+            assert_eq!(command.as_deref(), Some("false"));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("status:1"));
+            assert!(String::from_utf8_lossy(&output.stderr).contains("before-command"));
+        }
+        for command in [
+            "printf '%s\\n' 中文; true",
+            "printf '%s\\n' 'first\nsecond'",
+            "exec /bin/true",
+            ": &",
+        ] {
+            let (captured, _) = capture(&format!("{command}\nrospm background\nexit\n"), "");
+            assert_eq!(captured.as_deref(), Some(command));
+        }
+    }
+
+    #[test]
+    fn skips_old_ignored_and_control_commands_and_bounds_capture() {
+        for input in [
+            "rospm background\nexit\n",
+            " echo hidden\nexit\n",
+            "echo private\nexit\n",
+        ] {
+            assert_eq!(capture(input, "").0, None);
+        }
+        assert_eq!(
+            capture(
+                "echo visible\n echo hidden\necho private\nrospm background ;\nexit\n",
+                ""
+            )
+            .0
+            .as_deref(),
+            Some("echo visible")
+        );
+        assert_eq!(
+            capture("set +o history\necho hidden\nexit\n", "")
+                .0
+                .as_deref(),
+            Some("set +o history")
+        );
+        let command = format!(": #{}", "x".repeat(5000));
+        assert_eq!(
+            capture(&format!("{command}\nexit\n"), "").0.as_deref(),
+            Some(&command[..4096])
+        );
+    }
+
+    #[test]
+    fn ignores_incomplete_command_updates() {
+        let (file, _) = anonymous_rc("").unwrap();
+        assert_eq!(read_command(&file).unwrap(), None);
+        file.write_all_at(b"echo complete", 0).unwrap();
+        assert_eq!(read_command(&file).unwrap(), None);
+        file.write_all_at(b"\0", 13).unwrap();
+        assert_eq!(
+            read_command(&file).unwrap().as_deref(),
+            Some("echo complete")
+        );
     }
 }

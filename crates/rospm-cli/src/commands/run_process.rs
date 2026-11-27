@@ -127,6 +127,7 @@ impl ManagedRun {
                 task_snapshot: None,
                 task_connected: false,
                 shell: false,
+                last_command: None,
                 pid: None,
                 suspended: false,
                 output_fd: Some(log.as_raw_fd()),

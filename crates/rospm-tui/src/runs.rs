@@ -509,6 +509,13 @@ fn process_row(process: &RunStatus, text: &Text) -> Entry {
         ),
         (None, None) => text.run_starting.clone(),
     };
+    if let Some(command) = &process.last_command {
+        let command: String = command
+            .chars()
+            .map(|ch| if ch.is_control() { ' ' } else { ch })
+            .collect();
+        row.cells[2].push_str(&format!(" · {}: {command}", text.shell_last_command));
+    }
     row
 }
 
@@ -525,6 +532,7 @@ mod tests {
             task_connected: true,
             background: true,
             shell: false,
+            last_command: None,
             pid: None,
             suspended: false,
             output_fd: None,
@@ -544,6 +552,7 @@ mod tests {
     fn shell_return_preserves_process_controls_and_hides_after_exit() {
         let text = Text {
             shell_attach: "Return to Shell".into(),
+            shell_last_command: "Last command".into(),
             run_terminate: "Terminate".into(),
             run_kill: "Kill".into(),
             run_suspend: "Suspend".into(),
@@ -559,6 +568,7 @@ mod tests {
                 task_snapshot: None,
                 task_connected: false,
                 shell,
+                last_command: shell.then(|| "echo 中文;\ntrue\u{1b}".into()),
                 pid: Some(42),
                 suspended: false,
                 output_fd: None,
@@ -570,6 +580,7 @@ mod tests {
             let rows = page.rows(&text);
             assert_eq!(rows.len(), 4 + offset);
             if shell {
+                assert!(rows[0].cells[2].ends_with("Last command: echo 中文; true "));
                 assert_eq!(rows[1].cells[0], "Return to Shell");
                 assert!(rows[1].selectable);
                 page.activate(1);
@@ -611,6 +622,9 @@ mod tests {
             page.refresh(&[process], None, &mut focus, &text);
             assert_eq!(focus, None);
             assert_eq!(page.rows(&text).len(), 1);
+            if shell {
+                assert!(page.rows(&text)[0].cells[2].ends_with("Last command: echo 中文; true "));
+            }
             assert!(!page.take_shell_attach());
         }
     }

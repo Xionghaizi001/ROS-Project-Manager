@@ -188,6 +188,7 @@ cli:
     run_suspended: "Suspended"
     shell_detached: "Detached"
     shell_attach: "Return to Shell"
+    shell_last_command: "Last command"
     run_starting: "Starting"
     run_current: "Currently running"
     run_history: "Task history"

@@ -119,6 +119,7 @@ pub struct Text {
     pub run_suspended: String,
     pub shell_detached: String,
     pub shell_attach: String,
+    pub shell_last_command: String,
     pub run_starting: String,
     pub run_idle: String,
     pub run_current: String,

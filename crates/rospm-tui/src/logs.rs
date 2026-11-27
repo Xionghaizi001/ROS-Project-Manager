@@ -267,6 +267,7 @@ mod tests {
             task_snapshot: None,
             task_connected: false,
             shell: false,
+            last_command: None,
             pid: None,
             suspended: false,
             output_fd: Some(transcript.as_raw_fd()),
