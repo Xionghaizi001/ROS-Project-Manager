@@ -141,6 +141,10 @@ pub enum Operation {
     DepsCheck,
     DepsInstall,
     ComponentsInstall,
+    DebugToolInstall {
+        tool: String,
+        manifest: std::path::PathBuf,
+    },
     CondaInstall,
     VenvCreate,
     VenvInstall,

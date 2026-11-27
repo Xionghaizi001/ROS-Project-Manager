@@ -65,6 +65,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
             dashboard.as_ref(),
             text,
             *selected,
+            confirmation,
         ),
         view::FooterAction::ChangeTab => {
             *selected = (*selected + 1) % 8;
@@ -111,6 +112,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
                         manifest,
                         text,
                         dashboard,
+                        install_page,
                         focused_row,
                         scroll,
                         *selected,

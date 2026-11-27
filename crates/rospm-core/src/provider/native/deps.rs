@@ -12,13 +12,14 @@ use std::process::{Command as OsCommand, Output};
 
 use serde::Serialize;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::message::Message;
 use crate::msg;
 use crate::package_xml::WorkspacePackages;
 use crate::plan::Plan;
 use crate::probe::{EnvReport, Status};
 use crate::provider::Context;
+use crate::{manifest::ProviderKind, platform::RosDistro};
 
 /// Package/key counts for one workspace: the header lines of `deps check`.
 #[derive(Debug, Clone, Serialize)]
@@ -454,6 +455,38 @@ pub fn plan_components_install(ctx: &Context) -> Result<Plan> {
         );
     }
     Ok(plan)
+}
+
+pub fn plan_debug_tool_install(ctx: &Context, tool: &str) -> Result<Plan> {
+    let distro = ctx.manifest.project.ros_distro;
+    if ctx.manifest.environment.provider != ProviderKind::Native {
+        return Err(Error::Host(msg!("debug.plan.native_required")));
+    }
+    let package = debug_tool_package(distro, tool)?;
+    if !ctx.host.has_ros_install(distro.as_str()) {
+        return Err(Error::Host(msg!(
+            "debug.plan.ros_required",
+            distro = distro
+        )));
+    }
+    let mut plan = Plan::new(crate::msg!(
+        "debug.plan.title",
+        tool = tool,
+        package = package
+    ));
+    plan.run(
+        crate::plan::Command::new("apt-get")
+            .args(["install", "-y", "--no-remove", &package])
+            .sudo(),
+    );
+    Ok(plan)
+}
+
+pub fn debug_tool_package(distro: RosDistro, tool: &str) -> Result<String> {
+    if !crate::run::DEBUG_TOOLS.contains(&tool) {
+        return Err(Error::Host(msg!("debug.plan.unknown_tool", tool = tool)));
+    }
+    Ok(format!("ros-{distro}-{}", tool.replace('_', "-")))
 }
 
 #[cfg(test)]

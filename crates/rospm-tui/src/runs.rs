@@ -9,7 +9,12 @@ use crate::{dashboard::Dashboard, pages::Entry, Text};
 
 pub trait RunBackend {
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()>;
-    fn start_debug(&mut self, root: &Path, manifest: &Path, tool: &str) -> Result<RunStatus>;
+    fn start_debug(&mut self, root: &Path, manifest: &Path, tool: &str) -> Result<DebugStart>;
+    fn debug_tool_statuses(
+        &mut self,
+        manifest: &Path,
+    ) -> Result<[rospm_core::probe::Status; crate::DEBUG_TOOLS.len()]>;
+    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<()>;
     fn foreground(&mut self) -> Vec<RunStatus>;
     fn background(&mut self, root: &Path) -> Result<Vec<RunStatus>>;
     fn history(&mut self) -> Vec<RunStatus>;
@@ -41,6 +46,11 @@ pub trait RunBackend {
     ) -> Result<TaskOutcome> {
         anyhow::bail!("task worker unavailable")
     }
+}
+
+pub enum DebugStart {
+    Started(RunStatus),
+    Missing { package: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

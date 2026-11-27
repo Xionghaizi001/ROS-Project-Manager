@@ -122,7 +122,10 @@ pub(crate) fn submit(cli: &Cli) -> Result<ExitCode> {
             request_id: id.clone(),
             task_id: id.clone(),
             workspace: loaded.root.to_str().context(tr("worker_cli.utf8"))?.into(),
-            operation: cli.command.mutation().expect("mutation"),
+            operation: cli
+                .command
+                .mutation(Some(&std::env::current_dir()?.join(&loaded.path)))
+                .expect("mutation"),
             interactive: global.interactive,
         },
     )?;
@@ -249,7 +252,6 @@ pub(crate) fn serve(cli: Cli) -> Result<ExitCode> {
         .clone()
         .context("missing internal task")?;
     anyhow::ensure!(valid_identifier(&id), "invalid task identifier");
-    let operation = cli.command.mutation().context("not a mutation")?;
     let global = Global {
         verbose: cli.verbose > 0,
         manifest: cli.manifest.clone(),
@@ -259,6 +261,10 @@ pub(crate) fn serve(cli: Cli) -> Result<ExitCode> {
         interactive: cli.internal_worker_interactive,
     };
     let loaded = load(&global)?;
+    let operation = cli
+        .command
+        .mutation(Some(&std::env::current_dir()?.join(&loaded.path)))
+        .context("not a mutation")?;
     let store = TaskStore::open(loaded.root.join(".rospm/worker/tasks"))?;
     let endpoint = SocketEndpoint::bind(&runtime)?;
     let runner = TaskRunner::new(store.clone(), loaded.root.join(".rospm/worker/leases"));

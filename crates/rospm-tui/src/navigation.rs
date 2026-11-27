@@ -3,21 +3,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use rospm_core::{conda::ToolInstallation, worker::WorkspaceLock};
 
-use crate::{dashboard, pages, runs, table, view, Text};
+use crate::actions::PendingConfirmation;
+use crate::{dashboard, pages, runs, table, view, Text, DEBUG_TOOLS};
 
 pub(super) const DEBUG_TAB: usize = 4;
 pub(super) const HELP_TAB: usize = 6;
-
-pub const DEBUG_TOOLS: [&str; 8] = [
-    "rqt",
-    "rviz2",
-    "rqt_graph",
-    "rqt_topic",
-    "rqt_publisher",
-    "rqt_service_caller",
-    "rqt_reconfigure",
-    "rqt_console",
-];
 
 pub(super) enum InstallPage {
     Ros,
@@ -31,6 +21,11 @@ pub(super) enum InstallPage {
     ScannedProjects(Vec<std::path::PathBuf>),
     Run(runs::Page),
     DebugTool(&'static str),
+    DebugToolMissing {
+        tool: &'static str,
+        package: String,
+        install: bool,
+    },
     Shell,
     CliHelp,
 }
@@ -168,6 +163,7 @@ pub(super) fn activate(
     dashboard: Option<&dashboard::Dashboard>,
     text: &Text,
     selected: usize,
+    confirmation: &mut Option<PendingConfirmation>,
 ) {
     let rows = pages::rows(dashboard, text, selected, install_page.as_ref());
     let Some(index) = *focused else {
@@ -176,6 +172,12 @@ pub(super) fn activate(
     let Some(row) = rows.get(index).filter(|row| row.selectable) else {
         return;
     };
+    if let Some(InstallPage::DebugToolMissing { package, .. }) = install_page {
+        *confirmation = Some(PendingConfirmation::InstallDebugTool {
+            package: package.clone(),
+        });
+        return;
+    }
     if let Some(InstallPage::Run(page)) = install_page {
         *focused = page.activate(index);
         *scroll = 0;
@@ -246,7 +248,15 @@ mod tests {
         let mut focus = first_selectable(None, &text, HELP_TAB, None);
         let mut page = None;
         let mut scroll = 5;
-        activate(&mut page, &mut focus, &mut scroll, None, &text, HELP_TAB);
+        activate(
+            &mut page,
+            &mut focus,
+            &mut scroll,
+            None,
+            &text,
+            HELP_TAB,
+            &mut None,
+        );
         assert!(matches!(&page, Some(InstallPage::CliHelp)));
         assert_eq!(focus, None);
         assert_eq!(scroll, 0);

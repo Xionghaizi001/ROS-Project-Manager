@@ -168,13 +168,13 @@ pub(crate) fn footer_action_at(
     }
     let log_width = log_button(text).width() as u16;
     if column < log_width {
-        return Some(FooterAction::Logs);
+        return (!confirmation).then_some(FooterAction::Logs);
     }
     let column = column - log_width;
     let width = width - log_width;
     let items = footer_items(install_page, selected, text);
     let measure = |label: &str| Span::raw(label).width() + 2;
-    if install_page.is_none() && (confirmation || matches!(selected, 0 | 1 | 2 | 5)) {
+    if confirmation || (install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5)) {
         let left_width = items.iter().map(|(label, _)| measure(label)).sum::<usize>();
         let right_items = action_items(selected, has_project, confirmation, text);
         let right_width = right_items
@@ -302,7 +302,9 @@ pub(crate) fn draw(
                 format!("{} / {}", text.tabs[0], text.project_scan_title)
             }
             Some(InstallPage::Run(page)) => page.title(text),
-            Some(InstallPage::DebugTool(tool)) => (*tool).into(),
+            Some(InstallPage::DebugTool(tool) | InstallPage::DebugToolMissing { tool, .. }) => {
+                format!("{} / {tool}", text.tabs[selected])
+            }
             Some(InstallPage::Shell) => "Shell".into(),
             Some(InstallPage::CliHelp) => format!("{} / {}", text.tabs[HELP_TAB], text.cli_help),
             None => text.tabs[selected].clone(),
@@ -321,8 +323,8 @@ pub(crate) fn draw(
     .split(areas[3]);
     frame.render_widget(Paragraph::new(log_button), footer_areas[0]);
     let navigation = footer_items(install_page, selected, text);
-    let actions = (install_page.is_none()
-        && (confirmation.is_some() || matches!(selected, 0 | 1 | 2 | 5)))
+    let actions = (confirmation.is_some()
+        || (install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5)))
     .then(|| action_items(selected, dashboard.is_some(), confirmation.is_some(), text));
     draw_footer(
         frame,
@@ -499,6 +501,11 @@ mod tests {
             .map(|(label, _)| Span::raw(label).width() + 2)
             .sum::<usize>();
         let right_start = log_width + 100 - log_width - right_width;
+        let page = InstallPage::DebugToolMissing {
+            tool: "rqt",
+            package: "ros-humble-rqt".into(),
+            install: false,
+        };
         assert_eq!(
             footer_action_at(right_start as u16 + 1, 100, None, 1, false, true, &text,),
             Some(FooterAction::Confirm(true))
@@ -507,8 +514,8 @@ mod tests {
             footer_action_at(
                 (right_start + Span::raw(&actions[0].0).width() + 2) as u16 + 1,
                 100,
-                None,
-                1,
+                Some(&page),
+                crate::DEBUG_TAB,
                 false,
                 true,
                 &text,

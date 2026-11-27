@@ -1,13 +1,15 @@
 use std::io::{self, IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context as _, Result};
 use rospm_core::manifest::ProviderKind;
 use rospm_core::mirror;
-use rospm_core::probe::Host;
+use rospm_core::probe::{Host, Status};
 use rospm_core::provider::{self, Shell};
-use rospm_core::run::{complete_targets, scan_project, RunRequest, Target, TargetKind};
+use rospm_core::run::{
+    complete_targets, scan_project, RunRequest, Target, TargetKind, DEBUG_TOOLS,
+};
 
 use super::{context, Global, Loaded, VenvArgs};
 
@@ -72,10 +74,57 @@ pub(super) fn managed(global: &Global, request: RunRequest) -> Result<()> {
 }
 
 pub(super) fn debug_tool(manifest: PathBuf, tool: &str) -> Result<()> {
+    let loaded = load_debug_project(manifest)?;
+    let _read_leases = loaded.read_leases(false)?;
+    provider::native::deps::debug_tool_package(loaded.manifest.project.ros_distro, tool)?;
+    let missing = rospm_core::msg!("cli.tui.debug.missing", tool = tool).to_string();
+    let no_display = crate::i18n::tr("cli.tui.debug.no_display");
+    let command = debug_command(&loaded, &["launch", tool, &missing, &no_display])?;
+    check_status(super::run_process::supervise(command)?)
+}
+
+pub(super) fn missing_debug_package(manifest: PathBuf, tool: &str) -> Result<Option<String>> {
+    let loaded = load_debug_project(manifest)?;
+    let _read_leases = loaded.read_leases(false)?;
+    let package =
+        provider::native::deps::debug_tool_package(loaded.manifest.project.ros_distro, tool)?;
+    let [status] = probe_debug_tools(&loaded, [tool])?;
+    Ok((status == Status::Missing).then_some(package))
+}
+
+pub(super) fn debug_tool_statuses(manifest: &Path) -> Result<[Status; DEBUG_TOOLS.len()]> {
+    let loaded = load_debug_project(manifest.to_path_buf())?;
+    let _read_leases = loaded.read_leases(false)?;
+    probe_debug_tools(&loaded, DEBUG_TOOLS)
+}
+
+fn probe_debug_tools<const N: usize>(loaded: &Loaded, tools: [&str; N]) -> Result<[Status; N]> {
+    let mut args = vec!["probe"];
+    args.extend(tools);
+    let output = debug_command(loaded, &args)?.output()?;
     anyhow::ensure!(
-        rospm_tui::DEBUG_TOOLS.contains(&tool),
-        "unknown ROS debug tool: {tool}"
+        output.status.success(),
+        "ROS tool probe failed ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
     );
+    let statuses = output
+        .stdout
+        .strip_suffix(b"\n")
+        .and_then(|bytes| bytes.rsplit(|byte| *byte == b'\n').next());
+    let statuses = statuses
+        .filter(|bytes| bytes.len() == N && bytes.iter().all(|byte| matches!(byte, b'0' | b'1')))
+        .context("invalid ROS tool probe response")?;
+    Ok(std::array::from_fn(|index| {
+        if statuses[index] == b'1' {
+            Status::Ok
+        } else {
+            Status::Missing
+        }
+    }))
+}
+
+fn load_debug_project(manifest: PathBuf) -> Result<Loaded> {
     let loaded = super::load(&Global {
         manifest: Some(manifest),
         verbose: false,
@@ -88,24 +137,48 @@ pub(super) fn debug_tool(manifest: PathBuf, tool: &str) -> Result<()> {
         loaded.manifest.environment.provider == ProviderKind::Native,
         crate::i18n::tr("cli.tui.debug.no_project")
     );
-    let _read_leases = loaded.read_leases(false)?;
+    Ok(loaded)
+}
+
+fn debug_command(loaded: &Loaded, args: &[&str]) -> Result<Command> {
     let host = Host::probe();
-    let ctx = context(&loaded, &host, false, None, false, mirror::OFFICIAL)?;
+    let ctx = context(loaded, &host, false, None, false, mirror::OFFICIAL)?;
     let env = provider::native::Native::ros_env_script(&ctx, Shell::Bash)?;
-    let distro = loaded.manifest.project.ros_distro;
-    let package = format!("ros-{distro}-{}", tool.replace('_', "-"));
-    let missing = rospm_core::msg!("cli.tui.debug.missing", tool = tool, package = package);
-    let no_display = crate::i18n::tr("cli.tui.debug.no_display");
     let script = format!(
         "set -e\n{env}\n{}",
         r#"
-executable=
-if [[ $1 == rqt ]]; then
-    executable=$(type -P rqt || true)
-elif prefix=$(ros2 pkg prefix "$1" 2>/dev/null); then
-    executable="$prefix/lib/$1/$1"
+find_debug_executable() {
+    executable=
+    if [[ $1 == rqt ]]; then
+        executable=$(type -P rqt || true)
+    else
+        local prefix
+        local -a prefixes
+        IFS=: read -ra prefixes <<< "${AMENT_PREFIX_PATH:-}"
+        for prefix in "${prefixes[@]}"; do
+            if [[ -n $prefix && -f $prefix/share/ament_index/resource_index/packages/$1 ]]; then
+                executable="$prefix/lib/$1/$1"
+                break
+            fi
+        done
+    fi
+    [[ -f $executable && -x $executable ]]
+}
+mode=$1
+shift
+if [[ $mode == probe ]]; then
+    printf '\n'
+    for tool in "$@"; do
+        if find_debug_executable "$tool"; then
+            printf 1
+        else
+            printf 0
+        fi
+    done
+    printf '\n'
+    exit 0
 fi
-if [[ ! -x $executable ]]; then
+if ! find_debug_executable "$1"; then
     printf '%s\n' "$2" >&2
     exit 127
 fi
@@ -118,16 +191,8 @@ exec "$executable"
     );
     let mut command = Command::new("/bin/bash");
     command
-        .args([
-            "--noprofile",
-            "--norc",
-            "-c",
-            &script,
-            "rospm-debug",
-            tool,
-            &missing.to_string(),
-            &no_display,
-        ])
+        .args(["--noprofile", "--norc", "-c", &script, "rospm-debug"])
+        .args(args)
         .current_dir(&loaded.root)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin");
     // Keep display and ROS communication variables from the session, while
@@ -157,7 +222,7 @@ exec "$executable"
             command.env_remove(key);
         }
     }
-    check_status(super::run_process::supervise(command)?)
+    Ok(command)
 }
 
 fn targets(loaded: &Loaded) -> Result<Vec<Target>> {

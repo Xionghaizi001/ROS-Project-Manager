@@ -279,3 +279,19 @@ fn flat_workspace_dependencies_are_scanned_and_installed_from_root() {
         .unwrap()
         .contains("--from-paths . --ignore-src"));
 }
+
+#[test]
+fn debug_tool_plan_installs_only_the_selected_tool() {
+    use rospm_core::provider::native::deps::plan_debug_tool_install;
+
+    let m = Manifest::parse(FULL, Path::new("t")).unwrap();
+    let mut host = Host::empty();
+    host.packages = installed(&["ros-jazzy-ros-base"]);
+    let context = ctx(&m, Path::new("/proj"), &host);
+    let plan = plan_debug_tool_install(&context, "rqt_service_caller").unwrap();
+    assert_eq!(plan.action_count(), 1);
+    assert!(plan
+        .render()
+        .contains("sudo apt-get install -y --no-remove ros-jazzy-rqt-service-caller"));
+    assert!(plan_debug_tool_install(&context, "--reinstall").is_err());
+}

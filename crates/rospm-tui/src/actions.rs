@@ -32,6 +32,7 @@ pub enum Action {
 pub(super) enum PendingConfirmation {
     Action(Action),
     Build { rebuild: bool },
+    InstallDebugTool { package: String },
 }
 
 impl PendingConfirmation {
@@ -42,6 +43,9 @@ impl PendingConfirmation {
             }
             Self::Build { rebuild: true } => text.confirm_rebuild.clone(),
             Self::Build { rebuild: false } => text.confirm_build.clone(),
+            Self::InstallDebugTool { package } => {
+                format!("{} {package}", text.debug_confirm_install)
+            }
         }
     }
 }
@@ -115,6 +119,17 @@ pub(super) fn install<B: ratatui::backend::Backend + Write>(
             Some(backend) => backend.task(root, manifest, Operation::ComponentsInstall),
             None => install_components().map(|_| TaskOutcome::Completed),
         },
+        Some(InstallPage::DebugToolMissing { tool, .. }) => {
+            let tool = *tool;
+            let result = match (backend, dashboard.as_ref()) {
+                (Some(backend), Some(project)) => backend.install_debug(&project.manifest, tool),
+                _ => Err(anyhow::anyhow!("{}", text.debug_no_project)),
+            };
+            if result.is_ok() {
+                *install_page = Some(InstallPage::DebugTool(tool));
+            }
+            result.map(|_| TaskOutcome::Completed)
+        }
         _ => unreachable!(),
     };
     if let Err(error) = result {
@@ -155,6 +170,7 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
     manifest: Option<&Path>,
     text: &Text,
     dashboard: &mut Option<dashboard::Dashboard>,
+    install_page: &mut Option<InstallPage>,
     focused_row: &mut Option<usize>,
     scroll: &mut usize,
     selected: usize,
@@ -169,6 +185,17 @@ pub(super) fn execute_pending_confirmation<B: ratatui::backend::Backend + Write>
         }
         PendingConfirmation::Build { rebuild } => {
             execute_compile(terminal, dashboard.as_ref(), build, rebuild, backend)?;
+        }
+        PendingConfirmation::InstallDebugTool { package } => {
+            if let Some(InstallPage::DebugToolMissing {
+                package: current,
+                install,
+                ..
+            }) = install_page
+            {
+                *install = *current == package;
+            }
+            return Ok(());
         }
     }
     *dashboard = dashboard::Dashboard::load(manifest, text)?;

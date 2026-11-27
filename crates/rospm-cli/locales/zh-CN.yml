@@ -221,6 +221,8 @@ cli:
     tab_debug: "调试"
     debug:
       no_project: "打开一个使用 native 提供者的 ROS 项目即可启动调试工具"
+      install: "安装"
+      confirm_install: "确认安装"
       rqt: "插件式调试面板"
       rviz2: "三维可视化"
       rqt_graph: "节点与话题关系图"
@@ -229,7 +231,8 @@ cli:
       rqt_service_caller: "调用 ROS 服务"
       rqt_reconfigure: "查看与修改节点参数"
       rqt_console: "查看 ROS 日志"
-      missing: "找不到 %{tool}。可将 %{package} 加入 dependencies.apt，再运行 rospm apply。"
+      missing: "在项目 ROS 环境中找不到 %{tool} 的可执行文件。"
+      install_failed: "调试工具安装失败"
       no_display: "当前会话没有图形显示。请在桌面终端或启用 X11 转发的 SSH 会话中启动。"
     tab_diagnose: "诊断"
     tab_help: "帮助"
@@ -261,7 +264,7 @@ cli:
       在「安装」页，打开 ROS、Conda 或项目基础组件，按底部提示操作。d 检查依赖，D 安装依赖，a 准备环境。
       在「编译」页，按 b 编译，或按 B 清理编译产物后重新编译，再按提示确认。
       在「运行」页，选择已编译的节点或 launch 文件，设置参数并选择前台或后台运行。也可以打开项目 Shell。
-      在「调试」页，选择工具打开。启动后可在进程列表按 l 查看输出和安装提示。
+      「调试」页在工具列表中标出未安装项。打开条目，选择「安装」，再确认浮窗中显示的包名。启动后可在进程列表按 l 查看输出。
       在「诊断」页，按 c 检查环境，或用 v 根据锁文件验证。
       按 p 或点击顶部进程计数管理进程与已保存任务。选中任务按 l 查看日志；打开详情后可显式继续确认、授权或取消任务。
       关闭 TUI 不取消环境任务，重开同一项目可恢复状态；取消在安全步骤边界生效，已完成的更改不会回滚。
@@ -363,6 +366,7 @@ cli:
     updating_rosdep: "正在更新 %{distro} 的 rosdep 缓存"
     rosdep_update_failed: "rosdep 缓存更新失败：%{error}"
     install: "通过 rosdep 安装缺失的依赖 [修改系统]"
+    tool: "通过 apt 安装指定的 ROS 调试工具"
     workspace_line: "workspace   %{name}    包=%{packages}  键=%{keys}"
     internal_line: "内部        %{keys}"
     external_line: "外部        %{keys}"
@@ -778,6 +782,13 @@ components:
   plan:
     title: "安装项目基础组件 `%{name}`（%{distro}）"
     ros_required: "安装项目基础组件前需要有效的 ROS %{distro} 安装"
+
+debug:
+  plan:
+    native_required: "安装调试工具需要使用 native 提供者"
+    title: "安装 ROS 调试工具 `%{tool}`（%{package}）"
+    ros_required: "安装调试工具前需要有效的 ROS %{distro} 安装"
+    unknown_tool: "未知的 ROS 调试工具 `%{tool}`"
 
 init:
   platforms:

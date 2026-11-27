@@ -362,9 +362,20 @@ fn execute(
         }
         return Ok(());
     }
+    let manifest = match &operation {
+        Operation::DebugToolInstall { manifest, .. } => {
+            let parent = manifest.parent().context("missing manifest directory")?;
+            anyhow::ensure!(
+                manifest.is_absolute() && parent.canonicalize()? == root,
+                "manifest is outside the worker project"
+            );
+            manifest.clone()
+        }
+        _ => root.join(MANIFEST_FILE),
+    };
     let loaded = load(&Global {
         verbose: false,
-        manifest: Some(root.join(MANIFEST_FILE)),
+        manifest: Some(manifest),
         json: true,
         interaction: None,
         task: None,
@@ -401,6 +412,9 @@ fn execute(
         Operation::DepsInstall => provider.plan_deps_install(&ctx)?,
         Operation::Apply | Operation::ApplyLocked => provider.plan_apply(&ctx)?,
         Operation::ComponentsInstall => provider.plan_components_install(&ctx)?,
+        Operation::DebugToolInstall { tool, .. } => {
+            rospm_core::provider::native::deps::plan_debug_tool_install(&ctx, &tool)?
+        }
         Operation::Build | Operation::Rebuild => {
             if operation == Operation::Rebuild {
                 rospm_core::confirmation::clean_build_artifacts(&ctx)?;

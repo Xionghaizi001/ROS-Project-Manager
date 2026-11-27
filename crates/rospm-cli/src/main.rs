@@ -2,7 +2,7 @@ mod build_summary;
 mod commands;
 mod i18n;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{ArgAction, Command, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -273,13 +273,15 @@ enum DepsCmd {
     Check,
     #[command(about = tr("cli.deps.install"))]
     Install {
+        #[arg(long, value_name = "NAME", value_parser = clap::builder::PossibleValuesParser::new(rospm_core::run::DEBUG_TOOLS), help = tr("cli.deps.tool"))]
+        tool: Option<String>,
         #[arg(long, help = tr("cli.dry_run"))]
         dry_run: bool,
     },
 }
 
 impl Cmd {
-    fn mutation(&self) -> Option<rospm_core::worker::Operation> {
+    fn mutation(&self, manifest: Option<&Path>) -> Option<rospm_core::worker::Operation> {
         use rospm_core::worker::Operation;
         match self {
             Self::Build { dry_run: false, .. } => Some(Operation::Build),
@@ -294,7 +296,23 @@ impl Cmd {
             }),
             Self::Uninstall { dry_run: false, .. } => Some(Operation::Uninstall),
             Self::Deps {
-                command: DepsCmd::Install { dry_run: false },
+                command:
+                    DepsCmd::Install {
+                        dry_run: false,
+                        tool: Some(tool),
+                    },
+            } => Some(Operation::DebugToolInstall {
+                tool: tool.clone(),
+                manifest: manifest
+                    .unwrap_or_else(|| Path::new(rospm_core::manifest::MANIFEST_FILE))
+                    .to_path_buf(),
+            }),
+            Self::Deps {
+                command:
+                    DepsCmd::Install {
+                        dry_run: false,
+                        tool: None,
+                    },
             } => Some(Operation::DepsInstall),
             Self::Venv {
                 command: VenvCmd::Create { dry_run: false, .. },
@@ -367,7 +385,7 @@ fn main() -> ExitCode {
     let cli = parse_cli();
     init_logging(cli.verbose);
     let json = cli.json;
-    if cli.command.mutation().is_some() {
+    if cli.command.mutation(None).is_some() {
         let result = if cli.internal_worker_runtime.is_some() {
             commands::worker::synchronous::serve(cli)
         } else {
@@ -645,6 +663,8 @@ fn execute_cli(
                 debug_tools: rospm_tui::DEBUG_TOOLS
                     .map(|tool| tr(&format!("cli.tui.debug.{tool}"))),
                 debug_no_project: tr("cli.tui.debug.no_project"),
+                debug_install: tr("cli.tui.debug.install"),
+                debug_confirm_install: tr("cli.tui.debug.confirm_install"),
                 run_processes: tr("cli.tui.run_processes"),
                 run_foreground: tr("cli.tui.run_foreground"),
                 run_background: tr("cli.tui.run_background"),
@@ -700,7 +720,7 @@ fn execute_cli(
                     commands::verify(&global, commands::VenvArgs::default())
                 }
                 rospm_tui::Action::DepsCheck => commands::deps_check(&global),
-                rospm_tui::Action::DepsInstall => commands::deps_install(&global, false),
+                rospm_tui::Action::DepsInstall => commands::deps_install(&global, false, None),
                 rospm_tui::Action::CreateProject => {
                     commands::init(&global, false, None, None, false)
                 }
@@ -710,7 +730,9 @@ fn execute_cli(
         ),
         Cmd::Deps { command } => match command {
             DepsCmd::Check => commands::deps_check(&global),
-            DepsCmd::Install { dry_run } => commands::deps_install(&global, dry_run),
+            DepsCmd::Install { dry_run, tool } => {
+                commands::deps_install(&global, dry_run, tool.as_deref())
+            }
         },
         Cmd::Export { .. } => commands::not_implemented("export", "P6"),
         Cmd::Import { .. } => commands::not_implemented("import", "P6"),
@@ -787,6 +809,7 @@ mod tests {
             ],
             vec!["uninstall", "--keep-source", "--yes"],
             vec!["deps", "install"],
+            vec!["deps", "install", "--tool", "rqt_graph"],
             vec!["venv", "create", "--uv"],
             vec![
                 "venv",
@@ -802,27 +825,27 @@ mod tests {
             assert!(Cli::try_parse_from(&argv)
                 .unwrap()
                 .command
-                .mutation()
+                .mutation(None)
                 .is_some());
             argv.push("--dry-run");
             assert!(Cli::try_parse_from(&argv)
                 .unwrap()
                 .command
-                .mutation()
+                .mutation(None)
                 .is_none());
         }
         assert!(
             Cli::try_parse_from(["rospm", "lock", "--platform", "linux-aarch64"])
                 .unwrap()
                 .command
-                .mutation()
+                .mutation(None)
                 .is_some()
         );
         for command in ["check", "verify", "run", "env", "doctor"] {
             assert!(Cli::try_parse_from(["rospm", command])
                 .unwrap()
                 .command
-                .mutation()
+                .mutation(None)
                 .is_none());
         }
     }

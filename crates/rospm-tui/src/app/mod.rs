@@ -14,7 +14,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen},
 };
 use ratatui::Terminal;
-use rospm_core::worker::WorkspaceLock;
+use rospm_core::{manifest::ProviderKind, probe::Status, worker::WorkspaceLock};
 
 use crate::{
     actions::{
@@ -27,7 +27,7 @@ use crate::{
     },
     pages, runs, table,
     terminal::{draw_frame, leave_screen},
-    view, Action, InstallPage, RunBackend, Text,
+    view, Action, DebugStart, InstallPage, RunBackend, Text, DEBUG_TAB, DEBUG_TOOLS,
 };
 
 use self::footer::activate_footer;
@@ -63,6 +63,25 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut left_press = None;
     let mut confirmation = None::<PendingConfirmation>;
     loop {
+        if let Some(InstallPage::DebugToolMissing {
+            install: requested, ..
+        }) = &mut install_page
+        {
+            if std::mem::take(requested) {
+                install(
+                    terminal,
+                    active_manifest.as_deref(),
+                    &mut dashboard,
+                    &mut install_page,
+                    &mut scroll,
+                    text,
+                    install_ros,
+                    install_components,
+                    task_backend(runs),
+                    &mut last_runtime_refresh,
+                )?;
+            }
+        }
         if let Some(project) = dashboard.as_mut() {
             if project_lock
                 .as_ref()
@@ -71,12 +90,31 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                 *project_lock = Some(lock_project(project, text)?);
             }
             if let Some((backend, verbosity)) = runs {
+                if selected == DEBUG_TAB
+                    && install_page.is_none()
+                    && project.provider == ProviderKind::Native
+                {
+                    project.debug_tools.get_or_insert_with(|| {
+                        backend
+                            .debug_tool_statuses(&project.manifest)
+                            .unwrap_or([Status::Unknown; DEBUG_TOOLS.len()])
+                    });
+                }
                 if let Some(InstallPage::DebugTool(tool)) = install_page {
+                    project.debug_tools = None;
                     match backend.start_debug(&project.root, &project.manifest, tool) {
-                        Ok(process) => {
+                        Ok(DebugStart::Started(process)) => {
                             install_page =
                                 Some(InstallPage::Run(runs::Page::processes(vec![process], None)));
                             focused_row = Some(1);
+                        }
+                        Ok(DebugStart::Missing { package }) => {
+                            install_page = Some(InstallPage::DebugToolMissing {
+                                tool,
+                                package,
+                                install: false,
+                            });
+                            focused_row = Some(0);
                         }
                         Err(error) => {
                             install_page = Some(InstallPage::Detail {
@@ -225,6 +263,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     active_manifest.as_deref(),
                                     text,
                                     &mut dashboard,
+                                    &mut install_page,
                                     &mut focused_row,
                                     &mut scroll,
                                     selected,
@@ -356,6 +395,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     dashboard.as_ref(),
                                     text,
                                     selected,
+                                    &mut confirmation,
                                 );
                             }
                         }
@@ -377,6 +417,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     dashboard.as_ref(),
                                     text,
                                     selected,
+                                    &mut confirmation,
                                 );
                             }
                         }
@@ -400,6 +441,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                     dashboard.as_ref(),
                                     text,
                                     selected,
+                                    &mut confirmation,
                                 );
                                 continue;
                             }
@@ -653,6 +695,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                             dashboard.as_ref(),
                                             text,
                                             selected,
+                                            &mut confirmation,
                                         );
                                     }
                                 }

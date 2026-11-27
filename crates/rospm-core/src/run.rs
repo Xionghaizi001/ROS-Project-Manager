@@ -14,6 +14,17 @@ use crate::package_xml::{find_package_files, PackageXml};
 
 pub mod output;
 
+pub const DEBUG_TOOLS: [&str; 8] = [
+    "rqt",
+    "rviz2",
+    "rqt_graph",
+    "rqt_topic",
+    "rqt_publisher",
+    "rqt_service_caller",
+    "rqt_reconfigure",
+    "rqt_console",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {

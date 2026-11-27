@@ -91,14 +91,41 @@ impl rospm_tui::RunBackend for Runs {
         Ok(())
     }
 
-    fn start_debug(&mut self, root: &Path, manifest: &Path, tool: &str) -> Result<RunStatus> {
+    fn start_debug(
+        &mut self,
+        root: &Path,
+        manifest: &Path,
+        tool: &str,
+    ) -> Result<rospm_tui::DebugStart> {
         let manifest = std::env::current_dir()?.join(manifest);
+        if let Some(package) = crate::commands::run::missing_debug_package(manifest.clone(), tool)?
+        {
+            return Ok(rospm_tui::DebugStart::Missing { package });
+        }
         let log = output::create()?;
         let process = ManagedRun::start_debug(root, manifest, tool, writer(&log)?)?;
         let status = process.status().clone();
         self.track(status.clone(), log);
         self.foreground.push(process);
-        Ok(status)
+        Ok(rospm_tui::DebugStart::Started(status))
+    }
+
+    fn debug_tool_statuses(
+        &mut self,
+        manifest: &Path,
+    ) -> Result<[rospm_core::probe::Status; rospm_core::run::DEBUG_TOOLS.len()]> {
+        crate::commands::run::debug_tool_statuses(manifest)
+    }
+
+    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<()> {
+        let status = Command::new(std::env::current_exe()?)
+            .arg("--manifest")
+            .arg(manifest)
+            .args(["deps", "install", "--tool", tool])
+            .env("ROSPM_LANG", crate::i18n::current().code())
+            .status()?;
+        anyhow::ensure!(status.success(), "{}", tr("cli.tui.debug.install_failed"));
+        Ok(())
     }
 
     fn foreground(&mut self) -> Vec<RunStatus> {

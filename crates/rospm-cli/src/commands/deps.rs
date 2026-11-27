@@ -171,14 +171,24 @@ pub fn deps_check(global: &Global) -> Result<()> {
     Ok(())
 }
 
-/// `rospm deps install [--dry-run]`: hand the missing keys to rosdep.
-pub fn deps_install(global: &Global, dry_run: bool) -> Result<()> {
+/// Install workspace dependencies via rosdep, or a selected ROS debug tool via apt.
+pub fn deps_install(global: &Global, dry_run: bool, tool: Option<&str>) -> Result<()> {
     let (loaded, _leases) = super::load_mutating(global, dry_run)?;
     let host = Host::probe();
-    let mirror = requested_mirror(None)?.unwrap_or(mirror::OFFICIAL);
+    let mirror = if tool.is_some() {
+        mirror::OFFICIAL
+    } else {
+        requested_mirror(None)?.unwrap_or(mirror::OFFICIAL)
+    };
     let ctx = context(&loaded, &host, false, None, false, mirror)?;
-    let mut plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
-    super::logging::commands(&mut plan, &loaded.root, "deps");
+    let plan = match tool {
+        Some(tool) => provider::native::deps::plan_debug_tool_install(&ctx, tool)?,
+        None => {
+            let mut plan = provider::for_manifest(&loaded.manifest).plan_deps_install(&ctx)?;
+            super::logging::commands(&mut plan, &loaded.root, "deps");
+            plan
+        }
+    };
     let mut out = std::io::stdout().lock();
     global.execute_plan(&plan, dry_run, &mut out)?;
     out.flush()?;

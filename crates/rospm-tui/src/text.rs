@@ -98,6 +98,8 @@ pub struct Text {
     pub run_node: String,
     pub run_launch: String,
     pub debug_tools: [String; DEBUG_TOOLS.len()],
+    pub debug_install: String,
+    pub debug_confirm_install: String,
     pub debug_no_project: String,
     pub run_processes: String,
     pub run_foreground: String,

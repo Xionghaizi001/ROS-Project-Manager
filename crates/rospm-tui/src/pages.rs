@@ -55,14 +55,30 @@ pub(crate) fn rows(
     if let Some(InstallPage::Run(page)) = install_page {
         return page.rows(text);
     }
+    if let Some(InstallPage::DebugToolMissing { package, .. }) = install_page {
+        let mut row = Entry::link(&text.debug_install);
+        row.cells[2].clone_from(package);
+        return vec![row];
+    }
     if tab == DEBUG_TAB {
-        return if dashboard.is_some_and(|d| d.provider == ProviderKind::Native) {
+        return if let Some(dashboard) = dashboard.filter(|d| d.provider == ProviderKind::Native) {
             DEBUG_TOOLS
                 .into_iter()
                 .zip(&text.debug_tools)
-                .map(|(tool, description)| {
+                .enumerate()
+                .map(|(index, (tool, description))| {
                     let mut row = Entry::link(tool);
                     row.cells[2].clone_from(description);
+                    if let Some(statuses) = &dashboard.debug_tools {
+                        let status = statuses[index];
+                        row.cells[1] = match status {
+                            Status::Ok => &text.status_ok,
+                            Status::Missing => &text.not_installed,
+                            _ => &text.status_unknown,
+                        }
+                        .clone();
+                        row.status = Some(status);
+                    }
                     row
                 })
                 .collect()
@@ -329,6 +345,7 @@ mod tests {
             deps_report: Default::default(),
             components: vec![],
             ros_installed: false,
+            debug_tools: None,
             diagnostics: vec![],
             compile_packages: vec![],
             root: ".".into(),
@@ -392,6 +409,7 @@ mod tests {
                 status: Status::Missing,
             }],
             ros_installed: false,
+            debug_tools: None,
             diagnostics: vec![],
             compile_packages: vec![],
             root: ".".into(),

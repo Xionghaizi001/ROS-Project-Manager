@@ -9,7 +9,7 @@ use rospm_core::{
     mirror,
     plan::Plan,
     platform::Platform,
-    probe::Host,
+    probe::{Host, Status},
     provider::{self, Context as ProviderContext},
 };
 
@@ -29,6 +29,7 @@ pub(crate) struct Dashboard {
     pub(crate) deps_report: rospm_core::probe::EnvReport,
     pub(crate) components: Vec<Component>,
     pub(crate) ros_installed: bool,
+    pub(crate) debug_tools: Option<[Status; crate::DEBUG_TOOLS.len()]>,
     pub(crate) diagnostics: Vec<String>,
     pub(crate) compile_packages: Vec<crate::packages::BuildPackage>,
     pub(crate) root: PathBuf,
@@ -210,6 +211,7 @@ impl Dashboard {
             deps_report,
             components,
             ros_installed,
+            debug_tools: None,
             diagnostics,
             compile_packages,
             run,
