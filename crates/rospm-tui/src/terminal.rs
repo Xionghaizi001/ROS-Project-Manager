@@ -7,12 +7,13 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use crossterm::{
-    cursor::Hide,
-    event::{self, DisableMouseCapture, EnableMouseCapture},
+    cursor::{Hide, MoveTo, SetCursorStyle},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableMouseCapture},
     execute, queue,
+    style::{Attribute, ResetColor, SetAttribute},
     terminal::{
-        disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, EndSynchronizedUpdate,
-        EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, BeginSynchronizedUpdate, Clear, ClearType,
+        EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 use ratatui::{
@@ -157,6 +158,7 @@ pub(super) enum Screen {
     Suspended,
     Drawing,
     Active,
+    Command,
 }
 
 struct ScreenBackend<W: Write> {
@@ -194,6 +196,10 @@ impl<W: Write> Backend for ScreenBackend<W> {
 
     fn clear(&mut self) -> io::Result<()> {
         self.backend.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> io::Result<()> {
+        self.backend.clear_region(clear_type)
     }
 
     fn size(&self) -> io::Result<Size> {
@@ -253,14 +259,19 @@ pub(super) fn draw_frame<B: ratatui::backend::Backend + Write>(
     render: impl FnOnce(&mut Frame<'_>),
 ) -> io::Result<()> {
     // Keep screen entry and any clear in the same terminal update as the frame.
-    let resume = screen.replace(Screen::Drawing) == Screen::Suspended;
+    let previous = screen.replace(Screen::Drawing);
     let result = (|| {
         queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
         let drawn = (|| {
-            if resume {
+            if previous == Screen::Suspended {
+                queue!(terminal.backend_mut(), EnterAlternateScreen)?;
+            }
+            if matches!(previous, Screen::Suspended | Screen::Command) {
+                reset_command_modes(terminal.backend_mut())?;
                 queue!(
                     terminal.backend_mut(),
-                    EnterAlternateScreen,
+                    SetAttribute(Attribute::Reset),
+                    ResetColor,
                     EnableMouseCapture,
                     Hide
                 )?;
@@ -275,6 +286,40 @@ pub(super) fn draw_frame<B: ratatui::backend::Backend + Write>(
     result.and(Write::flush(terminal.backend_mut()))
 }
 
+fn reset_command_modes(writer: &mut impl Write) -> io::Result<()> {
+    queue!(
+        writer,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        SetCursorStyle::DefaultUserShape
+    )?;
+    // Restore normal cursor keys and the numeric keypad after an interactive shell.
+    writer.write_all(b"\x1b[?1l\x1b>")
+}
+
+/// Give a shell or task a clean full-screen surface without exposing the caller's screen.
+pub(super) fn command_screen<B: ratatui::backend::Backend + Write>(
+    terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
+) -> Result<()> {
+    if screen.get() == Screen::Suspended {
+        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    }
+    screen.set(Screen::Command);
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    // Do not pass queued TUI shortcuts or mouse events to the command.
+    while event::poll(Duration::ZERO).unwrap_or(false) && event::read().is_ok() {}
+    execute!(
+        terminal.backend_mut(),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        Clear(ClearType::All),
+        MoveTo(0, 0)
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
 pub(super) fn leave_screen<B: ratatui::backend::Backend + Write>(
     terminal: &mut Terminal<B>,
     screen: &Cell<Screen>,
@@ -282,7 +327,8 @@ pub(super) fn leave_screen<B: ratatui::backend::Backend + Write>(
     if screen.get() == Screen::Suspended {
         return Ok(());
     }
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    reset_command_modes(terminal.backend_mut())?;
+    Write::flush(terminal.backend_mut())?;
     // Consume input already queued for the TUI before handing the terminal back.
     while event::poll(Duration::ZERO).unwrap_or(false) && event::read().is_ok() {}
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -295,6 +341,95 @@ pub(super) fn leave_screen<B: ratatui::backend::Backend + Write>(
 mod tests {
     use super::*;
     use crossterm::terminal::{Clear, ClearType};
+    use ratatui::{layout::Rect, widgets::Paragraph, TerminalOptions, Viewport};
+    use std::{cell::RefCell, rc::Rc};
+
+    #[derive(Clone, Default)]
+    struct Capture(Rc<RefCell<Vec<u8>>>);
+
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Capture {
+        fn apply(&self, display: &mut vt100::Parser) {
+            display.process(&std::mem::take(&mut *self.0.borrow_mut()));
+        }
+    }
+
+    #[test]
+    fn commands_and_dashboard_share_only_the_alternate_screen() {
+        let screen = Cell::new(Screen::Suspended);
+        let capture = Capture::default();
+        let mut terminal = Terminal::with_options(
+            ScreenBackend {
+                backend: CrosstermBackend::new(FrameOutput {
+                    writer: capture.clone(),
+                    screen: &screen,
+                    buffer: Vec::new(),
+                }),
+                footer_row: Cell::new(23),
+            },
+            TerminalOptions {
+                viewport: Viewport::Fixed(Rect::new(0, 0, 80, 24)),
+            },
+        )
+        .unwrap();
+        let mut display = vt100::Parser::new(24, 80, 100);
+        display.process(b"caller history\r\n$ rospm tui");
+        let caller = display.screen().contents();
+        let cursor = display.screen().cursor_position();
+
+        for content in [
+            "Shell output",
+            "task output",
+            "Shell reattached",
+            "task failed",
+        ] {
+            draw_frame(&mut terminal, &screen, |frame| {
+                frame.render_widget(Paragraph::new("dashboard"), frame.area());
+            })
+            .unwrap();
+            capture.apply(&mut display);
+            assert!(display.screen().alternate_screen());
+            assert_eq!(display.screen().contents(), "dashboard");
+            assert!(!display.screen().application_cursor());
+            assert!(!display.screen().bracketed_paste());
+
+            command_screen(&mut terminal, &screen).unwrap();
+            capture.apply(&mut display);
+            assert!(display.screen().alternate_screen());
+            assert!(display.screen().contents().is_empty());
+            assert_eq!(display.screen().cursor_position(), (0, 0));
+            assert!(!display.screen().hide_cursor());
+            terminal
+                .backend_mut()
+                .write_all(content.as_bytes())
+                .unwrap();
+            // A shell may change input modes before returning to the dashboard.
+            terminal
+                .backend_mut()
+                .write_all(b"\x1b[?1h\x1b[?2004h")
+                .unwrap();
+            capture.apply(&mut display);
+            assert_eq!(display.screen().contents(), content);
+        }
+        // Cleanup also works when a command fails before the next dashboard frame.
+        leave_screen(&mut terminal, &screen).unwrap();
+        capture.apply(&mut display);
+        assert!(!display.screen().alternate_screen());
+        assert_eq!(display.screen().contents(), caller);
+        assert_eq!(display.screen().cursor_position(), cursor);
+        assert!(!display.screen().application_cursor());
+        assert!(!display.screen().bracketed_paste());
+    }
 
     #[test]
     fn footer_diff_is_sent_before_page_changes() {

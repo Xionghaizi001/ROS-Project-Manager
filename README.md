@@ -93,6 +93,8 @@ rospm uninstall --dry-run                # 先审阅卸载范围
 
 执行 `rospm tui`，用 Tab / 方向键或鼠标切换页面；`l` 查看日志，`p` 打开进程管理。环境任务由当前用户的独立 worker 执行。关闭 TUI 或退出日志跟随不等于取消；重开同一项目可查看原任务，显式继续确认、授权或请求取消。apt / dpkg 等受保护步骤在安全边界响应取消，已完成的更改不会回滚。
 
+从 TUI 新建或重新打开 Shell、接入 task 时，使用 rospm 内的独立全屏页面，输出不会混入启动 rospm 的终端屏幕。Shell 可按 `Ctrl+]` 或执行 `rospm background` 收起，再次打开会恢复会话画面；退出 TUI 后恢复原终端屏幕。
+
 系统步骤由前台 sudo 授权，项目 shell、Git、Conda 和构建保持普通用户身份。交互 Shell 的生命周期属于 TUI；它与可断连继续的环境任务不同。SSH 断连存活取决于目标机的 session / cgroup 策略；主机或 worker 故障只恢复状态，不自动重放副作用。
 
 任务日志与结果保存在 `.rospm/worker/tasks/<id>/logs.jsonl` 和 `snapshot.json`，退出后保留，CLI 不自动轮转或清理。用原 ID 查询或继续，先核实 `unknown` 任务的系统状态。操作、保留规则与恢复命令见 [worker 使用说明](docs/worker-cli.md)。

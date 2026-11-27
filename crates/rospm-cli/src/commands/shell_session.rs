@@ -1,6 +1,5 @@
 //! An interactive PTY whose shell and jobs are supervised by a TUI-owned worker.
 use std::{
-    collections::VecDeque,
     fs::{self, File},
     io::{self, Read, Write},
     os::{
@@ -26,7 +25,6 @@ use rospm_core::run::{output, RunSignal, RunStatus};
 
 use super::{environment, Global};
 
-// shortcut: keep only the detached output tail, add scrollback storage if sessions need history.
 const BUFFER_BYTES: usize = 64 * 1024;
 
 pub(super) struct Session {
@@ -41,11 +39,12 @@ pub(super) struct Session {
     exit: Option<ExitStatus>,
 }
 
-#[derive(Default)]
 struct Output {
     attached: bool,
     stop: bool,
-    pending: VecDeque<u8>,
+    parser: vt100::Parser,
+    queries: vte::Parser,
+    rendered: Option<vt100::Screen>,
 }
 
 impl Session {
@@ -90,7 +89,7 @@ impl Session {
             worker,
             owner,
             master,
-            output: Default::default(),
+            output: Arc::new(Mutex::new(Output::new(&window))),
             reader: None,
             status: RunStatus {
                 id: format!("shell-{}", super::interaction::task_id()),
@@ -124,7 +123,7 @@ impl Session {
         if let Err(error) = self.owner.read_exact(&mut pid) {
             self.finish_reader();
             let output = self.output.lock().unwrap();
-            let diagnostic = String::from_utf8_lossy(output.pending.as_slices().0);
+            let diagnostic = output.parser.screen().contents();
             return Err(error).with_context(|| {
                 format!(
                     "{} {}",
@@ -148,6 +147,9 @@ impl Session {
         let mut input = File::from(stdin.as_fd().try_clone_to_owned()?);
         {
             let mut output = self.output.lock().unwrap();
+            output.resize(&terminal_size()?);
+            // The dashboard has used the display since the previous attachment.
+            output.rendered = None;
             output.flush()?;
             output.attached = true;
         }
@@ -169,6 +171,12 @@ impl Session {
         let mut bytes = [0; 4096];
         loop {
             let window = terminal_size()?;
+            {
+                let mut output = self.output.lock().unwrap();
+                if output.resize(&window) {
+                    output.flush()?;
+                }
+            }
             if unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &window) } == -1 {
                 return Err(io::Error::last_os_error().into());
             }
@@ -263,14 +271,116 @@ impl Drop for Session {
 }
 
 impl Output {
+    fn new(window: &libc::winsize) -> Self {
+        let (rows, cols) = screen_size(window);
+        Self {
+            attached: false,
+            stop: false,
+            parser: vt100::Parser::new(rows, cols, 0),
+            queries: vte::Parser::new(),
+            rendered: None,
+        }
+    }
+
+    fn resize(&mut self, window: &libc::winsize) -> bool {
+        let (rows, cols) = screen_size(window);
+        if self.parser.screen().size() == (rows, cols) {
+            return false;
+        }
+        self.parser.set_size(rows, cols);
+        self.rendered = None;
+        true
+    }
+
     fn flush(&mut self) -> io::Result<()> {
-        let mut stdout = io::stdout().lock();
-        let (first, second) = self.pending.as_slices();
-        stdout.write_all(first)?;
-        stdout.write_all(second)?;
-        stdout.flush()?;
-        self.pending.clear();
+        self.render(&mut io::stdout().lock())
+    }
+
+    fn process(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut replies = Vec::new();
+        for &byte in bytes {
+            self.parser.process(&[byte]);
+            // vt100 models the screen; answer device queries at their exact position.
+            self.queries.advance(
+                &mut TerminalReplies {
+                    screen: self.parser.screen(),
+                    replies: &mut replies,
+                },
+                byte,
+            );
+        }
+        replies
+    }
+
+    fn render(&mut self, writer: &mut impl Write) -> io::Result<()> {
+        // Render the virtual screen, never replay the child's screen-switching escapes.
+        // This also restores the prompt and foreground applications after detaching.
+        let screen = self.parser.screen();
+        let content = match &self.rendered {
+            Some(previous) => screen.state_diff(previous),
+            None => screen.state_formatted(),
+        };
+        writer.write_all(&content)?;
+        writer.flush()?;
+        self.rendered = Some(screen.clone());
         Ok(())
+    }
+}
+
+fn screen_size(window: &libc::winsize) -> (u16, u16) {
+    (
+        if window.ws_row == 0 {
+            24
+        } else {
+            window.ws_row
+        },
+        if window.ws_col == 0 {
+            80
+        } else {
+            window.ws_col
+        },
+    )
+}
+
+struct TerminalReplies<'a> {
+    screen: &'a vt100::Screen,
+    replies: &'a mut Vec<u8>,
+}
+
+impl vte::Perform for TerminalReplies<'_> {
+    fn csi_dispatch(
+        &mut self,
+        params: &vte::Params,
+        intermediates: &[u8],
+        ignore: bool,
+        command: char,
+    ) {
+        if ignore || intermediates.len() > 1 {
+            return;
+        }
+        // Queries must describe the shell's virtual terminal, including while detached.
+        let prefix = intermediates.first().copied();
+        let value = params
+            .iter()
+            .next()
+            .and_then(|param| param.first())
+            .copied()
+            .unwrap_or(0);
+        match (prefix, command, value) {
+            (None, 'n', 5) => self.replies.extend_from_slice(b"\x1b[0n"),
+            (None, 'n', 6) | (Some(b'?'), 'n', 6) => {
+                let (row, col) = self.screen.cursor_position();
+                let prefix = if prefix.is_some() { "?" } else { "" };
+                let _ = write!(self.replies, "\x1b[{prefix}{};{}R", row + 1, col + 1);
+            }
+            (None, 'c', 0) => self.replies.extend_from_slice(b"\x1b[?1;2c"),
+            (Some(b'>'), 'c', 0) => self.replies.extend_from_slice(b"\x1b[>0;0;0c"),
+            (None, 't', 18) => {
+                let (rows, cols) = self.screen.size();
+                let _ = write!(self.replies, "\x1b[8;{rows};{cols}t");
+            }
+            _ => {}
+        }
     }
 }
 
@@ -298,9 +408,10 @@ fn read_output(mut master: File, output: Arc<Mutex<Output>>, mut transcript: out
         };
         let _ = transcript.append(&bytes[..count]);
         let mut output = output.lock().unwrap();
-        output.pending.extend(&bytes[..count]);
-        let excess = output.pending.len().saturating_sub(BUFFER_BYTES);
-        output.pending.drain(..excess);
+        let replies = output.process(&bytes[..count]);
+        if !replies.is_empty() && master.write_all(&replies).is_err() {
+            break;
+        }
         if output.attached && output.flush().is_err() {
             break;
         }
@@ -575,6 +686,96 @@ impl Drop for ShellProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output() -> Output {
+        Output::new(&libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        })
+    }
+
+    fn render(output: &mut Output, display: &mut vt100::Parser) {
+        let mut bytes = Vec::new();
+        output.render(&mut bytes).unwrap();
+        display.process(&bytes);
+        assert_eq!(
+            display.screen().contents(),
+            output.parser.screen().contents()
+        );
+        assert_eq!(
+            display.screen().cursor_position(),
+            output.parser.screen().cursor_position()
+        );
+    }
+
+    #[test]
+    fn shell_repaint_preserves_the_callers_screen_and_restores_detached_output() {
+        let mut output = output();
+        let mut display = vt100::Parser::new(24, 80, 100);
+        display.process(b"caller history\r\n$ rospm tui");
+        let caller = display.screen().contents();
+        let cursor = display.screen().cursor_position();
+        display.process(b"\x1b[?1049h");
+        let prompt = "\x1b[32m(rospm:项目) $ \x1b[0m";
+        // Split UTF-8 and escape sequences just as a PTY reader may do.
+        for chunk in prompt.as_bytes().chunks(2) {
+            output.process(chunk);
+        }
+        render(&mut output, &mut display);
+
+        // A nested full-screen program must not switch the outer terminal back to the caller.
+        output.process(b"\x1b[?1049h\x1b[2J\x1b[Heditor\x1b[?25l");
+        render(&mut output, &mut display);
+        assert!(display.screen().alternate_screen());
+        assert_eq!(display.screen().contents(), "editor");
+        output.process(b"\x1b[?1049l\x1b[?25h");
+        render(&mut output, &mut display);
+        assert!(display.screen().alternate_screen());
+        assert!(display.screen().contents().contains("(rospm:项目) $"));
+
+        display.process(b"\x1b[2J\x1b[Hdashboard");
+        output.process(b"echo ready\r\nready\r\n$ ");
+        output.rendered = None;
+        render(&mut output, &mut display);
+        assert!(!display.screen().contents().contains("dashboard"));
+        assert!(display.screen().contents().contains("ready"));
+
+        // Reattaching an idle shell must restore its prompt even without fresh PTY bytes.
+        display.process(b"\x1b[2J\x1b[Htask output");
+        output.rendered = None;
+        render(&mut output, &mut display);
+        display.process(b"\x1b[?1049l");
+        assert_eq!(display.screen().contents(), caller);
+        assert_eq!(display.screen().cursor_position(), cursor);
+    }
+
+    #[test]
+    fn shell_resize_and_queries_use_the_virtual_terminal() {
+        let mut output = output();
+        assert_eq!(output.process(b"ab\x1b[6ncd"), b"\x1b[1;3R");
+        output.process(b"\x1b[");
+        assert_eq!(output.process(b"?6n"), b"\x1b[?1;5R");
+        let size = libc::winsize {
+            ws_row: 12,
+            ws_col: 40,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let mut display = vt100::Parser::new(24, 80, 0);
+        render(&mut output, &mut display);
+        assert!(output.resize(&size));
+        assert!(output.rendered.is_none());
+        display.set_size(12, 40);
+        render(&mut output, &mut display);
+        assert!(!output.resize(&size));
+        assert_eq!(output.process(b"\x1b[18t"), b"\x1b[8;12;40t");
+        assert_eq!(
+            output.process(b"\x1b[5n\x1b[c\x1b[>c"),
+            b"\x1b[0n\x1b[?1;2c\x1b[>0;0;0c"
+        );
+    }
 
     fn capture(input: &str, prompt: &str) -> (Option<String>, std::process::Output) {
         let (command, path) = anonymous_rc("").unwrap();

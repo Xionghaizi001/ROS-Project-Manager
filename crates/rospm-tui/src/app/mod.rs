@@ -25,7 +25,7 @@ use crate::{
         activate, back_run, first_selectable, lock_project, move_focus, refresh_project, tab_at,
     },
     pages, runs, table,
-    terminal::{draw_frame, leave_screen, Screen},
+    terminal::{command_screen, draw_frame, Screen},
     view, Action, DebugStart, InstallPage, RunBackend, Text, DEBUG_TAB, DEBUG_TOOLS,
 };
 
@@ -149,10 +149,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     _ => false,
                 };
                 if shell_attach || matches!(install_page, Some(InstallPage::Shell)) {
-                    leave_screen(terminal, screen)?;
+                    command_screen(terminal, screen)?;
                     let result = backend.shell(&project.root, &project.manifest);
-                    // The main screen may still be at the shell prompt, with raw output enabled.
-                    terminal.backend_mut().write_all(b"\r\n")?;
                     if let Err(error) = result {
                         install_page = Some(InstallPage::Detail {
                             title: "Shell".into(),
@@ -169,7 +167,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                 }
                 if let Some(InstallPage::Run(page)) = &mut install_page {
                     if let Some(id) = page.take_task_attach() {
-                        leave_screen(terminal, screen)?;
+                        command_screen(terminal, screen)?;
                         disable_raw_mode()?;
                         if let Err(error) = backend.attach_task(&project.root, &id) {
                             eprintln!("{error:#}");

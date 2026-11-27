@@ -17,7 +17,7 @@ use crate::{
     dashboard,
     navigation::{first_selectable, lock_project},
     runs,
-    terminal::{leave_screen, Screen},
+    terminal::{command_screen, Screen},
     InstallPage, RunBackend, TaskOutcome, Text,
 };
 
@@ -144,7 +144,7 @@ pub(super) fn install<B: ratatui::backend::Backend + Write>(
         }
         return Ok(());
     }
-    leave_screen(terminal, screen)?;
+    command_screen(terminal, screen)?;
     disable_raw_mode()?;
     let result = match install_page.as_ref() {
         Some(InstallPage::Ros) => install_ros(),
@@ -345,7 +345,7 @@ fn execute_action<B: ratatui::backend::Backend + Write>(
     action: &mut impl FnMut(Action) -> Result<()>,
     operation: Action,
 ) -> Result<()> {
-    leave_screen(terminal, screen)?;
+    command_screen(terminal, screen)?;
     disable_raw_mode()?;
     let mut answer = String::new();
     if let Err(error) = action(operation) {
@@ -363,7 +363,7 @@ fn execute_compile<B: ratatui::backend::Backend + Write>(
     build: &mut impl FnMut(bool) -> Result<()>,
     rebuild: bool,
 ) -> Result<()> {
-    leave_screen(terminal, screen)?;
+    command_screen(terminal, screen)?;
     disable_raw_mode()?;
     let mut answer = String::new();
     if let Err(error) = build(rebuild) {
