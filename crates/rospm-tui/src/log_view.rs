@@ -127,7 +127,7 @@ mod tests {
         let browser = Browser::new(None, &[], None);
         let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
         terminal
-            .draw(|frame| view::draw(frame, None, &text, 0, None, &mut 0, None, None))
+            .draw(|frame| view::draw(frame, None, &text, 0, None, &mut 0, None, None, None))
             .unwrap();
         let home = terminal.backend().buffer().clone();
         terminal.draw(|frame| draw(frame, &browser, &text)).unwrap();

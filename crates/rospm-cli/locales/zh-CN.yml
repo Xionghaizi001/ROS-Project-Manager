@@ -316,6 +316,8 @@ cli:
     confirm_build: "确认执行编译？"
     confirm_rebuild: "确认删除编译产物并重新编译？"
     confirm_action: "确认执行"
+    confirm_accept: "Enter 确认"
+    confirm_cancel: "Esc 取消"
     footer_apply: "a 准备环境"
     footer_uninstall: "u 卸载"
     footer_check: "c 检查"

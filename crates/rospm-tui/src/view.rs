@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 pub(crate) fn brand() -> Span<'static> {
@@ -31,6 +31,7 @@ pub(crate) enum FooterAction {
     CreateProject,
     ScanProjects,
     RescanProjects,
+    Confirm(bool),
 }
 
 pub(crate) fn footer_items(
@@ -70,7 +71,18 @@ pub(crate) fn footer_items(
     items
 }
 
-fn action_items(selected: usize, has_project: bool, text: &Text) -> Vec<(String, FooterAction)> {
+fn action_items(
+    selected: usize,
+    has_project: bool,
+    confirmation: bool,
+    text: &Text,
+) -> Vec<(String, FooterAction)> {
+    if confirmation {
+        return vec![
+            (text.confirm_accept.clone(), FooterAction::Confirm(true)),
+            (text.confirm_cancel.clone(), FooterAction::Confirm(false)),
+        ];
+    }
     match selected {
         0 if has_project => vec![(
             text.footer_rescan_projects.clone(),
@@ -148,6 +160,7 @@ pub(crate) fn footer_action_at(
     install_page: Option<&InstallPage>,
     selected: usize,
     has_project: bool,
+    confirmation: bool,
     text: &Text,
 ) -> Option<FooterAction> {
     if column >= width {
@@ -161,9 +174,9 @@ pub(crate) fn footer_action_at(
     let width = width - log_width;
     let items = footer_items(install_page, selected, text);
     let measure = |label: &str| Span::raw(label).width() + 2;
-    if install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5) {
+    if install_page.is_none() && (confirmation || matches!(selected, 0 | 1 | 2 | 5)) {
         let left_width = items.iter().map(|(label, _)| measure(label)).sum::<usize>();
-        let right_items = action_items(selected, has_project, text);
+        let right_items = action_items(selected, has_project, confirmation, text);
         let right_width = right_items
             .iter()
             .map(|(label, _)| measure(label))
@@ -179,6 +192,9 @@ pub(crate) fn footer_action_at(
                 }
                 offset = end;
             }
+        }
+        if confirmation {
+            return None;
         }
         if column < left_width {
             let mut offset = 0;
@@ -219,6 +235,7 @@ pub(crate) fn draw(
     scroll: &mut usize,
     focused: Option<usize>,
     process_count: Option<usize>,
+    confirmation: Option<String>,
 ) {
     let areas = Layout::vertical([
         Constraint::Length(1),
@@ -304,8 +321,9 @@ pub(crate) fn draw(
     .split(areas[3]);
     frame.render_widget(Paragraph::new(log_button), footer_areas[0]);
     let navigation = footer_items(install_page, selected, text);
-    let actions = (install_page.is_none() && matches!(selected, 0 | 1 | 2 | 5))
-        .then(|| action_items(selected, dashboard.is_some(), text));
+    let actions = (install_page.is_none()
+        && (confirmation.is_some() || matches!(selected, 0 | 1 | 2 | 5)))
+    .then(|| action_items(selected, dashboard.is_some(), confirmation.is_some(), text));
     draw_footer(
         frame,
         footer_areas[1],
@@ -314,6 +332,49 @@ pub(crate) fn draw(
             .as_ref()
             .map(|items| items.iter().map(|(label, _)| label.as_str())),
     );
+    if let Some(prompt) = confirmation {
+        let popup = confirmation_area(content);
+        if popup.width > 0 && popup.height > 0 {
+            frame.render_widget(Clear, popup);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Black).bg(Color::White))
+                .border_style(Style::default().fg(Color::Blue).bg(Color::White))
+                .title(text.confirm_action.as_str());
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            frame.render_widget(
+                Paragraph::new(Line::from(prompt))
+                    .style(Style::default().fg(Color::Black).bg(Color::White))
+                    .wrap(Wrap { trim: false }),
+                inner,
+            );
+        }
+    }
+}
+
+pub(crate) fn confirmation_area(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(2).min(76);
+    let height = area.height.saturating_sub(2).min(8);
+    if width < 4 || height < 3 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.right().saturating_sub(width + 1),
+        area.bottom().saturating_sub(height + 1),
+        width,
+        height,
+    )
+}
+
+pub(crate) fn page_content_area(area: Rect) -> Rect {
+    Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area)[2]
 }
 
 pub(crate) fn draw_footer<'a>(
@@ -352,14 +413,9 @@ pub(crate) fn process_counter_at(column: u16, width: u16, count: usize, text: &T
 }
 
 pub(crate) fn table_area(area: ratatui::layout::Rect) -> ratatui::layout::Rect {
-    let areas = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    Block::default().borders(Borders::ALL).inner(areas[2])
+    Block::default()
+        .borders(Borders::ALL)
+        .inner(page_content_area(area))
 }
 
 #[cfg(test)]
@@ -375,13 +431,90 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
         terminal
-            .draw(|frame| draw(frame, None, &text, 0, None, &mut 0, None, Some(0)))
+            .draw(|frame| draw(frame, None, &text, 0, None, &mut 0, None, Some(0), None))
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(12, 0)].symbol(), "p");
         assert_eq!(buffer[(20, 0)].symbol(), "理");
         assert!(process_counter_at(21, 80, 0, &text));
         assert!(!process_counter_at(22, 80, 0, &text));
+    }
+
+    #[test]
+    fn confirmation_overlay_is_large_and_anchored_to_content_bottom_right() {
+        let text = Text {
+            confirm_action: "确认执行".into(),
+            confirm_accept: "Enter 确认".into(),
+            confirm_cancel: "Esc 取消".into(),
+            ..Text::default()
+        };
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    None,
+                    &text,
+                    0,
+                    None,
+                    &mut 0,
+                    None,
+                    None,
+                    Some("确认执行 a 准备环境".into()),
+                )
+            })
+            .unwrap();
+        let popup = confirmation_area(Rect::new(0, 2, 100, 17));
+        let buffer = terminal.backend().buffer();
+        assert_eq!(popup.width, 76);
+        assert_eq!(popup.height, 8);
+        assert_eq!(popup.right(), 99);
+        assert_eq!(popup.bottom(), 18);
+        assert_eq!(buffer[(popup.x, popup.y)].symbol(), "┌");
+        assert_eq!(buffer[(popup.x + 1, popup.y + 1)].symbol(), "确");
+        assert_eq!(buffer[(popup.x + 1, popup.y + 1)].fg, Color::Black);
+        assert_eq!(buffer[(popup.x + 1, popup.y + 1)].bg, Color::White);
+    }
+
+    #[test]
+    fn confirmation_replaces_the_right_footer_menu() {
+        let text = Text {
+            logs: "日志".into(),
+            confirm_accept: "Enter 确认".into(),
+            confirm_cancel: "Esc 取消".into(),
+            ..Text::default()
+        };
+        let actions = action_items(1, false, true, &text);
+        assert_eq!(
+            actions
+                .iter()
+                .map(|(_, action)| *action)
+                .collect::<Vec<_>>(),
+            [FooterAction::Confirm(true), FooterAction::Confirm(false)]
+        );
+        let log_width = log_button(&text).width();
+        let right_width = actions
+            .iter()
+            .map(|(label, _)| Span::raw(label).width() + 2)
+            .sum::<usize>();
+        let right_start = log_width + 100 - log_width - right_width;
+        assert_eq!(
+            footer_action_at(right_start as u16 + 1, 100, None, 1, false, true, &text,),
+            Some(FooterAction::Confirm(true))
+        );
+        assert_eq!(
+            footer_action_at(
+                (right_start + Span::raw(&actions[0].0).width() + 2) as u16 + 1,
+                100,
+                None,
+                1,
+                false,
+                true,
+                &text,
+            ),
+            Some(FooterAction::Confirm(false))
+        );
     }
 
     #[test]
@@ -416,52 +549,76 @@ mod tests {
         let log_width = 8;
         let start = log_width + (100 - log_width) / 2 - total / 2;
         assert_eq!(
-            footer_action_at(start as u16 + 1, 100, None, 3, false, &text),
+            footer_action_at(start as u16 + 1, 100, None, 3, false, false, &text),
             Some(FooterAction::Select)
         );
         assert_eq!(
-            footer_action_at((start + total) as u16, 100, None, 3, false, &text),
+            footer_action_at((start + total) as u16, 100, None, 3, false, false, &text),
             None
         );
-        let build_width = action_items(2, false, &text)
+        let build_width = action_items(2, false, false, &text)
             .iter()
             .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
             .sum::<usize>();
         assert_eq!(
-            footer_action_at((100 - build_width) as u16 + 1, 100, None, 2, false, &text),
+            footer_action_at(
+                (100 - build_width) as u16 + 1,
+                100,
+                None,
+                2,
+                false,
+                false,
+                &text
+            ),
             Some(FooterAction::Build)
         );
-        let install_width = action_items(1, false, &text)
+        let install_width = action_items(1, false, false, &text)
             .iter()
             .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
             .sum::<usize>();
         assert_eq!(
-            footer_action_at((100 - install_width) as u16 + 1, 100, None, 1, false, &text),
+            footer_action_at(
+                (100 - install_width) as u16 + 1,
+                100,
+                None,
+                1,
+                false,
+                false,
+                &text,
+            ),
             Some(FooterAction::Execute(Action::Apply))
         );
-        let project_width = action_items(0, false, &text)
+        let project_width = action_items(0, false, false, &text)
             .iter()
             .map(|(label, _)| Span::raw(label.as_str()).width() + 2)
             .sum::<usize>();
         assert_eq!(
-            footer_action_at((100 - project_width) as u16 + 1, 100, None, 0, false, &text),
+            footer_action_at(
+                (100 - project_width) as u16 + 1,
+                100,
+                None,
+                0,
+                false,
+                false,
+                &text,
+            ),
             Some(FooterAction::CreateProject)
         );
         assert_eq!(
-            action_items(0, true, &text)
+            action_items(0, true, false, &text)
                 .iter()
                 .map(|(_, action)| *action)
                 .collect::<Vec<_>>(),
             [FooterAction::RescanProjects]
         );
         assert_eq!(
-            footer_action_at(log_width as u16 + 1, 100, None, 2, false, &text),
+            footer_action_at(log_width as u16 + 1, 100, None, 2, false, false, &text),
             Some(FooterAction::Select)
         );
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
         terminal
-            .draw(|frame| draw(frame, None, &text, 2, None, &mut 0, None, None))
+            .draw(|frame| draw(frame, None, &text, 2, None, &mut 0, None, None, None))
             .unwrap();
         assert_eq!(
             terminal.backend().buffer()[((100 - build_width) as u16, 9)].bg,
@@ -482,7 +639,7 @@ mod tests {
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 10)).unwrap();
             terminal
-                .draw(|frame| draw(frame, None, &text, tab, page, &mut 0, None, None))
+                .draw(|frame| draw(frame, None, &text, tab, page, &mut 0, None, None, None))
                 .unwrap();
             let buffer = terminal.backend().buffer();
             assert_eq!(buffer[(1, 9)].symbol(), "l");
@@ -495,18 +652,18 @@ mod tests {
                     .max(log_width as u16);
                 assert_eq!(buffer[(action_start + 1, 9)].symbol(), "a");
                 assert_eq!(
-                    footer_action_at(action_start + 1, width, page, tab, false, &text),
+                    footer_action_at(action_start + 1, width, page, tab, false, false, &text),
                     Some(FooterAction::Execute(Action::Apply))
                 );
             }
             for column in 0..log_width as u16 {
                 assert_eq!(
-                    footer_action_at(column, width, page, tab, false, &text),
+                    footer_action_at(column, width, page, tab, false, false, &text),
                     Some(FooterAction::Logs)
                 );
             }
             assert_ne!(
-                footer_action_at(log_width as u16, width, page, tab, false, &text),
+                footer_action_at(log_width as u16, width, page, tab, false, false, &text),
                 Some(FooterAction::Logs)
             );
         }

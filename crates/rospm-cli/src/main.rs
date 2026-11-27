@@ -592,6 +592,8 @@ fn execute_cli(
                 confirm_build: tr("cli.tui.confirm_build"),
                 confirm_rebuild: tr("cli.tui.confirm_rebuild"),
                 confirm_action: tr("cli.tui.confirm_action"),
+                confirm_accept: tr("cli.tui.confirm_accept"),
+                confirm_cancel: tr("cli.tui.confirm_cancel"),
                 footer_apply: tr("cli.tui.footer_apply"),
                 footer_uninstall: tr("cli.tui.footer_uninstall"),
                 footer_check: tr("cli.tui.footer_check"),

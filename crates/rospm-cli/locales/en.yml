@@ -321,6 +321,8 @@ cli:
     confirm_build: "Build this project?"
     confirm_rebuild: "Delete build artifacts and rebuild?"
     confirm_action: "Run"
+    confirm_accept: "Enter Confirm"
+    confirm_cancel: "Esc Cancel"
     footer_apply: "a Apply"
     footer_uninstall: "u Uninstall"
     footer_check: "c Check"
