@@ -89,6 +89,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     active_manifest.as_deref(),
                     &mut dashboard,
                     &mut install_page,
+                    &mut focused_row,
                     &mut scroll,
                     text,
                     install_ros,
@@ -196,9 +197,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         Err(error) => process_error = Some(format!("{error:#}")),
                     }
                     if let Some(id) = backend.pending_authorization().map(str::to_owned) {
-                        disable_raw_mode()?;
                         let result = backend.authorize_task(&project.root, &id);
-                        enable_raw_mode()?;
                         if let Err(error) = result {
                             process_error = Some(format!("{error:#}"));
                         }
@@ -207,9 +206,17 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     let finished: std::collections::HashSet<_> =
                         history.iter().map(|process| &process.id).collect();
                     processes.retain(|process| !finished.contains(&process.id));
-                    project.installing = processes
+                    let installing = processes
                         .iter()
                         .any(|process| process.task && process.exit.is_none());
+                    if project.installing && !installing && process_error.is_none() {
+                        if let Some(updated) =
+                            dashboard::Dashboard::load(Some(&project.manifest), text)?
+                        {
+                            *project = updated;
+                        }
+                    }
+                    project.installing = installing;
                     processes.extend(history);
                     processes.sort_by_key(|process| process.exit.is_some());
                     active_processes = processes
@@ -370,6 +377,7 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 active_manifest.as_deref(),
                                 &mut dashboard,
                                 &mut install_page,
+                                &mut focused_row,
                                 &mut scroll,
                                 text,
                                 install_ros,

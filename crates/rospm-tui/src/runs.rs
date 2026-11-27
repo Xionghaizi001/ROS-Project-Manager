@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use rospm_core::run::{RunExit, RunRequest, RunSignal, RunStatus, Target};
-use rospm_core::worker::{Operation, TaskState};
+use rospm_core::worker::{Operation, TaskSnapshot, TaskState};
 
 use crate::{dashboard::Dashboard, pages::Entry, Text};
 
@@ -14,7 +14,7 @@ pub trait RunBackend {
         &mut self,
         manifest: &Path,
     ) -> Result<[rospm_core::probe::Status; crate::DEBUG_TOOLS.len()]>;
-    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<()>;
+    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<TaskOutcome>;
     fn foreground(&mut self) -> Vec<RunStatus>;
     fn background(&mut self, root: &Path) -> Result<Vec<RunStatus>>;
     fn history(&mut self) -> Vec<RunStatus>;
@@ -57,10 +57,10 @@ pub enum DebugStart {
     Missing { package: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskOutcome {
     Completed,
-    Detached,
+    Detached { id: String },
 }
 
 pub(crate) enum Page {
@@ -100,6 +100,37 @@ impl Page {
             signal: None,
             attach: false,
             error,
+        }
+    }
+
+    pub fn task(id: String) -> Self {
+        let process = RunStatus {
+            target: format!("task/{id}"),
+            task_snapshot: Some(TaskSnapshot {
+                task_id: id.clone(),
+                state: TaskState::Pending,
+                step: 0,
+                total_steps: None,
+                log_cursor: 0,
+                result: None,
+            }),
+            id,
+            background: true,
+            task: true,
+            task_connected: true,
+            shell: false,
+            last_command: None,
+            pid: None,
+            suspended: false,
+            output_fd: None,
+            exit: None,
+        };
+        Self::Processes {
+            list: vec![process.clone()],
+            selected: Some(process),
+            signal: None,
+            attach: false,
+            error: None,
         }
     }
 
@@ -546,6 +577,41 @@ mod tests {
                 result: None,
             }),
         }
+    }
+
+    #[test]
+    fn created_task_keeps_its_identity_and_controls_when_the_process_list_refreshes() {
+        let text = Text {
+            task_attach: "Continue".into(),
+            task_cancel: "Cancel".into(),
+            ..Text::default()
+        };
+        let mut page = Page::task("saved-task".into());
+        let mut focus = Some(1);
+        assert_eq!(page.rows(&text)[0].cells[0], "task/saved-task");
+        assert_eq!(page.rows(&text)[1].cells[0], "Continue");
+        assert_eq!(page.rows(&text)[2].cells[0], "Cancel");
+        assert_eq!(page.take_task_attach(), None);
+        let process = waiting_task();
+        let mut other = process.clone();
+        other.id = "another-task".into();
+        page.refresh(&[other, process.clone()], None, &mut focus, &text);
+        assert_eq!(page.focused_process(focus), Some(&process));
+        page.activate(2);
+        assert!(matches!(
+            page,
+            Page::Processes {
+                signal: Some(RunSignal::Terminate),
+                ..
+            }
+        ));
+        let mut completed = process;
+        completed.exit = Some(RunExit::Code(0));
+        completed.task_snapshot.as_mut().unwrap().state = TaskState::Succeeded;
+        page.refresh(std::slice::from_ref(&completed), None, &mut focus, &text);
+        assert_eq!(page.focused_process(focus), Some(&completed));
+        assert_eq!(focus, None);
+        assert_eq!(page.rows(&text).len(), 1);
     }
 
     #[test]

@@ -35,7 +35,7 @@ CLI 使用任务 ID 作为请求 ID。ID 长度为 1–128 个字符，可使用
 
 同一项目中的任务按顺序取得 workspace 租约，租约覆盖规划、确认等待和结果写入。最多保留 32 个活动或排队任务。排队任务可以直接取消。
 
-TUI 编译页的 `b` / `B` 及对应鼠标按钮分别提交 `build` / `rebuild`，确认后由独立 worker 执行，界面跟随任务日志。暂停或关闭 TUI 不取消已提交的构建；可使用显示的任务 ID 通过 `task status`、`logs`、`attach` 或 `cancel` 继续操作。
+TUI 编译页的 `b` / `B` 及对应鼠标按钮分别提交 `build` / `rebuild`。构建、环境准备、依赖安装及其他 worker 操作提交成功后，立即在现有进程管理页面打开新任务，显示任务名称 `task/<任务 ID>`、状态和操作入口。提交过程保持在 TUI 中，不自动显示终端输出，也无需按 Enter 返回；按 `l` 可查看该任务的日志。暂停或关闭 TUI 不取消已提交的构建；可使用显示的任务 ID 通过 `task status`、`logs`、`attach` 或 `cancel` 继续操作。
 
 ## 在 TUI 恢复任务
 
@@ -64,7 +64,7 @@ rospm task --runtime /tmp/rospm-my-project confirm remove-001 --step 2 reject
 
 ## 系统权限
 
-以普通用户运行 `rospm tui`。启动时通过 `sudo -l` 检查当前用户，检查失败时按 Esc 可继续使用 TUI。桌面会话中，sudo 在需要密码时调用系统的图形 askpass 程序，并按 sudoers 策略完成认证。可通过 `SUDO_ASKPASS` 或 `sudo.conf` 配置该程序，Ubuntu 可使用 `ssh-askpass-gnome`。无图形会话时，TUI 可执行 sudo 已授权的免密码步骤。
+以普通用户运行 `rospm tui`。启动时通过 `sudo -l` 检查当前用户，检查失败时按 Esc 可继续使用 TUI。桌面会话中，sudo 在需要密码时调用系统的图形 askpass 程序，并按 sudoers 策略完成认证。可通过 `SUDO_ASKPASS` 或 `sudo.conf` 配置该程序，Ubuntu 可使用 `ssh-askpass-gnome`。无图形会话时，TUI 可执行 sudo 已授权的免密码步骤。当前 TUI 提交的任务在后台处理授权和系统步骤，期间仍可浏览任务、查看日志或请求取消。
 
 系统步骤在 `waiting_authorization` 等待前台客户端接入。每次 sudo 调用都以当前 sudoers 策略为准。Git、Conda、构建与项目 shell 以当前用户运行。rosdep 安装也以当前用户启动，由 rosdep 为系统包操作调用 sudo。
 

@@ -110,6 +110,7 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
             manifest,
             dashboard,
             install_page,
+            focused_row,
             scroll,
             text,
             install_ros,

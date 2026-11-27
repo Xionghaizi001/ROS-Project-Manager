@@ -25,6 +25,7 @@ pub struct Runs {
     logs: Vec<RecordedRun>,
     detached_tasks: Vec<String>,
     pending_authorization: Option<String>,
+    authorizations: Vec<(String, thread::JoinHandle<Result<()>>)>,
 }
 
 struct RecordedRun {
@@ -57,8 +58,19 @@ impl rospm_tui::RunBackend for Runs {
     }
 
     fn authorize_task(&mut self, root: &Path, id: &str) -> Result<()> {
+        if self.authorizations.iter().any(|(task, _)| task == id) {
+            return Ok(());
+        }
         let worker = connect(&root.join(".rospm/worker/runtime"))?;
-        authorization::authorize_with(&worker, id, Authorization::for_tui())
+        let id = id.to_owned();
+        let task = id.clone();
+        self.authorizations.push((
+            id,
+            thread::spawn(move || {
+                authorization::authorize_with(&worker, &task, Authorization::for_tui())
+            }),
+        ));
+        Ok(())
     }
 
     fn attach_task(&mut self, root: &Path, id: &str) -> Result<()> {
@@ -126,7 +138,7 @@ impl rospm_tui::RunBackend for Runs {
         crate::commands::run::debug_tool_statuses(manifest)
     }
 
-    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<()> {
+    fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<rospm_tui::TaskOutcome> {
         let manifest = std::env::current_dir()?.join(manifest);
         let root = manifest.parent().context("missing manifest directory")?;
         self.task(
@@ -137,8 +149,7 @@ impl rospm_tui::RunBackend for Runs {
                 manifest: manifest.clone(),
             },
         )
-        .with_context(|| tr("cli.tui.debug.install_failed"))?;
-        Ok(())
+        .with_context(|| tr("cli.tui.debug.install_failed"))
     }
 
     fn foreground(&mut self) -> Vec<RunStatus> {
@@ -151,6 +162,14 @@ impl rospm_tui::RunBackend for Runs {
 
     fn background(&mut self, root: &Path) -> Result<Vec<RunStatus>> {
         self.pending_authorization = None;
+        for index in (0..self.authorizations.len()).rev() {
+            if self.authorizations[index].1.is_finished() {
+                let (_, authorization) = self.authorizations.swap_remove(index);
+                authorization
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("task authorization panicked"))??;
+            }
+        }
         if let Some(worker) = &mut self.worker {
             if worker.try_wait()?.is_some() {
                 self.worker = None;
@@ -277,7 +296,6 @@ impl rospm_tui::RunBackend for Runs {
         manifest: Option<&Path>,
         operation: Operation,
     ) -> Result<rospm_tui::TaskOutcome> {
-        let detach = operation == Operation::DepsInstall;
         let runtime = root.join(".rospm/worker/runtime");
         let stream = self.ensure_task_worker(root, &runtime, manifest)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -313,21 +331,8 @@ impl rospm_tui::RunBackend for Runs {
             ),
             "worker did not accept the TUI task"
         );
-        eprintln!(
-            "{}",
-            rospm_core::msg!(
-                "worker_cli.follow",
-                id = &id,
-                runtime = rospm_core::plan::shell_quote(&runtime.to_string_lossy())
-            )
-        );
-        if detach {
-            self.detached_tasks.push(id);
-            Ok(rospm_tui::TaskOutcome::Detached)
-        } else {
-            follow_task(&mut stream, &id, Authorization::for_tui())?;
-            Ok(rospm_tui::TaskOutcome::Completed)
-        }
+        self.detached_tasks.push(id.clone());
+        Ok(rospm_tui::TaskOutcome::Detached { id })
     }
 }
 
@@ -854,6 +859,105 @@ pub fn serve(root: PathBuf, runtime: &Path, idle_timeout: Duration) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rospm_tui::RunBackend;
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+
+    #[test]
+    fn tui_submissions_return_the_accepted_task_id_without_following_output() {
+        let root = std::env::temp_dir().join(task_id());
+        let runtime = root.join(".rospm/worker/runtime");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = UnixListener::bind(runtime.join("worker.sock")).unwrap();
+        let operations = vec![
+            Operation::Apply,
+            Operation::Build,
+            Operation::Rebuild,
+            Operation::Uninstall,
+            Operation::Check,
+            Operation::Verify,
+            Operation::DepsCheck,
+            Operation::DepsInstall,
+            Operation::ComponentsInstall,
+            Operation::CondaInstall,
+            Operation::DebugToolInstall {
+                tool: "rviz2".into(),
+                manifest: root.join("rospm.toml"),
+            },
+        ];
+        let expected = operations.clone();
+        let workspace = root.canonicalize().unwrap();
+        let worker = thread::spawn(move || {
+            let mut accepted = Vec::new();
+            for operation in expected {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut stream = BufReader::new(stream);
+                let read = |stream: &mut BufReader<UnixStream>| {
+                    let mut bytes = Vec::new();
+                    stream.read_until(b'\n', &mut bytes).unwrap();
+                    Frame::decode(&bytes).unwrap().message
+                };
+                assert!(
+                    matches!(read(&mut stream), Message::Hello { client } if client == "rospm-tui")
+                );
+                stream
+                    .get_mut()
+                    .write_all(
+                        &Frame::new(Message::Hello {
+                            client: "rospm-worker".into(),
+                        })
+                        .encode()
+                        .unwrap(),
+                    )
+                    .unwrap();
+                let Message::Submit {
+                    request_id,
+                    task_id,
+                    workspace: submitted,
+                    operation: actual,
+                    interactive,
+                } = read(&mut stream)
+                else {
+                    panic!("missing submission")
+                };
+                assert_eq!(actual, operation);
+                assert_eq!(Path::new(&submitted), workspace);
+                assert!(interactive);
+                accepted.push(task_id.clone());
+                stream
+                    .get_mut()
+                    .write_all(
+                        &Frame::new(Message::Accepted {
+                            request_id,
+                            task_id,
+                        })
+                        .encode()
+                        .unwrap(),
+                    )
+                    .unwrap();
+                // A submission must return without asking for snapshots, logs or terminal input.
+                let mut bytes = Vec::new();
+                assert_eq!(stream.read_until(b'\n', &mut bytes).unwrap(), 0);
+            }
+            accepted
+        });
+        let mut runs = Runs::default();
+        let mut submitted = Vec::new();
+        for operation in operations {
+            let rospm_tui::TaskOutcome::Detached { id } =
+                runs.task(&root, None, operation).unwrap()
+            else {
+                panic!("task submission waited for completion");
+            };
+            assert_eq!(runs.detached_tasks.last(), Some(&id));
+            submitted.push(id);
+        }
+        assert_eq!(worker.join().unwrap(), submitted);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn task_discovery_restores_states_and_results_without_creating_or_replaying_tasks() {
