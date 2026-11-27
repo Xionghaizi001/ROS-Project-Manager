@@ -164,7 +164,7 @@ cli:
     shell: "输出的 shell 语法：bash（默认）| zsh"
   shell:
     about: "启动已加载项目环境的子 shell"
-    tui_help: "输入 rospm exit 结束会话，或输入 rospm background 收起会话并返回 TUI。"
+    tui_help: "按 Ctrl+] 收起会话并返回 TUI，前台命令运行时也可使用，shell 与任务继续运行。提示符下也可输入 rospm background 收起会话；rospm exit 结束会话。"
     entering: "进入 `%{name}` 的 rospm shell（输入 exit 退出）"
     start_failed: "无法启动 bash"
     exited: "shell 退出：%{status}"
@@ -271,7 +271,7 @@ cli:
       按 p 或点击顶部进程计数管理进程与已保存任务。选中任务按 l 查看日志；打开详情后可显式继续确认、授权或取消任务。
       关闭 TUI 不取消环境任务，重开同一项目可恢复状态；取消在安全步骤边界生效，已完成的更改不会回滚。
       请以普通用户运行 TUI。sudo 需要密码时由系统图形认证窗口处理。worker 或主机故障后不自动重放任务。
-      在 Shell 输入 exit 结束会话；rospm background 收起会话并返回界面。关闭 TUI 会结束其 shell 与前台进程。
+      在 Shell 按 Ctrl+] 收起会话并返回界面，前台命令运行时也可使用，shell 与任务继续运行。提示符下也可输入 rospm background 收起会话；exit 结束会话。重开 Shell 可接回原会话。关闭 TUI 会结束其 shell 与前台进程。
     cli_help: "CLI 使用说明"
     cli_usage: |-
       命令帮助

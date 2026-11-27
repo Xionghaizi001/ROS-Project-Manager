@@ -169,7 +169,7 @@ cli:
     shell: "Shell syntax to emit: bash (default) | zsh"
   shell:
     about: "Start a subshell with the project environment loaded"
-    tui_help: "Use rospm exit to end the session or rospm background to return to the TUI and keep it running."
+    tui_help: "Press Ctrl+] to return to the TUI while keeping the shell and its jobs running, even during a foreground command. At the prompt, rospm background also detaches; rospm exit ends the session."
     entering: "entering rospm shell for `%{name}` (exit to leave)"
     start_failed: "failed to start bash"
     exited: "shell exited with %{status}"
@@ -276,7 +276,7 @@ cli:
       Press p or click the process count to manage processes and saved tasks. Focus a task and press l to open its log; open task details to explicitly continue confirmation/authorization or cancel.
       Closing the TUI does not cancel environment tasks. Reopen the same project to recover task status; cancellation takes effect at a safe step boundary and does not roll back changes.
       Run the TUI as your normal user. When sudo needs a password, the desktop askpass helper handles the prompt. Worker/host failure never automatically replays tasks.
-      In Shell, exit ends the session; rospm background returns to the TUI and keeps the shell running. Closing the TUI ends its shell and foreground processes.
+      In Shell, Ctrl+] returns to the TUI and keeps the shell and its jobs running, even during a foreground command. At the prompt, rospm background also detaches; exit ends the session. Reopen Shell to reattach. Closing the TUI ends its shell and foreground processes.
     cli_help: "CLI usage"
     cli_usage: |-
       Command help

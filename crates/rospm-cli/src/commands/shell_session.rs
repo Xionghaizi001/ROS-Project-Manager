@@ -181,9 +181,14 @@ impl Session {
                 if count == 0 {
                     return Ok(false);
                 }
-                match self.master.write_all(&bytes[..count]) {
+                // Ctrl+] detaches here even when a foreground job owns the shell's PTY.
+                let detach = bytes[..count].iter().position(|&byte| byte == 0x1d);
+                match self.master.write_all(&bytes[..detach.unwrap_or(count)]) {
                     Err(error) if error.raw_os_error() == Some(libc::EIO) => return Ok(false),
                     result => result?,
+                }
+                if detach.is_some() {
+                    return Ok(true);
                 }
             }
         }
