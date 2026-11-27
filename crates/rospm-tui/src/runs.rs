@@ -155,6 +155,9 @@ impl Page {
                             Entry::link(&text.task_cancel),
                         ]);
                     } else if controllable(process) {
+                        if process.shell {
+                            rows.push(Entry::link(&text.shell_attach));
+                        }
                         rows.extend([
                             Entry::link(&text.run_terminate),
                             Entry::link(&text.run_kill),
@@ -212,6 +215,12 @@ impl Page {
                         *attach = index == 1;
                         *signal = (index == 2).then_some(RunSignal::Terminate);
                     } else {
+                        let index = if process.shell {
+                            *attach = index == 1;
+                            index.saturating_sub(1)
+                        } else {
+                            index
+                        };
                         *signal = match index {
                             1 => Some(RunSignal::Terminate),
                             2 => Some(RunSignal::Kill),
@@ -247,6 +256,20 @@ impl Page {
             }
         }
         None
+    }
+
+    pub fn take_shell_attach(&mut self) -> bool {
+        if let Self::Processes {
+            selected: Some(process),
+            attach,
+            ..
+        } = self
+        {
+            if process.shell {
+                return std::mem::take(attach) && controllable(process);
+            }
+        }
+        false
     }
 
     pub fn focused_process(&self, focused: Option<usize>) -> Option<&RunStatus> {
@@ -518,6 +541,81 @@ mod tests {
     }
 
     #[test]
+    fn shell_return_preserves_process_controls_and_hides_after_exit() {
+        let text = Text {
+            shell_attach: "Return to Shell".into(),
+            run_terminate: "Terminate".into(),
+            run_kill: "Kill".into(),
+            run_suspend: "Suspend".into(),
+            run_resume: "Resume".into(),
+            ..Text::default()
+        };
+        for shell in [false, true] {
+            let mut process = RunStatus {
+                id: "process".into(),
+                target: "process".into(),
+                background: false,
+                task: false,
+                task_snapshot: None,
+                task_connected: false,
+                shell,
+                pid: Some(42),
+                suspended: false,
+                output_fd: None,
+                exit: None,
+            };
+            let mut page = Page::processes(vec![process.clone()], None);
+            assert_eq!(page.activate(1), Some(1));
+            let offset = usize::from(shell);
+            let rows = page.rows(&text);
+            assert_eq!(rows.len(), 4 + offset);
+            if shell {
+                assert_eq!(rows[1].cells[0], "Return to Shell");
+                assert!(rows[1].selectable);
+                page.activate(1);
+                assert!(page.take_shell_attach());
+                assert!(!page.take_shell_attach());
+                assert!(matches!(page, Page::Processes { signal: None, .. }));
+            }
+            for (row, label, expected) in [
+                (1, "Terminate", RunSignal::Terminate),
+                (2, "Kill", RunSignal::Kill),
+                (3, "Suspend", RunSignal::Suspend),
+            ] {
+                assert_eq!(rows[row + offset].cells[0], label);
+                page.activate(row + offset);
+                assert!(!page.take_shell_attach());
+                assert_eq!(page.take_task_attach(), None);
+                assert!(
+                    matches!(page, Page::Processes { signal: Some(signal), .. } if signal == expected)
+                );
+            }
+            process.suspended = true;
+            let mut focus = Some(3 + offset);
+            page.refresh(&[process.clone()], None, &mut focus, &text);
+            assert_eq!(page.rows(&text)[3 + offset].cells[0], "Resume");
+            page.activate(3 + offset);
+            assert!(matches!(
+                page,
+                Page::Processes {
+                    signal: Some(RunSignal::Resume),
+                    ..
+                }
+            ));
+            if shell {
+                page.activate(1);
+                assert!(page.take_shell_attach());
+                page.activate(1);
+            }
+            process.exit = Some(RunExit::Code(0));
+            page.refresh(&[process], None, &mut focus, &text);
+            assert_eq!(focus, None);
+            assert_eq!(page.rows(&text).len(), 1);
+            assert!(!page.take_shell_attach());
+        }
+    }
+
+    #[test]
     fn restored_tasks_offer_attach_and_cancel_without_process_signals() {
         let text = Text {
             task_attach: "Continue".into(),
@@ -535,6 +633,7 @@ mod tests {
         assert_eq!(rows[1].cells[0], "Continue");
         assert_eq!(rows[2].cells[0], "Cancel");
         page.activate(1);
+        assert!(!page.take_shell_attach());
         assert_eq!(page.take_task_attach(), Some("saved-task".into()));
         assert_eq!(page.take_task_attach(), None);
         page.activate(2);

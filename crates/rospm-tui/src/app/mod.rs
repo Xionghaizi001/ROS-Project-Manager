@@ -144,16 +144,24 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                     scroll = 0;
                     last_process_refresh = None;
                 }
-                if matches!(install_page, Some(InstallPage::Shell)) {
+                let shell_attach = match &mut install_page {
+                    Some(InstallPage::Run(page)) => page.take_shell_attach(),
+                    _ => false,
+                };
+                if shell_attach || matches!(install_page, Some(InstallPage::Shell)) {
                     leave_screen(terminal, screen)?;
                     let result = backend.shell(&project.root, &project.manifest);
                     // The main screen may still be at the shell prompt, with raw output enabled.
                     terminal.backend_mut().write_all(b"\r\n")?;
-                    install_page = result.err().map(|error| InstallPage::Detail {
-                        title: "Shell".into(),
-                        body: format!("{error:#}"),
-                        return_to_ros: false,
-                    });
+                    if let Err(error) = result {
+                        install_page = Some(InstallPage::Detail {
+                            title: "Shell".into(),
+                            body: format!("{error:#}"),
+                            return_to_ros: false,
+                        });
+                    } else if !shell_attach {
+                        install_page = None;
+                    }
                     focused_row =
                         first_selectable(Some(project), text, selected, install_page.as_ref());
                     scroll = 0;

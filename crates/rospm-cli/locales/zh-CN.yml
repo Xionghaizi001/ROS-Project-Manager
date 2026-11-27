@@ -182,6 +182,7 @@ cli:
     run_resume: "继续 (SIGCONT)"
     run_suspended: "已挂起"
     shell_detached: "已收起"
+    shell_attach: "返回 Shell"
     run_starting: "正在启动"
     run_current: "当前运行"
     run_history: "历史任务"

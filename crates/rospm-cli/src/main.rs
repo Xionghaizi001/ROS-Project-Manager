@@ -712,6 +712,7 @@ fn execute_cli(
                 run_resume: tr("cli.tui.run_resume"),
                 run_suspended: tr("cli.tui.run_suspended"),
                 shell_detached: tr("cli.tui.shell_detached"),
+                shell_attach: tr("cli.tui.shell_attach"),
                 run_starting: tr("cli.tui.run_starting"),
                 run_current: tr("cli.tui.run_current"),
                 run_history: tr("cli.tui.run_history"),
