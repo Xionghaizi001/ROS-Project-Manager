@@ -295,7 +295,7 @@ pub(crate) fn draw(
         .borders(Borders::ALL)
         .title(match install_page {
             Some(InstallPage::Ros) => format!("{} / ROS", text.tabs[1]),
-            Some(InstallPage::Conda(_)) => format!("{} / {}", text.tabs[1], text.conda),
+            Some(InstallPage::Conda { .. }) => format!("{} / {}", text.tabs[1], text.conda),
             Some(InstallPage::Components) => format!("{} / {}", text.tabs[1], text.components),
             Some(InstallPage::Detail { title, .. }) => format!("{} / {title}", text.tabs[selected]),
             Some(InstallPage::ScannedProjects(_)) => {

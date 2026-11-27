@@ -63,6 +63,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    #[command(about = tr("conda.path.about"))]
+    Conda {
+        #[command(subcommand)]
+        command: CondaCmd,
+    },
     #[command(about = tr("venv.about"))]
     Venv {
         #[command(subcommand)]
@@ -243,6 +248,14 @@ enum Cmd {
         #[arg(help = tr("cli.help.command"))]
         command: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum CondaCmd {
+    #[command(about = tr("conda.path.set_default"))]
+    SetDefault,
+    #[command(about = tr("conda.path.remove"))]
+    RemovePath,
 }
 
 #[derive(Subcommand)]
@@ -452,6 +465,23 @@ fn execute_cli(
         None
     };
     let result = match cli.command {
+        Cmd::Conda { command } => {
+            use rospm_core::conda::PathAction;
+            let action = match command {
+                CondaCmd::SetDefault => PathAction::SetDefault,
+                CondaCmd::RemovePath => PathAction::Remove,
+            };
+            action.perform().map_err(Into::into).map(|message| {
+                if global.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({"ok": true, "message": message.to_string()})
+                    );
+                } else {
+                    println!("{message}");
+                }
+            })
+        }
         Cmd::Venv {
             command:
                 VenvCmd::Install {

@@ -169,7 +169,7 @@ cli:
     shell: "Shell syntax to emit: bash (default) | zsh"
   shell:
     about: "Start a subshell with the project environment loaded"
-    tui_help: "Use rospm exit to end the session or rospm bakground to return to the TUI and keep it running."
+    tui_help: "Use rospm exit to end the session or rospm background to return to the TUI and keep it running."
     entering: "entering rospm shell for `%{name}` (exit to leave)"
     start_failed: "failed to start bash"
     exited: "shell exited with %{status}"
@@ -274,7 +274,7 @@ cli:
       Press p or click the process count to manage processes and saved tasks. Focus a task and press l to open its log; open task details to explicitly continue confirmation/authorization or cancel.
       Closing the TUI does not cancel environment tasks. Reopen the same project to recover task status; cancellation takes effect at a safe step boundary and does not roll back changes.
       System steps use foreground sudo; run the TUI as your normal user. Worker/host failure never automatically replays tasks.
-      In Shell, exit ends the session; rospm bakground returns to the TUI and keeps the shell running. Closing the TUI ends its shell and foreground processes.
+      In Shell, exit ends the session; rospm background returns to the TUI and keeps the shell running. Closing the TUI ends its shell and foreground processes.
     cli_help: "CLI usage"
     cli_usage: |-
       Command help
@@ -483,6 +483,18 @@ manifest:
   underlay_cycle: "underlay cycle detected among workspaces: %{workspaces}"
 
 conda:
+  path:
+    about: "Manage the current user's default Conda"
+    set_default: "Set rospm-managed Conda as default"
+    remove: "Remove rospm-managed Conda from PATH"
+    enabled: "rospm-managed Conda is set as default for new shell sessions."
+    disabled: "Removed the rospm Conda PATH setting for new shell sessions."
+    not_managed: "No rospm-managed Miniforge installation is ready."
+    no_home: "Could not resolve the user's home directory."
+    unsupported_shell: "Unsupported login shell %{shell}. Expected Bash, Zsh, or Fish."
+    invalid_prefix: "Conda directory %{path} cannot be added to PATH."
+    invalid_block: "The rospm Conda markers in %{path} are incomplete or duplicated."
+    not_file: "Shell startup path %{path} must be a regular file."
   checks_skipped: "use Conda environment %{selection} without checking it (--no-env-check)"
   shebangs: "point Python shebangs of installed executables at the environment interpreter, so `ros2 run` uses it without activation"
   check: "check existing Conda environment %{selection} (read-only)"

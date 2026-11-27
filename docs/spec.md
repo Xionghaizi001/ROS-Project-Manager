@@ -345,7 +345,7 @@ native 项目的 `[dependencies].apt` 由项目开发者按需填写，可列入
 
 每个任务的 `.rospm/worker/tasks/<id>/snapshot.json` 与 `logs.jsonl` 独立持久化，worker 退出后可离线查询；CLI 不自动清理，去重账本保留旧 ID，不能删除账本来重放任务。`.rospm/log/build.log` 是每次覆盖的兼容日志。实时队列有界不代表磁盘日志有容量上限；用户按 [保留规则](worker-cli.md#任务存储与提交去重) 管理记录。
 
-交互 Shell 复用真实 PTY，由 TUI 所有的 shell worker 管理，不实现终端模拟器。`rospm bakground`（现有命令拼写）收起会话并返回界面，重开 Shell 接回原会话；`exit` / `rospm exit` 结束会话。关闭 TUI 会清理它持有的 shell 及前台进程；环境任务与后台 Run 任务另由独立 worker 持有。实测终端范围与故障证据见 [P4.5 总体验收](p454-acceptance-20261126.md)。
+交互 Shell 复用真实 PTY，由 TUI 所有的 shell worker 管理，不实现终端模拟器。`rospm background`（现有命令拼写）收起会话并返回界面，重开 Shell 接回原会话；`exit` / `rospm exit` 结束会话。关闭 TUI 会清理它持有的 shell 及前台进程；环境任务与后台 Run 任务另由独立 worker 持有。实测终端范围与故障证据见 [P4.5 总体验收](p454-acceptance-20261126.md)。
 
 ### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
 

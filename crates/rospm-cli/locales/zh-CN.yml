@@ -164,7 +164,7 @@ cli:
     shell: "输出的 shell 语法：bash（默认）| zsh"
   shell:
     about: "启动已加载项目环境的子 shell"
-    tui_help: "输入 rospm exit 结束会话，或输入 rospm bakground 收起会话并返回 TUI。"
+    tui_help: "输入 rospm exit 结束会话，或输入 rospm background 收起会话并返回 TUI。"
     entering: "进入 `%{name}` 的 rospm shell（输入 exit 退出）"
     start_failed: "无法启动 bash"
     exited: "shell 退出：%{status}"
@@ -269,7 +269,7 @@ cli:
       按 p 或点击顶部进程计数管理进程与已保存任务。选中任务按 l 查看日志；打开详情后可显式继续确认、授权或取消任务。
       关闭 TUI 不取消环境任务，重开同一项目可恢复状态；取消在安全步骤边界生效，已完成的更改不会回滚。
       系统步骤通过前台 sudo 授权，请以普通用户运行 TUI；worker 或主机故障后不自动重放任务。
-      在 Shell 输入 exit 结束会话；rospm bakground 收起会话并返回界面。关闭 TUI 会结束其 shell 与前台进程。
+      在 Shell 输入 exit 结束会话；rospm background 收起会话并返回界面。关闭 TUI 会结束其 shell 与前台进程。
     cli_help: "CLI 使用说明"
     cli_usage: |-
       命令帮助
@@ -478,6 +478,18 @@ manifest:
   underlay_cycle: "workspace 之间存在 underlay 循环：%{workspaces}"
 
 conda:
+  path:
+    about: "管理当前用户的默认 Conda"
+    set_default: "将 rospm 安装的 Conda 设为默认"
+    remove: "从 PATH 移除 rospm 安装的 Conda"
+    enabled: "已设为默认 Conda，对新启动的 Shell 会话生效。"
+    disabled: "已移除 rospm 的 Conda PATH 设置，对新启动的 Shell 会话生效。"
+    not_managed: "未找到已就绪的 rospm Miniforge 安装。"
+    no_home: "无法解析当前用户的主目录。"
+    unsupported_shell: "登录 Shell %{shell} 暂不支持。支持 Bash、Zsh 和 Fish。"
+    invalid_prefix: "Conda 目录 %{path} 无法加入 PATH。"
+    invalid_block: "%{path} 中的 rospm Conda 标记不完整或重复。"
+    not_file: "Shell 启动路径 %{path} 必须是普通文件。"
   checks_skipped: "不检查直接使用 Conda 环境 %{selection}（--no-env-check）"
   shebangs: "将已安装可执行文件的 Python shebang 指向环境解释器，使 `ros2 run` 无需激活也使用它"
   check: "检查已有 Conda 环境 %{selection}（只读）"

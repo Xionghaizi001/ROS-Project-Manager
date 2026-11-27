@@ -103,7 +103,12 @@ pub(crate) fn rows(
                 .collect()
         };
     }
-    if let Some(InstallPage::Conda(tool)) = install_page {
+    if let Some(InstallPage::Conda {
+        tool,
+        action,
+        notice,
+    }) = install_page
+    {
         let mut row = Entry::value(&text.conda, tool.render());
         let (label, status) = if matches!(tool, ToolInstallation::Ready(_)) {
             (&text.status_ok, Status::Ok)
@@ -112,7 +117,14 @@ pub(crate) fn rows(
         };
         row.cells[1] = label.clone();
         row.status = Some(status);
-        return vec![row];
+        let mut rows = vec![row];
+        if let Some(action) = action {
+            rows.push(Entry::link(action.label().to_string()));
+        }
+        if let Some(notice) = notice {
+            rows.push(Entry::value(&text.status, notice));
+        }
+        return rows;
     }
     if matches!(install_page, Some(InstallPage::Components)) {
         let Some(dashboard) = dashboard else {

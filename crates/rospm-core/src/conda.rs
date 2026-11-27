@@ -13,6 +13,7 @@ mod bootstrap;
 mod conda_verify;
 mod definition;
 mod explicit;
+mod path;
 mod step;
 mod system;
 #[cfg(test)]
@@ -47,6 +48,7 @@ pub use conda_verify::verify;
 pub(crate) use conda_verify::verify_with;
 pub use definition::definition_sha256;
 pub use explicit::{lock_path, resolve_lock};
+pub use path::PathAction;
 
 const LEGACY_DIR: &str = ".rospm/conda";
 const DEFINITION: &str = ".rospm/conda/environment.yml";

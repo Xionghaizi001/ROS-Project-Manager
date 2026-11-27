@@ -110,6 +110,8 @@ rospm build --conda-prefix /path/to/env
 
 ## 项目 Python venv
 
+对于 rospm 安装的 Miniforge，可用 `rospm conda set-default` 设为当前用户的默认 Conda，或用 `rospm conda remove-path` 撤销。TUI 的「安装 → Conda」也提供对应操作。设置对新启动的 Bash、Zsh、Fish 会话生效。
+
 `env`、`shell`、`build`、`run` 可用 `--venv` 选择清单同级已有 `.venv`，或用 `--venv-path PATH` 选择已有路径。环境须使用匹配 ROS 的系统 Python 并启用 `--system-site-packages`；不会隐式创建或安装依赖。可用 `rospm venv create` 显式创建项目环境，`--uv` 选择已有 uv 工具，`--dry-run` 预览；已有路径不会覆盖，失败残留不会自动删除。
 
 ```sh

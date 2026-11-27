@@ -246,7 +246,7 @@ impl Bootstrap {
     }
 }
 
-fn install_lock(path: &Path) -> Result<fs::File> {
+pub(super) fn install_lock(path: &Path) -> Result<fs::File> {
     let parent = path.parent().expect("lock file has a parent");
     fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     let file = fs::File::options()

@@ -108,7 +108,10 @@ pub(super) fn install<B: ratatui::backend::Backend + Write>(
             Some(backend) => backend.task(root, manifest, Operation::Apply),
             None => install_ros().map(|_| TaskOutcome::Completed),
         },
-        Some(InstallPage::Conda(ToolInstallation::Needed(bootstrap))) => match backend {
+        Some(InstallPage::Conda {
+            tool: ToolInstallation::Needed(bootstrap),
+            ..
+        }) => match backend {
             Some(backend) => backend.task(root, manifest, Operation::CondaInstall),
             None => bootstrap
                 .perform(&mut io::stdout())

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use rospm_core::{conda::ToolInstallation, worker::WorkspaceLock};
+use rospm_core::{
+    conda::{PathAction, ToolInstallation},
+    worker::WorkspaceLock,
+};
 
 use crate::actions::PendingConfirmation;
 use crate::{dashboard, pages, runs, table, view, Text, DEBUG_TOOLS};
@@ -11,7 +14,11 @@ pub(super) const HELP_TAB: usize = 6;
 
 pub(super) enum InstallPage {
     Ros,
-    Conda(ToolInstallation),
+    Conda {
+        tool: ToolInstallation,
+        action: Option<PathAction>,
+        notice: Option<String>,
+    },
     Components,
     Detail {
         title: String,
@@ -34,17 +41,35 @@ impl InstallPage {
     pub(super) fn can_install(&self) -> bool {
         matches!(
             self,
-            Self::Ros | Self::Components | Self::Conda(ToolInstallation::Needed(_))
+            Self::Ros
+                | Self::Components
+                | Self::Conda {
+                    tool: ToolInstallation::Needed(_),
+                    ..
+                }
         )
     }
 
     pub(super) fn refresh(&mut self) {
-        if let Self::Conda(tool) = self {
-            *tool = ToolInstallation::probe();
+        if matches!(self, Self::Conda { .. }) {
+            *self = Self::conda();
         } else if let Self::ScannedProjects(projects) = self {
             if let Ok(root) = std::env::current_dir() {
                 *projects = dashboard::Dashboard::scan_projects(&root);
             }
+        }
+    }
+
+    fn conda() -> Self {
+        let tool = ToolInstallation::probe();
+        let (action, notice) = match PathAction::available() {
+            Ok(action) => (action, None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        Self::Conda {
+            tool,
+            action,
+            notice,
         }
     }
 }
@@ -172,6 +197,23 @@ pub(super) fn activate(
     let Some(row) = rows.get(index).filter(|row| row.selectable) else {
         return;
     };
+    if let Some(InstallPage::Conda {
+        action: Some(action),
+        ..
+    }) = install_page
+    {
+        let message = match action.perform() {
+            Ok(message) => message.to_string(),
+            Err(error) => error.to_string(),
+        };
+        let mut page = InstallPage::conda();
+        if let InstallPage::Conda { notice, .. } = &mut page {
+            *notice = Some(message);
+        }
+        *install_page = Some(page);
+        *focused = first_selectable(dashboard, text, selected, install_page.as_ref());
+        return;
+    }
     if let Some(InstallPage::DebugToolMissing { package, .. }) = install_page {
         *confirmation = Some(PendingConfirmation::InstallDebugTool {
             package: package.clone(),
@@ -211,7 +253,7 @@ pub(super) fn activate(
     }
     *install_page = match (selected, install_page.as_ref(), index) {
         (1, None, 0) => Some(InstallPage::Ros),
-        (1, None, 1) => Some(InstallPage::Conda(ToolInstallation::probe())),
+        (1, None, 1) => Some(InstallPage::conda()),
         (1, None, 2) if dashboard.is_some_and(|d| d.ros_installed) => Some(InstallPage::Components),
         (HELP_TAB, None, 0) => Some(InstallPage::CliHelp),
         _ => return,
