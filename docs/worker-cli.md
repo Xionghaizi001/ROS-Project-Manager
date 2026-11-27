@@ -64,9 +64,11 @@ rospm task --runtime /tmp/rospm-my-project confirm remove-001 --step 2 reject
 
 ## 系统权限
 
-以普通用户运行 `rospm tui`。系统步骤等待前台终端进入 `waiting_authorization`。TUI 暂停绘制和输入捕获，由 sudo 直接在前台控制终端读取密码。每次 sudo 调用按当前 sudoers 策略判断权限和凭据是否有效。Git、Conda、构建与项目 shell 以当前用户运行。rosdep 安装也以当前用户启动，由 rosdep 对其系统包操作调用 sudo。
+以普通用户运行 `rospm tui`。启动时通过 `sudo -l` 检查当前用户，检查失败时按 Esc 可继续使用 TUI。桌面会话中，sudo 在需要密码时调用系统的图形 askpass 程序，并按 sudoers 策略完成认证。可通过 `SUDO_ASKPASS` 或 `sudo.conf` 配置该程序，Ubuntu 可使用 `ssh-askpass-gnome`。无图形会话时，TUI 可执行 sudo 已授权的免密码步骤。
 
-交互式同步 CLI 同样使用这条路径。显式 worker 提交可以用 `--interactive` 让系统步骤等待终端，再用 `attach` 接入同一任务。
+系统步骤在 `waiting_authorization` 等待前台客户端接入。每次 sudo 调用都以当前 sudoers 策略为准。Git、Conda、构建与项目 shell 以当前用户运行。rosdep 安装也以当前用户启动，由 rosdep 为系统包操作调用 sudo。
+
+交互式同步 CLI 和 `rospm task attach` 使用控制终端认证。显式 worker 提交可以用 `--interactive` 让系统步骤等待终端，再用 `attach` 接入同一任务。
 
 ```sh
 rospm task --runtime /tmp/rospm-my-project submit components_install --interactive --id install-001

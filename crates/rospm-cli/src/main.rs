@@ -619,6 +619,7 @@ fn execute_cli(
                 environment: tr("cli.tui.environment"),
                 workspace: tr("cli.tui.workspace"),
                 status: tr("cli.tui.status"),
+                sudo_status: tr("cli.tui.sudo_status"),
                 ready: tr("cli.tui.ready"),
                 installing: tr("cli.tui.installing"),
                 details: tr("cli.tui.details"),

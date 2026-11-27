@@ -1,6 +1,7 @@
 use super::*;
 use crate::commands::run_process::ManagedRun;
 use crate::commands::shell_session::Session;
+use authorization::Authorization;
 use rospm_core::run::{output, RunExit, RunRequest, RunSignal, RunStatus};
 use rospm_core::worker::{LogStream, TaskSnapshot, TaskState};
 use std::{
@@ -47,17 +48,25 @@ impl rospm_tui::RunBackend for Runs {
         true
     }
 
+    fn check_sudo(&mut self) -> Result<()> {
+        Authorization::for_tui().check_sudo()
+    }
+
     fn pending_authorization(&self) -> Option<&str> {
         self.pending_authorization.as_deref()
     }
 
     fn authorize_task(&mut self, root: &Path, id: &str) -> Result<()> {
         let worker = connect(&root.join(".rospm/worker/runtime"))?;
-        authorization::authorize(&worker, id)
+        authorization::authorize_with(&worker, id, Authorization::for_tui())
     }
 
     fn attach_task(&mut self, root: &Path, id: &str) -> Result<()> {
-        attach(&root.join(".rospm/worker/runtime"), id)
+        attach_with(
+            &root.join(".rospm/worker/runtime"),
+            id,
+            Authorization::for_tui(),
+        )
     }
 
     fn start(&mut self, root: &Path, request: RunRequest, background: bool) -> Result<()> {
@@ -118,13 +127,17 @@ impl rospm_tui::RunBackend for Runs {
     }
 
     fn install_debug(&mut self, manifest: &Path, tool: &str) -> Result<()> {
-        let status = Command::new(std::env::current_exe()?)
-            .arg("--manifest")
-            .arg(manifest)
-            .args(["deps", "install", "--tool", tool])
-            .env("ROSPM_LANG", crate::i18n::current().code())
-            .status()?;
-        anyhow::ensure!(status.success(), "{}", tr("cli.tui.debug.install_failed"));
+        let manifest = std::env::current_dir()?.join(manifest);
+        let root = manifest.parent().context("missing manifest directory")?;
+        self.task(
+            root,
+            Some(&manifest),
+            Operation::DebugToolInstall {
+                tool: tool.into(),
+                manifest: manifest.clone(),
+            },
+        )
+        .with_context(|| tr("cli.tui.debug.install_failed"))?;
         Ok(())
     }
 
@@ -311,7 +324,7 @@ impl rospm_tui::RunBackend for Runs {
             self.detached_tasks.push(id);
             Ok(rospm_tui::TaskOutcome::Detached)
         } else {
-            follow_task(&mut stream, &id)?;
+            follow_task(&mut stream, &id, Authorization::for_tui())?;
             Ok(rospm_tui::TaskOutcome::Completed)
         }
     }
@@ -539,6 +552,10 @@ fn task_id() -> String {
 }
 
 pub(super) fn attach(runtime: &Path, id: &str) -> Result<()> {
+    attach_with(runtime, id, Authorization::Terminal)
+}
+
+fn attach_with(runtime: &Path, id: &str, authorization: Authorization) -> Result<()> {
     authorization::foreground_terminal()?;
     let mut stream = BufReader::new(connect(runtime)?);
     stream
@@ -553,10 +570,14 @@ pub(super) fn attach(runtime: &Path, id: &str) -> Result<()> {
             client: "rospm-attach".into(),
         },
     )?;
-    follow_task(&mut stream, id)
+    follow_task(&mut stream, id, authorization)
 }
 
-fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
+fn follow_task(
+    stream: &mut BufReader<UnixStream>,
+    id: &str,
+    authorization: Authorization,
+) -> Result<()> {
     let mut cursor = 0;
     let mut review = None;
     loop {
@@ -641,7 +662,7 @@ fn follow_task(stream: &mut BufReader<UnixStream>, id: &str) -> Result<()> {
             }
         }
         if snapshot.state == TaskState::WaitingAuthorization {
-            authorization::authorize(stream.get_ref(), id)?;
+            authorization::authorize_with(stream.get_ref(), id, authorization)?;
         }
         thread::sleep(Duration::from_millis(50));
     }

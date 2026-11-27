@@ -1,5 +1,5 @@
 //! A detached worker hands a generated command to a foreground client once.
-//! Sudo opens that client's controlling terminal itself for authentication.
+//! The foreground client lets sudo handle authentication.
 use super::*;
 use rospm_core::{
     execution::{Confirmation, State},
@@ -15,7 +15,7 @@ use std::{
         linux::net::SocketAddrExt,
         unix::{
             net::{SocketAddr, UnixListener},
-            process::ExitStatusExt,
+            process::{CommandExt, ExitStatusExt},
         },
     },
     process::{Command, ExitStatus, Stdio},
@@ -187,8 +187,92 @@ pub(super) fn foreground_terminal() -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Authorization {
+    Terminal,
+    Desktop,
+    NonInteractive,
+}
+
+impl Authorization {
+    pub fn for_tui() -> Self {
+        if ["DISPLAY", "WAYLAND_DISPLAY"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        {
+            Self::Desktop
+        } else {
+            Self::NonInteractive
+        }
+    }
+
+    fn configure_askpass(self, command: &mut Command) {
+        if self != Self::Desktop || has_configured_askpass() {
+            return;
+        }
+        if let Some(path) = [
+            "/usr/bin/ssh-askpass",
+            "/usr/lib/openssh/gnome-ssh-askpass",
+            "/usr/bin/ksshaskpass",
+            "/usr/bin/lxqt-openssh-askpass",
+        ]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+        {
+            command.env("SUDO_ASKPASS", path);
+        }
+    }
+
+    fn sudo(self) -> Command {
+        let mut command = Command::new("sudo");
+        match self {
+            Self::Terminal => (),
+            Self::Desktop => {
+                command.arg("-A");
+                self.configure_askpass(&mut command);
+            }
+            Self::NonInteractive => {
+                command.arg("-n");
+            }
+        }
+        command
+    }
+
+    pub fn check_sudo(self) -> Result<()> {
+        let output = self.sudo().arg("-l").stdin(Stdio::null()).output()?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            if detail.trim().is_empty() {
+                bail!("{}", tr("cli.tui.sudo_unavailable"));
+            }
+            bail!("{}", detail.trim());
+        }
+        Ok(())
+    }
+}
+
+fn has_configured_askpass() -> bool {
+    if std::env::var_os("SUDO_ASKPASS").is_some_and(|value| !value.is_empty()) {
+        return true;
+    }
+    std::fs::read_to_string("/etc/sudo.conf").is_ok_and(|config| {
+        config.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some("Path") && fields.next() == Some("askpass")
+        })
+    })
+}
+
 /// A stale snapshot or a competing client may find the rendezvous already gone.
 pub(super) fn authorize(worker: &UnixStream, id: &str) -> Result<()> {
+    authorize_with(worker, id, Authorization::Terminal)
+}
+
+pub(super) fn authorize_with(
+    worker: &UnixStream,
+    id: &str,
+    authorization: Authorization,
+) -> Result<()> {
     foreground_terminal()?;
     let peer = peer_identity(worker)?;
     anyhow::ensure!(
@@ -209,14 +293,18 @@ pub(super) fn authorize(worker: &UnixStream, id: &str) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let request = receive(&mut reader)?;
     let stream = reader.into_inner();
-    match execute(&request, &stream) {
+    match execute(&request, &stream, authorization) {
         Ok(status) => send(&stream, &Reply::Exit(status.into_raw()))?,
         Err(error) => send(&stream, &Reply::Failed(format!("{error:#}")))?,
     }
     Ok(())
 }
 
-fn execute(request: &Request, stream: &UnixStream) -> Result<ExitStatus> {
+fn execute(
+    request: &Request,
+    stream: &UnixStream,
+    authorization: Authorization,
+) -> Result<ExitStatus> {
     let plan = &request.command;
     anyhow::ensure!(
         plan.env.is_empty() && plan.preamble.is_empty(),
@@ -239,7 +327,7 @@ fn execute(request: &Request, stream: &UnixStream) -> Result<ExitStatus> {
             ),
             "invalid system command"
         );
-        let mut command = Command::new("sudo");
+        let mut command = authorization.sudo();
         command.arg("--").arg(&plan.program);
         command
     } else {
@@ -255,6 +343,28 @@ fn execute(request: &Request, stream: &UnixStream) -> Result<ExitStatus> {
     );
     if let Some(cwd) = &plan.cwd {
         command.current_dir(cwd);
+    }
+    // rosdep starts its own sudo. Without a controlling terminal, sudo can use
+    // the system askpass helper instead of reading directly from the TUI.
+    let isolated_rosdep = !plan.sudo && authorization != Authorization::Terminal;
+    if isolated_rosdep {
+        if authorization == Authorization::NonInteractive {
+            command.env_remove("DISPLAY").env_remove("SUDO_ASKPASS");
+        } else {
+            authorization.configure_askpass(&mut command);
+            // Older sudo versions check for DISPLAY before trying askpass.
+            if std::env::var_os("DISPLAY").is_none() {
+                command.env("DISPLAY", "");
+            }
+        }
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     let interrupt = ForegroundInterrupt::new()?;
     let mut child = command
@@ -302,7 +412,21 @@ fn execute(request: &Request, stream: &UnixStream) -> Result<ExitStatus> {
             .take()
             .zip(request.input.as_ref())
             .map_or(Ok(()), |(mut pipe, text)| pipe.write_all(text.as_bytes()));
-        let status = child.wait();
+        let status = if isolated_rosdep {
+            loop {
+                match child.try_wait() {
+                    Ok(None) if !interrupt.received() => thread::sleep(Duration::from_millis(50)),
+                    Ok(None) => {
+                        unsafe { libc::kill(-(child.id() as i32), libc::SIGINT) };
+                        break child.wait();
+                    }
+                    Ok(Some(status)) => break Ok(status),
+                    Err(error) => break Err(error),
+                }
+            }
+        } else {
+            child.wait()
+        };
         out.join().expect("stdout reader panicked")?;
         err.join().expect("stderr reader panicked")?;
         let status = status?;

@@ -51,9 +51,17 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
     let mut active_manifest = manifest.map(Path::to_path_buf);
     let mut browser: Option<logs::Browser> = None;
     let mut selected = 0usize;
-    let mut install_page: Option<InstallPage> = None;
+    let mut install_page = runs
+        .as_mut()
+        .and_then(|(backend, _)| backend.check_sudo().err())
+        .map(|error| InstallPage::Detail {
+            title: text.sudo_status.clone(),
+            body: format!("{error:#}"),
+            return_to_ros: false,
+        });
     let mut scroll = 0usize;
-    let mut focused_row = first_selectable(dashboard.as_ref(), text, selected, None);
+    let mut focused_row =
+        first_selectable(dashboard.as_ref(), text, selected, install_page.as_ref());
     let mut last_runtime_refresh = Instant::now();
     let mut last_process_refresh = None::<Instant>;
     let mut processes = Vec::new();
@@ -172,7 +180,6 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         Err(error) => process_error = Some(format!("{error:#}")),
                     }
                     if let Some(id) = backend.pending_authorization().map(str::to_owned) {
-                        leave_screen(terminal, screen)?;
                         disable_raw_mode()?;
                         let result = backend.authorize_task(&project.root, &id);
                         enable_raw_mode()?;

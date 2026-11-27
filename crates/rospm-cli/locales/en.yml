@@ -273,7 +273,7 @@ cli:
       On Diagnose, press c to check the environment or v to verify it against the lockfile.
       Press p or click the process count to manage processes and saved tasks. Focus a task and press l to open its log; open task details to explicitly continue confirmation/authorization or cancel.
       Closing the TUI does not cancel environment tasks. Reopen the same project to recover task status; cancellation takes effect at a safe step boundary and does not roll back changes.
-      System steps use foreground sudo; run the TUI as your normal user. Worker/host failure never automatically replays tasks.
+      Run the TUI as your normal user. When sudo needs a password, the desktop askpass helper handles the prompt. Worker/host failure never automatically replays tasks.
       In Shell, exit ends the session; rospm background returns to the TUI and keeps the shell running. Closing the TUI ends its shell and foreground processes.
     cli_help: "CLI usage"
     cli_usage: |-
@@ -326,6 +326,8 @@ cli:
     confirm_action: "Run"
     confirm_accept: "Enter Confirm"
     confirm_cancel: "Esc Cancel"
+    sudo_status: "sudo authorization"
+    sudo_unavailable: "The current user could not be verified by sudo."
     footer_apply: "a Apply"
     footer_uninstall: "u Uninstall"
     footer_check: "c Check"

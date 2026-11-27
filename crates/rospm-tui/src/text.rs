@@ -26,6 +26,7 @@ pub struct Text {
     pub environment: String,
     pub workspace: String,
     pub status: String,
+    pub sudo_status: String,
     pub ready: String,
     pub installing: String,
     pub details: String,

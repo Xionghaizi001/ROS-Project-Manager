@@ -26,6 +26,10 @@ pub trait RunBackend {
         false
     }
 
+    fn check_sudo(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     fn pending_authorization(&self) -> Option<&str> {
         None
     }
