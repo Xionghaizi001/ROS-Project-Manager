@@ -9,12 +9,12 @@ use crate::{
         execute_pending_confirmation, install, request_action, request_compile, PendingConfirmation,
     },
     dashboard, logs,
-    navigation::{activate, back_run, first_selectable, move_focus, open_project, refresh_project},
+    navigation::{activate, back_run, first_selectable, move_focus, refresh_project},
     terminal::Screen,
     view, Action, InstallPage, RunBackend, Text,
 };
 
-use super::open_logs;
+use super::{open_logs, open_project};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
@@ -64,6 +64,8 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
         }
         view::FooterAction::Open => {
             if !open_project(
+                terminal,
+                screen,
                 text,
                 dashboard,
                 project_lock,
@@ -71,7 +73,13 @@ pub(super) fn activate_footer<B: ratatui::backend::Backend + Write>(
                 focused_row,
                 scroll,
                 confirmation,
-            ) {
+                backend.as_ref().map(|_| {
+                    processes
+                        .iter()
+                        .filter(|process| process.exit.is_none())
+                        .count()
+                }),
+            )? {
                 activate(
                     install_page,
                     focused_row,

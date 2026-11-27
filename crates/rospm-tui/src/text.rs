@@ -60,6 +60,7 @@ pub struct Text {
     pub footer_scan_projects: String,
     pub footer_rescan_projects: String,
     pub project_scan_title: String,
+    pub project_opening: String,
     pub no_projects_found: String,
     pub project_needs_manifest: String,
     pub project_conda_match: String,

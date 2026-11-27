@@ -334,6 +334,7 @@ cli:
     footer_scan_projects: "s 扫描已有项目"
     footer_rescan_projects: "r 重新扫描项目"
     project_scan_title: "扫描到的项目"
+    project_opening: "正在打开清单，请稍候…"
     no_projects_found: "当前目录及子目录中未找到 ROS 工作空间或 rospm.toml"
     project_needs_manifest: "待生成清单"
     project_conda_match: "同名 Conda 环境「{name}」"

@@ -339,6 +339,7 @@ cli:
     footer_scan_projects: "s Scan projects"
     footer_rescan_projects: "r Rescan project"
     project_scan_title: "Discovered projects"
+    project_opening: "Opening manifest, please wait…"
     no_projects_found: "No ROS workspace or rospm.toml found in this directory or its subdirectories"
     project_needs_manifest: "Manifest needed"
     project_conda_match: "Matching Conda environment: {name}"

@@ -22,8 +22,7 @@ use crate::{
     },
     dashboard, log_view, logs,
     navigation::{
-        activate, back_run, first_selectable, lock_project, move_focus, open_project,
-        refresh_project, tab_at,
+        activate, back_run, first_selectable, lock_project, move_focus, refresh_project, tab_at,
     },
     pages, runs, table,
     terminal::{draw_frame, leave_screen, Screen},
@@ -388,6 +387,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                         }
                         KeyCode::Enter => {
                             if !open_project(
+                                terminal,
+                                screen,
                                 text,
                                 &mut dashboard,
                                 project_lock,
@@ -395,7 +396,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 &mut focused_row,
                                 &mut scroll,
                                 &mut confirmation,
-                            ) {
+                                runs.is_some().then_some(active_processes),
+                            )? {
                                 activate(
                                     &mut install_page,
                                     &mut focused_row,
@@ -684,6 +686,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                 if rows.get(index).is_some_and(|row| row.selectable) {
                                     focused_row = Some(index);
                                     if !open_project(
+                                        terminal,
+                                        screen,
                                         text,
                                         &mut dashboard,
                                         project_lock,
@@ -691,7 +695,8 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
                                         &mut focused_row,
                                         &mut scroll,
                                         &mut confirmation,
-                                    ) {
+                                        runs.is_some().then_some(active_processes),
+                                    )? {
                                         activate(
                                             &mut install_page,
                                             &mut focused_row,
@@ -713,6 +718,54 @@ pub(super) fn loop_ui<B: ratatui::backend::Backend + Write>(
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)] // Draw the opening notice using the current page before loading.
+fn open_project<B: ratatui::backend::Backend + Write>(
+    terminal: &mut Terminal<B>,
+    screen: &Cell<Screen>,
+    text: &Text,
+    dashboard: &mut Option<dashboard::Dashboard>,
+    project_lock: &mut Option<WorkspaceLock>,
+    install_page: &mut Option<InstallPage>,
+    focused_row: &mut Option<usize>,
+    scroll: &mut usize,
+    confirmation: &mut Option<PendingConfirmation>,
+    process_count: Option<usize>,
+) -> Result<bool> {
+    if let Some(InstallPage::ScannedProjects(projects)) = install_page.as_ref() {
+        if let Some(project) = focused_row.and_then(|index| projects.get(index)) {
+            // Flush the notice before synchronous environment probes block the event loop.
+            draw_frame(terminal, screen, |frame| {
+                view::draw(
+                    frame,
+                    dashboard.as_ref(),
+                    text,
+                    0,
+                    install_page.as_ref(),
+                    scroll,
+                    *focused_row,
+                    process_count,
+                    None,
+                );
+                view::draw_popup(
+                    frame,
+                    view::page_content_area(frame.area()),
+                    &text.status,
+                    format!("{}\n{}", text.project_opening, project.manifest.display()),
+                );
+            })?;
+        }
+    }
+    Ok(crate::navigation::open_project(
+        text,
+        dashboard,
+        project_lock,
+        install_page,
+        focused_row,
+        scroll,
+        confirmation,
+    ))
 }
 
 fn open_logs(

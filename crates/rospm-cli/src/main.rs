@@ -664,6 +664,7 @@ fn execute_cli(
                 footer_scan_projects: tr("cli.tui.footer_scan_projects"),
                 footer_rescan_projects: tr("cli.tui.footer_rescan_projects"),
                 project_scan_title: tr("cli.tui.project_scan_title"),
+                project_opening: tr("cli.tui.project_opening"),
                 no_projects_found: tr("cli.tui.no_projects_found"),
                 project_needs_manifest: tr("cli.tui.project_needs_manifest"),
                 project_conda_match: tr("cli.tui.project_conda_match"),

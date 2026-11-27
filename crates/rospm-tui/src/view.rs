@@ -335,23 +335,27 @@ pub(crate) fn draw(
             .map(|items| items.iter().map(|(label, _)| label.as_str())),
     );
     if let Some(prompt) = confirmation {
-        let popup = confirmation_area(content);
-        if popup.width > 0 && popup.height > 0 {
-            frame.render_widget(Clear, popup);
-            let block = Block::default()
-                .borders(Borders::ALL)
+        draw_popup(frame, content, &text.confirm_action, prompt);
+    }
+}
+
+pub(crate) fn draw_popup(frame: &mut ratatui::Frame<'_>, area: Rect, title: &str, body: String) {
+    let popup = confirmation_area(area);
+    if popup.width > 0 && popup.height > 0 {
+        frame.render_widget(Clear, popup);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Black).bg(Color::White))
+            .border_style(Style::default().fg(Color::Blue).bg(Color::White))
+            .title(title);
+        let inner = block.inner(popup);
+        frame.render_widget(block, popup);
+        frame.render_widget(
+            Paragraph::new(body)
                 .style(Style::default().fg(Color::Black).bg(Color::White))
-                .border_style(Style::default().fg(Color::Blue).bg(Color::White))
-                .title(text.confirm_action.as_str());
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            frame.render_widget(
-                Paragraph::new(Line::from(prompt))
-                    .style(Style::default().fg(Color::Black).bg(Color::White))
-                    .wrap(Wrap { trim: false }),
-                inner,
-            );
-        }
+                .wrap(Wrap { trim: false }),
+            inner,
+        );
     }
 }
 
