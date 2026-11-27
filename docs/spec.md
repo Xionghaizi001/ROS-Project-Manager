@@ -349,6 +349,8 @@ native 项目的 `[dependencies].apt` 由项目开发者按需填写，可列入
 
 进程管理中 Shell 记录的「实际值」显示最后一条命令，结束会话后在当前 TUI 的历史记录中保留。命令在 Bash 开始执行时采集，保留输入的复合命令，不用 `rospm background`、`rospm exit` 或独立的 `exit` 覆盖；不采集脚本或嵌套 shell 内部的命令。采集遵循 Bash 历史设置：关闭 history 或被 `HISTCONTROL` / `HISTIGNORE` 排除的命令不更新记录。仅在内存中保留前 4096 个字符，多行与控制字符在界面中显示为空格；关闭 TUI 后不保存。
 
+进程管理的「结束」先向 Run 进程组或 Shell 会话发送 `SIGTERM`，并用 `SIGCONT` 恢复暂停的进程，让其处理退出和清理；2 秒后用 `SIGKILL` 清理仍存活的进程。重复点击不会延长等待时间。「杀死」立即清理进程。环境任务的「取消任务」仍遵循上述安全边界。
+
 ### 4.1 native 提供者：`apply` 的 ROS 安装（bootstrap）
 
 native 是唯一不自带 ROS 的提供者（pixi 由 RoboStack 安装，docker 由基础镜像提供），因此"安装 ROS"属于 native `apply` 的范围。做法只封装官方安装文档的命令，不做任何新东西：

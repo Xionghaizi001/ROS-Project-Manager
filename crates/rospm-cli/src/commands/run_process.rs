@@ -23,6 +23,8 @@ use anyhow::{bail, Result};
 use rospm_core::run::{output, RunRequest, RunSignal, RunStatus};
 use serde::{Deserialize, Serialize};
 
+pub(super) const TERMINATE_GRACE_PERIOD: Duration = Duration::from_secs(2);
+
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 enum ChildRequest {
@@ -269,10 +271,13 @@ pub(super) fn supervise(mut command: Command) -> Result<ExitStatus> {
     };
     let mut terminating = None::<Instant>;
     loop {
-        // The ros2 wrapper can exit before its node finishes handling SIGTERM.
-        if exited(&group.child)?
-            && terminating.is_none_or(|sent| sent.elapsed() >= Duration::from_secs(2))
-        {
+        // Let descendants finish handling SIGTERM even if the wrapper exits first,
+        // but enforce the deadline even when the leader ignores the signal.
+        let finished = match terminating {
+            Some(sent) => sent.elapsed() >= TERMINATE_GRACE_PERIOD,
+            None => exited(&group.child)?,
+        };
+        if finished {
             break;
         }
         match unsafe { libc::poll(&mut poll, 1, 100) } {

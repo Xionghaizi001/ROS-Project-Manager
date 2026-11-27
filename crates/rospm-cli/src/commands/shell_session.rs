@@ -18,7 +18,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -422,9 +422,16 @@ printf '%s\n' {help}
     };
     owner.write_all(&shell.child.id().to_ne_bytes())?;
 
+    let mut terminating = None::<Instant>;
     loop {
         let event = SHELL_EVENT.swap(0, Ordering::AcqRel);
-        if event & EXIT != 0 || super::run_process::exited(&shell.child)? {
+        // Interactive Bash can ignore SIGTERM. Give its jobs time to clean up,
+        // then finish the session even if Bash itself is still running.
+        let finished = match terminating {
+            Some(sent) => sent.elapsed() >= super::run_process::TERMINATE_GRACE_PERIOD,
+            None => super::run_process::exited(&shell.child)?,
+        };
+        if event & EXIT != 0 || finished {
             break;
         }
         if event & DETACH != 0 {
@@ -447,6 +454,7 @@ printf '%s\n' {help}
         shell.signal(signal);
         if signal == libc::SIGTERM {
             shell.signal(libc::SIGCONT);
+            terminating.get_or_insert_with(Instant::now);
         }
     }
     let status = shell.finish()?;
